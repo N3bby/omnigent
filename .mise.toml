@@ -15,23 +15,23 @@ run = './scripts/render --environment "${ENV:-production}"'
 description = "Show the server-side Kubernetes diff without changing the server"
 run = [
   { task = "render" },
-  'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/diff.yml -e "omnigent_environment=${ENV:-production}"',
+  'ansible-playbook --ask-become-pass -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/diff.yml -e "omnigent_environment=${ENV:-production}"',
 ]
 
 [tasks.deploy]
 description = "Provision or reconcile the VM and deploy Omnigent"
 run = [
   { task = "check" },
-  'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/site.yml -e "omnigent_environment=${ENV:-production}"',
+  'ansible-playbook --ask-become-pass -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/site.yml -e "omnigent_environment=${ENV:-production}"',
 ]
 
 [tasks.status]
 description = "Inspect health, capacity, TLS, storage, and runner failures"
-run = 'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/status.yml -e "omnigent_environment=${ENV:-production}"'
+run = 'ansible-playbook --ask-become-pass -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/status.yml -e "omnigent_environment=${ENV:-production}"'
 
 [tasks.smoke]
 description = "Run remote HTTPS and in-cluster health smoke tests"
-run = 'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/smoke.yml -e "omnigent_environment=${ENV:-production}"'
+run = 'ansible-playbook --ask-become-pass -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/smoke.yml -e "omnigent_environment=${ENV:-production}"'
 
 [tasks.lock-images]
 description = "Resolve immutable GHCR digests for the configured release tags"
