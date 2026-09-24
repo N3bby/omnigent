@@ -33,7 +33,7 @@ jobs:
         id: build
         with:
           context: images/runner
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.image.outputs.name }}:${{ steps.versions.outputs.release }}
           build-args: |
