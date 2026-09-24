@@ -23,7 +23,6 @@ class ConfigurationTests(unittest.TestCase):
     def test_ci_environment_encodes_accepted_policies(self) -> None:
         values, _ = validate("ci")
         self.assertEqual(values["runner_network_policy"], "unrestricted")
-        self.assertTrue(values["github_picker_enabled"])
         self.assertFalse(values["backups_enabled"])
 
     def test_runner_lock_matches_authoritative_versions(self) -> None:
@@ -74,6 +73,14 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotIn("PRIVATE_KEY", helper)
         tasks = (ROOT / ".mise.toml").read_text()
         self.assertIn("[tasks.setup-github-app]", tasks)
+
+    def test_ci_uses_mise_and_matches_published_architecture(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "validate.yml").read_text()
+        self.assertIn("jdx/mise-action@v4", workflow)
+        self.assertIn("mise run test", workflow)
+        self.assertNotIn("make bootstrap", workflow)
+        preflight = (ROOT / "ansible" / "roles" / "preflight" / "tasks" / "main.yml").read_text()
+        self.assertIn("ansible_architecture == 'x86_64'", preflight)
 
 
 if __name__ == "__main__":

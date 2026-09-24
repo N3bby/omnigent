@@ -23,6 +23,5 @@ runner_home_limit = "8Gi"
 runner_pod_ready_timeout_seconds = 300
 runner_max_concurrency = 2
 codex_bypass_approvals = true
-github_picker_enabled = true
 backups_enabled = false
 runner_network_policy = "unrestricted"

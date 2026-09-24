@@ -364,7 +364,8 @@ and has no runtime or state dependency on the current installation.
 - Put all versions in `versions.yaml`.
 - Set the initial Omnigent server request to 500m CPU/1Gi memory and its limit to
   2 CPU/2Gi memory, with an environment override for larger installations.
-- Make GitHub/Vault enablement an explicit feature setting.
+- Keep GitHub/Vault as an explicit part of the production topology rather than
+  carrying an unused feature flag.
 - Do not copy historic migration or repair scripts into the new repository.
 - Add offline `render`, `validate`, and `diff` operations.
 - Use an object inventory or prune mechanism for removed resources.

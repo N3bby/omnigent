@@ -5,7 +5,7 @@ ansible-core = "2.21.4"
 
 [tasks.check]
 description = "Validate configuration, manifests, scripts, and Ansible syntax"
-run = './scripts/preflight --environment "${ENV:-production}" --inventory "ansible/inventory/${ENV:-production}/hosts.yml"'
+run = './scripts/preflight --environment "${ENV:-production}" --inventory "${INVENTORY:-ansible/inventory/${ENV:-production}/hosts.yml}"'
 
 [tasks.render]
 description = "Render the complete non-secret Kubernetes desired state"

@@ -8,8 +8,8 @@
     that:
       - ansible_distribution == 'Ubuntu'
       - ansible_distribution_version is version('22.04', '>=')
-      - ansible_architecture in ['x86_64', 'aarch64']
-    fail_msg: "A supported Ubuntu 22.04+ x86_64/arm64 VM is required."
+      - ansible_architecture == 'x86_64'
+    fail_msg: "A supported Ubuntu 22.04+ x86_64 VM is required; deployment images are amd64-only."
 
 - name: Validate host capacity
   ansible.builtin.assert:

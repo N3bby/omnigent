@@ -89,7 +89,7 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     for key in ("runner_pod_ready_timeout_seconds", "runner_max_concurrency"):
         if not isinstance(data.get(key), int) or int(data[key]) < 1:
             raise ConfigError(f"{key} must be a positive integer")
-    for key in ("codex_bypass_approvals", "github_picker_enabled", "backups_enabled"):
+    for key in ("codex_bypass_approvals", "backups_enabled"):
         if not isinstance(data.get(key), bool):
             raise ConfigError(f"{key} must be true or false")
     if data["backups_enabled"] is not False:
