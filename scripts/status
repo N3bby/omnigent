@@ -27,8 +27,6 @@ k3s kubectl top pods -A 2>/dev/null || echo "metrics are not ready"
 echo
 echo "WARNINGS"
 k3s kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp 2>/dev/null | tail -n 30 || true
-systemctl --no-pager --full status omnigent-health.timer 2>/dev/null | sed -n '1,8p' || true
-journalctl -u omnigent-health.service -p warning --since=-24h --no-pager -n 20 2>/dev/null || true
 
 restarts="$(k3s kubectl get pods -A -o json | jq '[.items[].status.containerStatuses[]? | select(.lastState.terminated.reason == "OOMKilled")] | length')"
 if (( restarts > 0 )); then
