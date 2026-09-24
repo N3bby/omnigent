@@ -25,9 +25,9 @@
       register: managed_namespaces
       changed_when: false
       failed_when: false
-    - name: Show server-side diff
+    - name: Show manifest diff
       ansible.builtin.command:
-        argv: [k3s, kubectl, diff, --server-side=true, --force-conflicts, --field-manager=omnigent-deployment, -f, /tmp/omnigent-manifest.yaml]
+        argv: [k3s, kubectl, diff, -f, /tmp/omnigent-manifest.yaml]
       register: manifest_diff
       changed_when: manifest_diff.rc == 1
       failed_when: manifest_diff.rc not in [0, 1]

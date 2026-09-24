@@ -97,8 +97,8 @@ mise run credential-status
 
 Do not edit the server or live Kubernetes objects. The renderer hashes
 ConfigMaps, Secret content produces an opaque Pod-template checksum, and images
-are digest-pinned, so relevant changes always trigger a rollout. Server-side
-apply owns the labeled object inventory and prunes removed resources.
+are digest-pinned, so relevant changes always trigger a rollout. Apply uses a
+dedicated label-scoped object inventory and prunes removed resources.
 
 Version changes belong only in `versions.yaml`. Image-input changes require a
 new `image_release`, a workflow run, and `mise run lock-images`. Production is never

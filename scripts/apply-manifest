@@ -6,9 +6,6 @@ manifest="${1:?usage: apply-manifest MANIFEST}"
 
 set +e
 k3s kubectl diff \
-  --server-side=true \
-  --force-conflicts \
-  --field-manager=omnigent-deployment \
   -f "$manifest" >/dev/null
 diff_status=$?
 set -e
@@ -26,9 +23,6 @@ fi
 
 # Apply even after an empty diff so --prune can remove objects no longer present.
 k3s kubectl apply \
-  --server-side=true \
-  --force-conflicts \
-  --field-manager=omnigent-deployment \
   --prune \
   -l app.kubernetes.io/managed-by=omnigent-deployment \
   --prune-allowlist=core/v1/ConfigMap \

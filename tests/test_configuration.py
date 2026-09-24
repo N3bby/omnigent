@@ -52,7 +52,8 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_remote_apply_can_adopt_existing_resources(self) -> None:
         apply_script = (ROOT / "scripts" / "apply-manifest").read_text()
-        self.assertEqual(apply_script.count("--force-conflicts"), 2)
+        self.assertIn("--prune", apply_script)
+        self.assertNotIn("--server-side", apply_script)
         cert_tasks = (ROOT / "ansible" / "roles" / "cert_manager" / "tasks" / "main.yml").read_text()
         self.assertIn("--force-conflicts", cert_tasks)
         self.assertIn("kubectl, wait, --for=condition=Available, deployment, --all", cert_tasks)
