@@ -413,13 +413,13 @@ Create an idempotent Ansible playbook that:
 Expose a small operator interface:
 
 ```bash
-make check ENV=production
-make diff ENV=production
-make deploy ENV=production
-make status ENV=production
+mise run check
+mise run diff
+mise run deploy
+mise run status
 ```
 
-`make deploy` should connect remotely. Editing or regenerating files directly
+`mise run deploy` should connect remotely. Editing or regenerating files directly
 on the production server should not be part of the workflow.
 
 **Acceptance criteria:** a blank supported Ubuntu server reaches the unavoidable
@@ -509,7 +509,7 @@ same deployment workflow instead of requiring new numbered scripts.
 - Target an existing custom Ubuntu VM at netcup and configure it over SSH with
   Ansible. Automate the host firewall; keep netcup VM creation and DNS as manual
   prerequisites initially.
-- Production deployment is manually triggered with `make deploy`. CI may build
+- Production deployment is manually triggered with `mise run deploy`. CI may build
   and validate artifacts but must not deploy production automatically.
 - Use a public GHCR image for the custom runner and upstream public images by
   digest for the server and PostgreSQL. As of 2026-09-24, GitHub documents Container Registry

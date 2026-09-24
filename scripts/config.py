@@ -100,7 +100,7 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     for key in ("runner_digest",):
         value = require_string(data, key)
         if require_digests and not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
-            raise ConfigError(f"{key} is not locked; run make lock-images ENV={name}")
+            raise ConfigError(f"{key} is not locked; run ENV={name} mise run lock-images")
     return data, versions
 
 

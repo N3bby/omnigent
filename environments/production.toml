@@ -7,8 +7,8 @@ admin_email = "levi.vandenbempt.sjcm@gmail.com"
 image_registry = "ghcr.io/n3bby"
 runner_image = "omnigent-runner"
 
-# The custom runner digest is intentionally mandatory. `make lock-images
-# ENV=production` resolves its release tag after CI has published it. Upstream
+# The custom runner digest is intentionally mandatory. `mise run lock-images`
+# resolves its release tag after CI has published it. Upstream
 # server and PostgreSQL digests live in versions.yaml.
 runner_digest = "sha256:12f47cb9472dcfbe6ca95a882cc1ac3742eda5b5316ab06b004e4410748af71d"
 

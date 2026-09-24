@@ -9,7 +9,7 @@
     - name: Ensure a manifest has been rendered locally
       ansible.builtin.assert:
         that: rendered_manifest is file
-        fail_msg: "Run make render ENV={{ omnigent_environment }} first."
+        fail_msg: "Run ENV={{ omnigent_environment }} mise run render first."
       delegate_to: localhost
       become: false
     - name: Copy manifest for a dry-run diff

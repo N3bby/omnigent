@@ -1,0 +1,61 @@
+[tools]
+python = "3.13.15"
+uv = "0.12.18"
+ansible-core = "2.21.4"
+
+[tasks.check]
+description = "Validate configuration, manifests, scripts, and Ansible syntax"
+run = './scripts/preflight --environment "${ENV:-production}" --inventory "ansible/inventory/${ENV:-production}/hosts.yml"'
+
+[tasks.render]
+description = "Render the complete non-secret Kubernetes desired state"
+run = './scripts/render --environment "${ENV:-production}"'
+
+[tasks.diff]
+description = "Show the server-side Kubernetes diff without changing the server"
+run = [
+  { task = "render" },
+  'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/diff.yml -e "omnigent_environment=${ENV:-production}"',
+]
+
+[tasks.deploy]
+description = "Provision or reconcile the VM and deploy Omnigent"
+run = [
+  { task = "check" },
+  'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/site.yml -e "omnigent_environment=${ENV:-production}"',
+]
+
+[tasks.status]
+description = "Inspect health, capacity, TLS, storage, and runner failures"
+run = 'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/status.yml -e "omnigent_environment=${ENV:-production}"'
+
+[tasks.smoke]
+description = "Run remote HTTPS and in-cluster health smoke tests"
+run = 'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/smoke.yml -e "omnigent_environment=${ENV:-production}"'
+
+[tasks.lock-images]
+description = "Resolve immutable GHCR digests for the configured release tags"
+run = './scripts/lock-images --environment "${ENV:-production}"'
+
+[tasks.credential-status]
+description = "Check credential presence without printing values"
+run = './scripts/remote-helper "${ENV:-production}" credential-status'
+
+[tasks.setup-codex]
+description = "Run the interactive Codex device OAuth flow on the server"
+run = './scripts/remote-helper "${ENV:-production}" setup-codex'
+
+[tasks.setup-claude]
+description = "Store or rotate the shared Claude subscription token"
+run = './scripts/remote-helper "${ENV:-production}" setup-claude'
+
+[tasks.setup-git-token]
+description = "Store or rotate the optional private-Git HTTPS token"
+run = './scripts/remote-helper "${ENV:-production}" setup-git-token'
+
+[tasks.test]
+description = "Run repository validation and tests"
+run = [
+  { task = "check" },
+  "python -m unittest discover -s tests -v",
+]

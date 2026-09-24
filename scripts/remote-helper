@@ -10,10 +10,7 @@ esac
 
 inventory="ansible/inventory/${environment}/hosts.yml"
 ansible_inventory="$(command -v ansible-inventory || true)"
-if [[ -z "$ansible_inventory" && -x .venv/bin/ansible-inventory ]]; then
-  ansible_inventory=.venv/bin/ansible-inventory
-fi
-[[ -n "$ansible_inventory" ]] || { echo "ansible-inventory is required; run make bootstrap" >&2; exit 1; }
+[[ -n "$ansible_inventory" ]] || { echo "ansible-inventory is required; run mise install" >&2; exit 1; }
 details="$("$ansible_inventory" -i "$inventory" --host omnigent)"
 host="$(jq -r '.ansible_host // empty' <<<"$details")"
 user="$(jq -r '.ansible_user // empty' <<<"$details")"

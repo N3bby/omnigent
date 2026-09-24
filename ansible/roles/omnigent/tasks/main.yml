@@ -2,7 +2,7 @@
 - name: Ensure rendered manifest exists on the controller
   ansible.builtin.assert:
     that: "(omnigent_repo_root + '/.generated/' + omnigent_environment + '/manifest.yaml') is file"
-    fail_msg: "Run make render ENV={{ omnigent_environment }} first."
+    fail_msg: "Run ENV={{ omnigent_environment }} mise run render first."
   delegate_to: localhost
   become: false
 

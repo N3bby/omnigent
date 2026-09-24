@@ -26,9 +26,6 @@ def main() -> None:
                 fail(f"script is not executable: {path.relative_to(ROOT)}")
     subprocess.run([str(ROOT / "scripts" / "render"), "--environment", args.environment], check=True)
     ansible = shutil.which("ansible-playbook")
-    local_ansible = ROOT / ".venv" / "bin" / "ansible-playbook"
-    if not ansible and local_ansible.is_file():
-        ansible = str(local_ansible)
     if ansible:
         subprocess.run([
             ansible, "-i", args.inventory,

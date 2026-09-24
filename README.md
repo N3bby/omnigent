@@ -18,9 +18,9 @@ also digest-pinned. Production deployment is manual.
 3. Point the intended DNS name at the VM.
 4. Create a public Git repository and push this directory. Public repositories
    can expose their linked GHCR packages without server-side registry secrets.
-5. Install `ansible-core`, Docker with Buildx, `jq`, and OpenSSH on the operator
-   machine. `kubectl` or `kustomize` is optional; rendering falls back to the
-   pinned kubectl container.
+5. Install mise, Docker with Buildx, `jq`, and OpenSSH on the operator machine.
+   `kubectl` or `kustomize` is optional; rendering falls back to the pinned
+   kubectl container. Mise installs the pinned Python and Ansible versions.
 
 Edit these tracked files:
 
@@ -34,21 +34,20 @@ The firewall allows new public connections only to SSH, HTTP, and HTTPS. Port
 6443 is blocked unless its source is in `k3s_api_private_cidrs`. Provider-level
 netcup firewall rules and the DNS record remain manual prerequisites.
 
-Install the pinned operator dependency with:
+Install the pinned operator tools with:
 
 ```bash
-make bootstrap
+mise install
 ```
 
 ## Publish and lock the images
 
 Run the manually triggered `Publish immutable images` workflow once. It builds
-the multi-architecture runner image, attaches provenance/SBOM attestations,
-scans it, and publishes the release tag from `versions.yaml`. Make the resulting
-package public, then run:
+the amd64 runner image, attaches provenance/SBOM attestations, and publishes the
+release tag from `versions.yaml`. Make the resulting package public, then run:
 
 ```bash
-make lock-images ENV=production
+mise run lock-images
 git add environments/production.toml
 git commit -m "Lock production image digests"
 ```
@@ -56,9 +55,9 @@ git commit -m "Lock production image digests"
 ## First deployment
 
 ```bash
-make check ENV=production
-make diff ENV=production
-make deploy ENV=production
+mise run check
+mise run diff
+mise run deploy
 ```
 
 The deploy is idempotent. It validates the VM and DNS, installs the pinned k3s
@@ -73,9 +72,9 @@ Open the configured HTTPS URL and claim the initial administrator account with
 the configured admin email. Then authenticate the shared agent identities:
 
 ```bash
-make setup-codex ENV=production
-make setup-claude ENV=production       # optional
-make setup-git-token ENV=production    # optional private HTTPS repositories
+mise run setup-codex
+mise run setup-claude       # optional
+mise run setup-git-token    # optional private HTTPS repositories
 ```
 
 Codex uses a device flow and stores its shared auth on the `codex-home` PVC.
@@ -88,11 +87,11 @@ environment; create a new runner after rotating a credential.
 Every change uses the same path:
 
 ```bash
-make check ENV=production
-make diff ENV=production
-make deploy ENV=production
-make status ENV=production
-make credential-status ENV=production
+mise run check
+mise run diff
+mise run deploy
+mise run status
+mise run credential-status
 ```
 
 Do not edit the server or live Kubernetes objects. The renderer hashes
@@ -101,7 +100,7 @@ are digest-pinned, so relevant changes always trigger a rollout. Server-side
 apply owns the labeled object inventory and prunes removed resources.
 
 Version changes belong only in `versions.yaml`. Image-input changes require a
-new `image_release`, a workflow run, and `make lock-images`. Production is never
+new `image_release`, a workflow run, and `mise run lock-images`. Production is never
 deployed automatically by CI.
 
 ## Deliberate boundaries
