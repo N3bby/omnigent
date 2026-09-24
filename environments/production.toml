@@ -1,10 +1,10 @@
 # Non-secret production configuration. Commit this file.
-hostname = "omnigent.example.com"
-acme_email = "admin@example.com"
-admin_email = "admin@example.com"
+hostname = "omni.n3b.by"
+acme_email = "levi.vandenbempt.sjcm@gmail.com"
+admin_email = "levi.vandenbempt.sjcm@gmail.com"
 
 # Change this to the public GHCR namespace used by this repository.
-image_registry = "ghcr.io/REPLACE_ME"
+image_registry = "ghcr.io/n3bby"
 runner_image = "omnigent-runner"
 
 # The custom runner digest is intentionally mandatory. `make lock-images
