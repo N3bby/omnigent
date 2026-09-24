@@ -58,22 +58,20 @@
     group: root
     mode: "0600"
 
-- name: Ensure namespaces exist before generating in-cluster Secrets
-  ansible.builtin.command: >-
-    k3s kubectl create namespace {{ item }} --dry-run=client -o yaml
+- name: Apply managed prerequisite namespaces
+  ansible.builtin.command:
+    argv: [k3s, kubectl, apply, -f, -]
+    stdin: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: {{ item }}
+        labels:
+          app.kubernetes.io/managed-by: omnigent-deployment
+          app.kubernetes.io/part-of: omnigent
   loop: [omnigent, omnigent-sandboxes]
-  register: namespace_yaml
-  changed_when: false
-
-- name: Apply prerequisite namespaces
-  ansible.builtin.shell: |
-    set -o pipefail
-    printf '%s\n' {{ item.stdout | quote }} | k3s kubectl apply -f -
-  args:
-    executable: /bin/bash
-  loop: "{{ namespace_yaml.results }}"
   register: namespace_apply
-  changed_when: "'created' in namespace_apply.stdout"
+  changed_when: "'unchanged' not in namespace_apply.stdout"
 
 - name: Create internal Secrets only when absent
   ansible.builtin.command: /usr/local/libexec/omnigent/ensure-secrets

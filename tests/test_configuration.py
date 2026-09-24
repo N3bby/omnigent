@@ -50,6 +50,14 @@ class ConfigurationTests(unittest.TestCase):
         for forbidden in ("password", "oauth_token", "client_secret", "git_token"):
             self.assertNotIn(f"{forbidden} =", text)
 
+    def test_remote_apply_can_adopt_existing_resources(self) -> None:
+        apply_script = (ROOT / "scripts" / "apply-manifest").read_text()
+        self.assertEqual(apply_script.count("--force-conflicts"), 2)
+        cert_tasks = (ROOT / "ansible" / "roles" / "cert_manager" / "tasks" / "main.yml").read_text()
+        self.assertIn("--force-conflicts", cert_tasks)
+        self.assertIn("kubectl, wait, --for=condition=Available, deployment, --all", cert_tasks)
+        self.assertNotIn("rollout, status, deployment, --all", cert_tasks)
+
 
 if __name__ == "__main__":
     unittest.main()
