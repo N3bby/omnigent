@@ -41,6 +41,8 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("@sha256:", manifest)
         self.assertIn("ephemeral-storage", manifest)
         self.assertIn("memory: 2Gi", manifest)
+        for capability in ("CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"):
+            self.assertIn(f"- {capability}", manifest)
         for line in manifest.splitlines():
             if line.lstrip().startswith("image:"):
                 self.assertIn("@sha256:", line)
