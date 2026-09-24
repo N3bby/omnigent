@@ -10,7 +10,7 @@ runner_image = "omnigent-runner"
 # The custom runner digest is intentionally mandatory. `make lock-images
 # ENV=production` resolves its release tag after CI has published it. Upstream
 # server and PostgreSQL digests live in versions.yaml.
-runner_digest = "REPLACE_WITH_SHA256"
+runner_digest = "sha256:12f47cb9472dcfbe6ca95a882cc1ac3742eda5b5316ab06b004e4410748af71d"
 
 server_cpu_request = "500m"
 server_memory_request = "1Gi"
