@@ -30,9 +30,10 @@ Edit these tracked files:
 - `environments/production.toml`: hostname, emails, GHCR namespace, resource
   limits, runner concurrency, and explicit policy settings.
 
-The firewall allows new public connections only to SSH, HTTP, and HTTPS. Port
-6443 is blocked unless its source is in `k3s_api_private_cidrs`. Provider-level
-netcup firewall rules and the DNS record remain manual prerequisites.
+The deployment firewall only protects the Kubernetes API: public TCP/6443 is
+blocked unless its source is in `k3s_api_private_cidrs`. It does not filter
+other service ports or outbound traffic. Provider-level netcup firewall rules
+and the DNS record remain manual prerequisites.
 
 Install the pinned operator tools with:
 
@@ -61,8 +62,8 @@ mise run deploy
 ```
 
 The deploy is idempotent. It validates the VM and DNS, installs the pinned k3s
-and cert-manager releases with checked installer/manifest hashes, installs the
-host firewall, creates internal random secrets only when absent, applies and
+and cert-manager releases with checked installer/manifest hashes, protects the
+public k3s API port, creates internal random secrets only when absent, applies and
 prunes the tracked desired state, waits for rollouts, and tests the public HTTPS
 health endpoint. It never copies secrets back to the operator machine.
 It also refuses to adopt an existing unmanaged `omnigent` namespace; use a

@@ -397,7 +397,8 @@ Create an idempotent Ansible playbook that:
 - Starts from an existing custom Ubuntu VM at netcup that is reachable over SSH;
   VM purchasing and creation are not automated initially.
 - Validates Ubuntu version, architecture, CPU, memory, disk, DNS, and ports.
-- Configures host firewalling for SSH, HTTP, HTTPS, and private k3s API access.
+- Configures a targeted host firewall rule for private k3s API access without
+  filtering unrelated service ports.
 - Accepts the public hostname as configuration and verifies DNS. DNS record
   creation remains a small manual netcup step unless API credentials are added
   later.
@@ -507,8 +508,8 @@ same deployment workflow instead of requiring new numbered scripts.
 ## Settled implementation decisions
 
 - Target an existing custom Ubuntu VM at netcup and configure it over SSH with
-  Ansible. Automate the host firewall; keep netcup VM creation and DNS as manual
-  prerequisites initially.
+  Ansible. Automate protection of the public k3s API port without filtering
+  unrelated services; keep netcup VM creation and DNS as manual prerequisites.
 - Production deployment is manually triggered with `mise run deploy`. CI may build
   and validate artifacts but must not deploy production automatically.
 - Use a public GHCR image for the custom runner and upstream public images by
