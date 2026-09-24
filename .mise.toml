@@ -2,6 +2,7 @@
 python = "3.13.15"
 uv = "0.12.18"
 ansible-core = "2.21.4"
+d2 = "0.9.0"
 
 [tasks.check]
 description = "Validate configuration, manifests, scripts, and Ansible syntax"
@@ -56,6 +57,10 @@ run = './scripts/remote-helper "${ENV:-production}" setup-git-token'
 [tasks.setup-github-app]
 description = "Initialize local credential encryption and configure the GitHub App"
 run = './scripts/remote-helper "${ENV:-production}" setup-github-app'
+
+[tasks.diagram]
+description = "Render the deployment architecture diagram"
+run = 'd2 --layout dagre --theme 4 docs/architecture.d2 docs/architecture.svg'
 
 [tasks.test]
 description = "Run repository validation and tests"
