@@ -109,14 +109,18 @@ platform: {
   credentials: "Encrypted connections\nGitHub credentials protected at rest" {
     class: security
   }
-  agents: "On-demand agent workspaces\nCodex and Claude" {
+  kubernetes: "Kubernetes (k3s)\nSchedules isolated workloads" {
+    class: security
+  }
+  agents: "Ephemeral agent pods\nCodex and Claude\nOne workspace per session" {
     class: primary
   }
 
   entry -> omnigent: "access"
   omnigent -> data: "store"
   omnigent -> credentials: "protect connections"
-  omnigent -> agents: "start and manage"
+  omnigent -> kubernetes: "request workspace"
+  kubernetes -> agents: "spawn ephemeral pod"
 }
 
 connected: {
