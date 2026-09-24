@@ -59,8 +59,11 @@ description = "Initialize local credential encryption and configure the GitHub A
 run = './scripts/remote-helper "${ENV:-production}" setup-github-app'
 
 [tasks.diagram]
-description = "Render the deployment architecture diagram"
-run = 'd2 --layout dagre --theme 4 docs/architecture.d2 docs/architecture.svg'
+description = "Render the simplified and detailed architecture diagrams"
+run = [
+  'd2 --layout dagre --theme 4 docs/architecture-simple.d2 docs/architecture-simple.svg',
+  'd2 --layout dagre --theme 4 docs/architecture.d2 docs/architecture.svg',
+]
 
 [tasks.test]
 description = "Run repository validation and tests"

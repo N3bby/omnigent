@@ -129,6 +129,7 @@ deployed automatically by CI.
 
 See [the threat model](docs/THREAT_MODEL.md),
 [operations contract](docs/OPERATIONS.md), and [implementation plan](plan.md).
-The complete deployed topology is available as a
-[D2 architecture diagram](docs/architecture.svg); regenerate it with
-`mise run diagram` after architectural changes.
+See the [simplified architecture diagram](docs/architecture-simple.svg) for a
+high-level overview and the [detailed deployment diagram](docs/architecture.svg)
+for the complete topology. Regenerate both with `mise run diagram` after
+architectural changes.
