@@ -19,15 +19,30 @@
         owner: root
         group: root
         mode: "0600"
+    - name: Check whether the managed namespaces exist
+      ansible.builtin.command:
+        argv: [k3s, kubectl, get, namespace, omnigent, omnigent-sandboxes]
+      register: managed_namespaces
+      changed_when: false
+      failed_when: false
     - name: Show server-side diff
       ansible.builtin.command:
         argv: [k3s, kubectl, diff, --server-side=true, --field-manager=omnigent-deployment, -f, /tmp/omnigent-manifest.yaml]
       register: manifest_diff
       changed_when: manifest_diff.rc == 1
       failed_when: manifest_diff.rc not in [0, 1]
+      when: managed_namespaces.rc == 0
     - name: Print manifest diff
       ansible.builtin.debug:
         var: manifest_diff.stdout_lines
+      when: managed_namespaces.rc == 0
+    - name: Explain fresh-install diff
+      ansible.builtin.debug:
+        msg: >-
+          One or both managed namespaces do not exist. Kubernetes cannot
+          server-diff their child objects yet; the first deployment will create
+          the complete rendered manifest.
+      when: managed_namespaces.rc != 0
     - name: Remove temporary manifest
       ansible.builtin.file:
         path: /tmp/omnigent-manifest.yaml
