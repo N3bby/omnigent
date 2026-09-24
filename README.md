@@ -5,10 +5,12 @@ existing Ubuntu VM and reconciles later changes through the same command. It is
 greenfield: it does not read or migrate the old installation.
 
 The production topology is k3s with Traefik, cert-manager, one Omnigent server,
-PostgreSQL, and ephemeral Kubernetes runner Jobs. The runners deliberately have
+PostgreSQL, a local Vault credential-encryption service, and ephemeral
+Kubernetes runner Jobs. The runners deliberately have
 unrestricted ingress and egress. Images are built in GitHub Actions, published
-to public GHCR and deployed by digest. The unmodified upstream server image is
-also digest-pinned. Production deployment is manual.
+to public GHCR and deployed by digest. The server image only adds the pinned
+Vault client library to the pinned upstream image. Production deployment is
+manual.
 
 ## One-time prerequisites
 
@@ -44,8 +46,8 @@ mise install
 ## Publish and lock the images
 
 Run the manually triggered `Publish immutable images` workflow once. It builds
-the amd64 runner image, attaches provenance/SBOM attestations, and publishes the
-release tag from `versions.yaml`. Make the resulting package public, then run:
+the amd64 runner and server images, attaches provenance/SBOM attestations, and
+publishes the release tag from `versions.yaml`. Make both packages public, then run:
 
 ```bash
 mise run lock-images
@@ -76,12 +78,19 @@ the configured admin email. Then authenticate the shared agent identities:
 mise run setup-codex
 mise run setup-claude       # optional
 mise run setup-git-token    # optional private HTTPS repositories
+mise run setup-github-app   # GitHub repository picker
 ```
 
 Codex uses a device flow and stores its shared auth on the `codex-home` PVC.
 Claude and the optional Git token are entered with hidden prompts and stored in
 the runner namespace Secret. Existing runner Jobs retain their original
 environment; create a new runner after rotating a credential.
+
+`setup-github-app` first prints the exact GitHub App settings, then prompts for
+the Client ID, Client secret, and App slug. It initializes the in-cluster Vault
+and stores the encryption material only in Kubernetes Secrets. It does not need
+a GitHub App private key or an external key store. After it finishes, connect
+GitHub once from Omnigent under Settings -> Sandbox Integrations.
 
 ## Applying changes
 
@@ -108,9 +117,9 @@ deployed automatically by CI.
 
 - No backups or restore workflow are provided. Loss of the VM/disk means a
   clean deployment and fresh authentication; application data is lost.
-- GitHub App repository-picker support is disabled in the initial environment.
-  It needs an encryption backend and is not silently configured with weak local
-  encryption.
+- GitHub App connections use the in-cluster Vault Transit engine. The Vault
+  unseal material is stored in the same k3s cluster for unattended restarts;
+  this protects database-only disclosure, not a root or cluster compromise.
 - Runners have unrestricted networking. Security relies on namespace/RBAC,
   Pod Security, credentials, and resource boundaries—not network filtering.
 - Codex's dangerous approval/sandbox bypass is explicit as

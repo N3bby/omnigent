@@ -4,7 +4,7 @@ set -euo pipefail
 environment="${1:?usage: remote-helper ENVIRONMENT HELPER}"
 helper="${2:?usage: remote-helper ENVIRONMENT HELPER}"
 case "$helper" in
-  credential-status|setup-codex|setup-claude|setup-git-token) ;;
+  credential-status|setup-codex|setup-claude|setup-git-token|setup-github-app) ;;
   *) echo "unsupported helper: $helper" >&2; exit 1 ;;
 esac
 

@@ -34,6 +34,7 @@ def main() -> None:
     release = versions["image_release"]
     digests = {
         "runner_digest": resolve(f"{registry}/{cfg['runner_image']}:{release}"),
+        "server_digest": resolve(f"{registry}/{cfg['server_image']}:{release}"),
     }
     path = ROOT / "environments" / f"{args.environment}.toml"
     text = path.read_text()

@@ -6,11 +6,13 @@ admin_email = "levi.vandenbempt.sjcm@gmail.com"
 # Change this to the public GHCR namespace used by this repository.
 image_registry = "ghcr.io/n3bby"
 runner_image = "omnigent-runner"
+server_image = "omnigent-server"
 
-# The custom runner digest is intentionally mandatory. `mise run lock-images`
-# resolves its release tag after CI has published it. Upstream
-# server and PostgreSQL digests live in versions.yaml.
+# Custom image digests are intentionally mandatory. `mise run lock-images`
+# resolves their release tags after CI has published them. Upstream build inputs
+# and the PostgreSQL/Vault digests live in versions.yaml.
 runner_digest = "sha256:12f47cb9472dcfbe6ca95a882cc1ac3742eda5b5316ab06b004e4410748af71d"
+server_digest = "REPLACE_WITH_SHA256"
 
 server_cpu_request = "500m"
 server_memory_request = "1Gi"
@@ -33,6 +35,6 @@ runner_max_concurrency = 2
 
 # Deliberate policy choices.
 codex_bypass_approvals = true
-github_picker_enabled = false
+github_picker_enabled = true
 backups_enabled = false
 runner_network_policy = "unrestricted"

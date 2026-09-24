@@ -61,7 +61,8 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     required_versions = {
         "omnigent", "omnigent_commit", "k3s", "k3s_installer_sha256",
         "cert_manager", "cert_manager_manifest_sha256", "postgres",
-        "postgres_digest", "claude_code", "codex_cli", "image_release",
+        "postgres_digest", "vault", "vault_digest", "hvac", "claude_code",
+        "codex_cli", "image_release",
     }
     missing_versions = sorted(required_versions - versions.keys())
     if missing_versions:
@@ -75,7 +76,7 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     registry = require_string(data, "image_registry", r"[a-z0-9.-]+/[A-Za-z0-9_.-]+")
     if "REPLACE_ME" in registry:
         raise ConfigError("set image_registry to the public GHCR namespace")
-    for key in ("runner_image",):
+    for key in ("runner_image", "server_image"):
         require_string(data, key, r"[A-Za-z0-9_.-]+")
     for key in (
         "server_cpu_request", "server_memory_request", "server_cpu_limit",
@@ -95,9 +96,7 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
         raise ConfigError("backups_enabled must remain false; backups are intentionally unsupported")
     if data.get("runner_network_policy") != "unrestricted":
         raise ConfigError("runner_network_policy must be 'unrestricted'")
-    if data["github_picker_enabled"]:
-        raise ConfigError("github_picker_enabled is not yet supported; leave it false")
-    for key in ("runner_digest",):
+    for key in ("runner_digest", "server_digest"):
         value = require_string(data, key)
         if require_digests and not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
             raise ConfigError(f"{key} is not locked; run ENV={name} mise run lock-images")

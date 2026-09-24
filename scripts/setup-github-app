@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+KUBECTL=(k3s kubectl)
+namespace=omnigent
+vault_pod=vault-0
+vault_addr=http://127.0.0.1:8200
+
+for command_name in base64 jq mktemp python3; do
+  command -v "$command_name" >/dev/null 2>&1 || {
+    echo "$command_name is required" >&2
+    exit 1
+  }
+done
+
+domain="$("${KUBECTL[@]}" get ingress omnigent-public -n "$namespace" -o jsonpath='{.spec.rules[0].host}')"
+[[ "$domain" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] || {
+  echo "could not determine the deployed Omnigent hostname" >&2
+  exit 1
+}
+
+cat <<EOF
+Create and install a GitHub App before continuing:
+
+  Homepage URL: https://${domain}
+  Callback URL: https://${domain}/v1/connections/github/callback
+  Expiring user tokens: enabled
+  Webhooks: disabled
+  Repository permissions:
+    Contents: Read and write
+    Metadata: Read-only
+    Pull requests: Read and write
+
+Install it on the account or organization containing the repositories you want
+Omnigent to access. A private key is not needed for this user connection flow.
+EOF
+
+read -rp "GitHub App Client ID: " github_client_id
+read -rsp "GitHub App Client secret: " github_client_secret
+echo
+read -rp "GitHub App slug (from github.com/apps/SLUG): " github_slug
+
+[[ -n "$github_client_id" && -n "$github_client_secret" && -n "$github_slug" ]] || {
+  echo "client ID, client secret, and slug are required" >&2
+  exit 1
+}
+[[ "$github_client_id" != *$'\n'* && "$github_client_secret" != *$'\n'* && "$github_slug" != *$'\n'* ]] || {
+  echo "GitHub App values must be single-line" >&2
+  exit 1
+}
+[[ "$github_slug" =~ ^[A-Za-z0-9-]+$ ]] || {
+  echo "GitHub App slug contains unexpected characters" >&2
+  exit 1
+}
+
+"${KUBECTL[@]}" rollout status statefulset/vault -n "$namespace" --timeout=300s
+"${KUBECTL[@]}" get secret omnigent-secrets -n "$namespace" >/dev/null
+
+work_dir="$(mktemp -d)"
+cleanup() {
+  rm -f "$work_dir/init.json" "$work_dir/secret-patch.json"
+  rmdir "$work_dir" 2>/dev/null || true
+}
+trap cleanup EXIT
+chmod 700 "$work_dir"
+
+set +e
+status_json="$("${KUBECTL[@]}" exec -n "$namespace" "$vault_pod" -- \
+  sh -c "VAULT_ADDR=${vault_addr} vault status -format=json" 2>/dev/null)"
+status_code=$?
+set -e
+[[ "$status_code" -eq 0 || "$status_code" -eq 2 ]] || {
+  echo "Vault did not return a usable status response" >&2
+  exit 1
+}
+initialized="$(python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("initialized", False)).lower())' <<<"$status_json")"
+unset status_json
+
+if [[ "$initialized" != true ]]; then
+  echo "Initializing the local Vault credential store..."
+  "${KUBECTL[@]}" exec -n "$namespace" "$vault_pod" -- \
+    sh -c "VAULT_ADDR=${vault_addr} vault operator init -key-shares=1 -key-threshold=1 -format=json" \
+    >"$work_dir/init.json"
+  chmod 600 "$work_dir/init.json"
+  python3 - "$work_dir/init.json" <<'PY' | "${KUBECTL[@]}" apply -f - >/dev/null
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    payload = json.load(stream)
+print("""apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-bootstrap
+  namespace: omnigent
+type: Opaque
+stringData:
+  unseal-key: %s
+  root-token: %s
+""" % (json.dumps(payload["unseal_keys_b64"][0]), json.dumps(payload["root_token"])))
+PY
+elif ! "${KUBECTL[@]}" get secret vault-bootstrap -n "$namespace" >/dev/null 2>&1; then
+  echo "Vault is already initialized, but vault-bootstrap is missing; refusing to reinitialize it" >&2
+  exit 1
+fi
+
+unseal_key="$("${KUBECTL[@]}" get secret vault-bootstrap -n "$namespace" -o jsonpath='{.data.unseal-key}' | base64 -d)"
+root_token="$("${KUBECTL[@]}" get secret vault-bootstrap -n "$namespace" -o jsonpath='{.data.root-token}' | base64 -d)"
+
+printf '%s\n' "$unseal_key" | "${KUBECTL[@]}" exec -i -n "$namespace" "$vault_pod" -- \
+  sh -c "read -r key; VAULT_ADDR=${vault_addr} vault operator unseal \"\$key\" >/dev/null"
+
+if ! printf '%s\n' "$root_token" | "${KUBECTL[@]}" exec -i -n "$namespace" "$vault_pod" -- \
+  sh -c "read -r token; VAULT_TOKEN=\"\$token\" VAULT_ADDR=${vault_addr} vault secrets list -format=json" \
+  | grep -q '"transit/"'; then
+  printf '%s\n' "$root_token" | "${KUBECTL[@]}" exec -i -n "$namespace" "$vault_pod" -- \
+    sh -c "read -r token; VAULT_TOKEN=\"\$token\" VAULT_ADDR=${vault_addr} vault secrets enable transit" >/dev/null
+fi
+
+if ! printf '%s\n' "$root_token" | "${KUBECTL[@]}" exec -i -n "$namespace" "$vault_pod" -- \
+  sh -c "read -r token; VAULT_TOKEN=\"\$token\" VAULT_ADDR=${vault_addr} vault read transit/keys/omnigent-connections" \
+  >/dev/null 2>&1; then
+  printf '%s\n' "$root_token" | "${KUBECTL[@]}" exec -i -n "$namespace" "$vault_pod" -- \
+    sh -c "read -r token; VAULT_TOKEN=\"\$token\" VAULT_ADDR=${vault_addr} vault write -f transit/keys/omnigent-connections derived=true" \
+    >/dev/null
+fi
+
+printf '%s\n' "$root_token" | "${KUBECTL[@]}" exec -i -n "$namespace" "$vault_pod" -- \
+  sh -c "read -r token; VAULT_TOKEN=\"\$token\" VAULT_ADDR=${vault_addr} vault policy write omnigent-transit /vault/config/omnigent-transit.hcl" \
+  >/dev/null
+
+vault_token="$("${KUBECTL[@]}" get secret omnigent-secrets -n "$namespace" -o jsonpath='{.data.VAULT_TOKEN}' 2>/dev/null | base64 -d || true)"
+if [[ -z "$vault_token" ]] || ! printf '%s\n' "$vault_token" | "${KUBECTL[@]}" exec -i -n "$namespace" "$vault_pod" -- \
+  sh -c "read -r token; VAULT_TOKEN=\"\$token\" VAULT_ADDR=${vault_addr} vault token lookup" >/dev/null 2>&1; then
+  service_json="$(printf '%s\n' "$root_token" | "${KUBECTL[@]}" exec -i -n "$namespace" "$vault_pod" -- \
+    sh -c "read -r token; VAULT_TOKEN=\"\$token\" VAULT_ADDR=${vault_addr} vault token create -format=json -orphan -policy=omnigent-transit -ttl=87600h")"
+  vault_token="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["auth"]["client_token"])' <<<"$service_json")"
+  unset service_json
+fi
+
+export github_client_id github_client_secret github_slug vault_token domain
+python3 >"$work_dir/secret-patch.json" <<'PY'
+import json
+import os
+
+print(json.dumps({"stringData": {
+    "OMNIGENT_GITHUB_APP_CLIENT_ID": os.environ["github_client_id"],
+    "OMNIGENT_GITHUB_APP_CLIENT_SECRET": os.environ["github_client_secret"],
+    "OMNIGENT_GITHUB_APP_SLUG": os.environ["github_slug"],
+    "OMNIGENT_GITHUB_APP_REDIRECT_URI": f"https://{os.environ['domain']}/v1/connections/github/callback",
+    "OMNIGENT_CREDENTIAL_CIPHER": "vault",
+    "OMNIGENT_CREDENTIAL_VAULT_KEY": "omnigent-connections",
+    "VAULT_ADDR": "http://vault.omnigent.svc.cluster.local:8200",
+    "VAULT_TOKEN": os.environ["vault_token"],
+}}))
+PY
+chmod 600 "$work_dir/secret-patch.json"
+unset github_client_secret vault_token root_token unseal_key
+
+"${KUBECTL[@]}" patch secret omnigent-secrets -n "$namespace" --type merge \
+  --patch-file "$work_dir/secret-patch.json" >/dev/null
+"${KUBECTL[@]}" rollout restart deployment/omnigent -n "$namespace" >/dev/null
+"${KUBECTL[@]}" rollout status deployment/omnigent -n "$namespace" --timeout=600s
+
+echo
+echo "GitHub App integration is configured."
+echo "Open Omnigent -> Settings -> Sandbox Integrations -> Connect GitHub."
+echo "After authorizing GitHub, create a new session and select a repository."

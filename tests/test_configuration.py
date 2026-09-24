@@ -17,11 +17,13 @@ class ConfigurationTests(unittest.TestCase):
         self.assertRegex(versions["omnigent_commit"], r"^[0-9a-f]{40}$")
         self.assertRegex(versions["omnigent_host_base_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(versions["omnigent_server_base_digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(versions["vault_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertNotIn("latest", versions.values())
 
     def test_ci_environment_encodes_accepted_policies(self) -> None:
         values, _ = validate("ci")
         self.assertEqual(values["runner_network_policy"], "unrestricted")
+        self.assertTrue(values["github_picker_enabled"])
         self.assertFalse(values["backups_enabled"])
 
     def test_runner_lock_matches_authoritative_versions(self) -> None:
@@ -31,6 +33,9 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(package["dependencies"]["@openai/codex"], versions["codex_cli"])
         dockerfile = (ROOT / "images" / "runner" / "Dockerfile").read_text()
         self.assertIn(versions["omnigent_host_base_digest"], dockerfile)
+        server_dockerfile = (ROOT / "images" / "server" / "Dockerfile").read_text()
+        self.assertIn(versions["omnigent_server_base_digest"], server_dockerfile)
+        self.assertIn(versions["hvac"], server_dockerfile)
 
     def test_render_has_no_secret_or_mutable_application_image(self) -> None:
         subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
@@ -41,6 +46,8 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("@sha256:", manifest)
         self.assertIn("ephemeral-storage", manifest)
         self.assertIn("memory: 2Gi", manifest)
+        self.assertIn("name: vault", manifest)
+        self.assertIn(f"hashicorp/vault@{load_versions()['vault_digest']}", manifest)
         for line in manifest.splitlines():
             if line.lstrip().startswith("image:"):
                 self.assertIn("@sha256:", line)
@@ -58,6 +65,15 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("--force-conflicts", cert_tasks)
         self.assertIn("kubectl, wait, --for=condition=Available, deployment, --all", cert_tasks)
         self.assertNotIn("rollout, status, deployment, --all", cert_tasks)
+
+    def test_github_app_setup_is_a_deployed_operator_task(self) -> None:
+        helper = (ROOT / "scripts" / "setup-github-app").read_text()
+        self.assertIn("OMNIGENT_GITHUB_APP_CLIENT_SECRET", helper)
+        self.assertIn("OMNIGENT_CREDENTIAL_CIPHER", helper)
+        self.assertIn("vault-bootstrap", helper)
+        self.assertNotIn("PRIVATE_KEY", helper)
+        tasks = (ROOT / ".mise.toml").read_text()
+        self.assertIn("[tasks.setup-github-app]", tasks)
 
 
 if __name__ == "__main__":

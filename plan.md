@@ -3,8 +3,8 @@
 ## Implementation status
 
 The greenfield repository described here is implemented in this directory. The
-checked-in production profile deliberately keeps the optional GitHub repository
-picker disabled, so Vault is not installed and the upstream server image can be
+checked-in production profile enables the GitHub repository picker using an
+in-cluster Vault service and a minimal Vault-capable server image, so it can be
 used unchanged by digest. Representative load/capacity testing remains an
 after-deployment task because it requires the actual netcup VM and authenticated
 sessions.
@@ -223,9 +223,11 @@ set of migration requirements for the new deployment.
   namespace.
 - The unseal key is injected into Vault for automatic unsealing.
 - Omnigent receives an orphan service token with a ten-year TTL.
-- Re-running setup creates another token without revoking the previous token.
+- Re-running setup reuses the existing valid service token and replaces it only
+  if it is absent or invalid.
 - The application policy is limited to encrypt/decrypt on one Transit key.
-- Vault has no resource limits, audit device, token rotation, or NetworkPolicy.
+- Vault has explicit CPU and memory limits, but no audit device, automatic token
+  rotation, or NetworkPolicy.
 - The server requires a custom image solely to add the `hvac` dependency.
 
 ### Operations and accepted data-loss model
@@ -374,9 +376,8 @@ manifests, and two consecutive deployments produce no changes.
 
 ### Phase 2: Make images immutable
 
-- Build the custom runner image in CI rather than on the production server. Use
-  the unchanged upstream server image by digest while the Vault-backed GitHub
-  picker remains disabled.
+- Build the custom runner and minimal Vault-capable server images in CI rather
+  than on the production server. Both are based on pinned upstream digests.
 - Push public images to GHCR. The images contain no credentials, so public
   visibility avoids pull credentials on the server. GitHub currently documents
   Container Registry storage and bandwidth as free and promises at least one
@@ -442,10 +443,9 @@ are applied through the same deployment command.
 - Retain one shared Codex and Claude identity. The only user is currently the
   operator, so per-user credential isolation is unnecessary for now. Revisit
   before inviting untrusted users.
-- Keep the GitHub repository picker disabled in the initial deployment. Enabling
-  it is a future feature change that must add a supported KMS/Vault encryption
-  backend; do not silently introduce a weak local cipher or a long-lived root
-  token.
+- Enable the GitHub repository picker with Vault Transit. Keep the application
+  token least-privileged and store the bootstrap material only in Kubernetes;
+  the same-cluster trust tradeoff is accepted for unattended restarts.
 
 **Acceptance criteria:** no additional secret-management service or key is
 required. A new server generates its internal secrets and asks only for the
@@ -512,8 +512,9 @@ same deployment workflow instead of requiring new numbered scripts.
   unrelated services; keep netcup VM creation and DNS as manual prerequisites.
 - Production deployment is manually triggered with `mise run deploy`. CI may build
   and validate artifacts but must not deploy production automatically.
-- Use a public GHCR image for the custom runner and upstream public images by
-  digest for the server and PostgreSQL. As of 2026-09-24, GitHub documents Container Registry
+- Use public GHCR images for the custom runner and Vault-capable server, and
+  upstream public images by digest for PostgreSQL and Vault. As of 2026-09-24,
+  GitHub documents Container Registry
   storage and bandwidth as currently free:
   <https://docs.github.com/en/billing/concepts/product-billing/github-packages>.
 - Do not introduce SOPS, age, or an external secret manager. Generate internal
@@ -523,8 +524,8 @@ same deployment workflow instead of requiring new numbered scripts.
 - Use normal container isolation. gVisor and Kata are not required.
 - Keep runner ingress and egress unrestricted.
 - Do not provide backups or restore workflows.
-- Keep the optional GitHub repository picker disabled initially, avoiding Vault
-  and its separate credential lifecycle until the feature is actually needed.
+- Enable the GitHub repository picker with an in-cluster Vault Transit backend;
+  do not require a separately managed external key store.
 
 ## Remaining sizing input
 

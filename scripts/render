@@ -57,8 +57,8 @@ def main() -> None:
 
     registry = str(cfg["image_registry"]).rstrip("/")
     runner_ref = f"{registry}/{cfg['runner_image']}@{cfg['runner_digest']}"
-    server_name = "ghcr.io/omnigent-ai/omnigent-server-kubernetes"
-    server_digest = versions["omnigent_server_base_digest"]
+    server_name = f"{registry}/{cfg['server_image']}"
+    server_digest = str(cfg["server_digest"])
     bypass = "1" if cfg["codex_bypass_approvals"] else "0"
     revision_result = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, check=False, capture_output=True, text=True
@@ -289,6 +289,9 @@ images:
   - name: postgres
     newName: postgres
     digest: {versions['postgres_digest']}
+  - name: hashicorp/vault
+    newName: hashicorp/vault
+    digest: {versions['vault_digest']}
 patches:
   - target:
       group: apps

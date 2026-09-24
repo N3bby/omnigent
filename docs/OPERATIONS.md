@@ -16,6 +16,12 @@ cluster, or files on the server. ConfigMap hashes trigger server rollout.
 Secret helpers update the Secret and the next deployment derives an opaque
 checksum annotation without printing the values.
 
+GitHub App setup is the explicit post-deployment exception because it introduces
+external credentials. Run `mise run setup-github-app`; it initializes Vault
+once, updates Kubernetes Secrets without printing their values, and restarts the
+server. Re-running it preserves initialized Vault state and reuses a valid
+application Vault token.
+
 Image changes are released by manually running the `Publish immutable images`
 GitHub Actions workflow. Bump `image_release`, publish, run `mise run lock-images`,
 review and commit the resolved digests, then deploy. Rollback means reverting
@@ -23,7 +29,7 @@ the Git commit containing the manifest/configuration/image digest and running
 `mise run deploy` again.
 
 There is no backup or restore service. Losing the VM or disk loses PostgreSQL,
-artifacts, account state, OAuth state, and integration state. Recovery means a
+artifacts, account state, OAuth state, Vault state, and integration state. Recovery means a
 clean VM, a fresh deployment, and reauthentication. Database-incompatible
 upgrades must be tested against a disposable installation and explicitly
 approved because they are not reversible under this policy.

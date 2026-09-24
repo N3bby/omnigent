@@ -4,7 +4,7 @@ resources:
   - namespaces.yaml
   - server.yaml
   - postgres.yaml
+  - vault.yaml
   - runner-rbac.yaml
   - storage.yaml
   - resource-policy.yaml
-

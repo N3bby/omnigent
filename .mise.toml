@@ -53,6 +53,10 @@ run = './scripts/remote-helper "${ENV:-production}" setup-claude'
 description = "Store or rotate the optional private-Git HTTPS token"
 run = './scripts/remote-helper "${ENV:-production}" setup-git-token'
 
+[tasks.setup-github-app]
+description = "Initialize local credential encryption and configure the GitHub App"
+run = './scripts/remote-helper "${ENV:-production}" setup-github-app'
+
 [tasks.test]
 description = "Run repository validation and tests"
 run = [

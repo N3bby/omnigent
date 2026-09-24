@@ -30,6 +30,7 @@
     - setup-codex
     - setup-claude
     - setup-git-token
+    - setup-github-app
 
 - name: Check for the retired health-check timer
   ansible.builtin.stat:
@@ -117,6 +118,11 @@
 - name: Wait for PostgreSQL
   ansible.builtin.command:
     argv: [k3s, kubectl, rollout, status, statefulset/postgres, -n, omnigent, --timeout=300s]
+  changed_when: false
+
+- name: Wait for Vault
+  ansible.builtin.command:
+    argv: [k3s, kubectl, rollout, status, statefulset/vault, -n, omnigent, --timeout=300s]
   changed_when: false
 
 - name: Wait for Omnigent
