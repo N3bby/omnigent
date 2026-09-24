@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+environment="${1:?usage: remote-helper ENVIRONMENT HELPER}"
+helper="${2:?usage: remote-helper ENVIRONMENT HELPER}"
+case "$helper" in
+  credential-status|setup-codex|setup-claude|setup-git-token) ;;
+  *) echo "unsupported helper: $helper" >&2; exit 1 ;;
+esac
+
+inventory="ansible/inventory/${environment}/hosts.yml"
+ansible_inventory="$(command -v ansible-inventory || true)"
+if [[ -z "$ansible_inventory" && -x .venv/bin/ansible-inventory ]]; then
+  ansible_inventory=.venv/bin/ansible-inventory
+fi
+[[ -n "$ansible_inventory" ]] || { echo "ansible-inventory is required; run make bootstrap" >&2; exit 1; }
+details="$("$ansible_inventory" -i "$inventory" --host omnigent)"
+host="$(jq -r '.ansible_host // empty' <<<"$details")"
+user="$(jq -r '.ansible_user // empty' <<<"$details")"
+port="$(jq -r '.ansible_port // 22' <<<"$details")"
+[[ -n "$host" && -n "$user" ]] || { echo "inventory must define ansible_host and ansible_user" >&2; exit 1; }
+exec ssh -tt -p "$port" "${user}@${host}" "sudo /usr/local/libexec/omnigent/${helper}"

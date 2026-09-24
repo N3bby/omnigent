@@ -1,0 +1,8 @@
+[Unit]
+Description=Check Omnigent health and capacity
+After=k3s.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/omnigent/health-check
+

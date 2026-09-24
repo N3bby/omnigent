@@ -1,0 +1,29 @@
+---
+- name: Create deployment state directory
+  ansible.builtin.file:
+    path: "{{ omnigent_remote_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Download the pinned cert-manager manifest
+  ansible.builtin.get_url:
+    url: "https://github.com/cert-manager/cert-manager/releases/download/{{ cert_manager_version }}/cert-manager.yaml"
+    dest: "{{ omnigent_remote_root }}/cert-manager.yaml"
+    checksum: "sha256:{{ cert_manager_manifest_sha256 }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Apply cert-manager
+  ansible.builtin.command:
+    argv: [k3s, kubectl, apply, --server-side=true, --field-manager=omnigent-deployment, -f, "{{ omnigent_remote_root }}/cert-manager.yaml"]
+  register: cert_manager_apply
+  changed_when: "'serverside-applied' in cert_manager_apply.stdout"
+
+- name: Wait for cert-manager deployments
+  ansible.builtin.command:
+    argv: [k3s, kubectl, rollout, status, deployment, --all, -n, cert-manager, --timeout=300s]
+  changed_when: false
+

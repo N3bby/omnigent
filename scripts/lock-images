@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+from pathlib import Path
+
+from config import ConfigError, ROOT, fail, load_environment, load_versions
+
+
+def resolve(reference: str) -> str:
+    result = subprocess.run(
+        ["docker", "buildx", "imagetools", "inspect", reference, "--format", "{{json .Manifest.Digest}}"],
+        check=False, capture_output=True, text=True,
+    )
+    value = result.stdout.strip().strip('"')
+    if result.returncode or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+        fail(result.stderr.strip() or f"could not resolve {reference}")
+    return value
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--environment", default="production")
+    args = parser.parse_args()
+    try:
+        cfg, versions = load_environment(args.environment), load_versions()
+    except ConfigError as exc:
+        fail(exc)
+    registry = str(cfg["image_registry"]).rstrip("/")
+    if "REPLACE_ME" in registry:
+        fail("set image_registry before locking images")
+    release = versions["image_release"]
+    digests = {
+        "runner_digest": resolve(f"{registry}/{cfg['runner_image']}:{release}"),
+    }
+    path = ROOT / "environments" / f"{args.environment}.toml"
+    text = path.read_text()
+    for key, digest in digests.items():
+        text, count = re.subn(rf'(?m)^{key}\s*=\s*"[^"]*"$', f'{key} = "{digest}"', text)
+        if count != 1:
+            fail(f"could not update {key} in {path}")
+    path.write_text(text)
+    print(f"locked {len(digests)} images in {path}")
+
+
+if __name__ == "__main__":
+    main()

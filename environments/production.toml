@@ -1,0 +1,38 @@
+# Non-secret production configuration. Commit this file.
+hostname = "omnigent.example.com"
+acme_email = "admin@example.com"
+admin_email = "admin@example.com"
+
+# Change this to the public GHCR namespace used by this repository.
+image_registry = "ghcr.io/REPLACE_ME"
+runner_image = "omnigent-runner"
+
+# The custom runner digest is intentionally mandatory. `make lock-images
+# ENV=production` resolves its release tag after CI has published it. Upstream
+# server and PostgreSQL digests live in versions.yaml.
+runner_digest = "REPLACE_WITH_SHA256"
+
+server_cpu_request = "500m"
+server_memory_request = "1Gi"
+server_cpu_limit = "2"
+server_memory_limit = "2Gi"
+
+postgres_storage = "10Gi"
+artifact_storage = "10Gi"
+codex_storage = "1Gi"
+
+runner_cpu_request = "500m"
+runner_memory_request = "1Gi"
+runner_ephemeral_request = "2Gi"
+runner_cpu_limit = "2"
+runner_memory_limit = "4Gi"
+runner_ephemeral_limit = "8Gi"
+runner_home_limit = "8Gi"
+runner_pod_ready_timeout_seconds = 300
+runner_max_concurrency = 2
+
+# Deliberate policy choices.
+codex_bypass_approvals = true
+github_picker_enabled = false
+backups_enabled = false
+runner_network_policy = "unrestricted"

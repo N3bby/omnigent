@@ -1,0 +1,11 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Restart omnigent firewall
+  ansible.builtin.systemd_service:
+    name: omnigent-firewall.service
+    state: restarted
+    enabled: true
+

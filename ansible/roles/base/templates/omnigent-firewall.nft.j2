@@ -1,0 +1,17 @@
+table inet omnigent_filter {
+  chain public_input {
+    type filter hook input priority -10; policy accept;
+
+    iifname "{{ ansible_default_ipv4.interface }}" ct state established,related accept
+    iifname "{{ ansible_default_ipv4.interface }}" meta l4proto { icmp, ipv6-icmp } accept
+    iifname "{{ ansible_default_ipv4.interface }}" tcp dport { {{ ansible_port | default(omnigent_ssh_port) }}, 80, 443 } ct state new accept
+{% for cidr in k3s_api_private_cidrs %}
+{% if ':' in cidr %}
+    iifname "{{ ansible_default_ipv4.interface }}" ip6 saddr {{ cidr }} tcp dport 6443 ct state new accept
+{% else %}
+    iifname "{{ ansible_default_ipv4.interface }}" ip saddr {{ cidr }} tcp dport 6443 ct state new accept
+{% endif %}
+{% endfor %}
+    iifname "{{ ansible_default_ipv4.interface }}" ct state new drop
+  }
+}

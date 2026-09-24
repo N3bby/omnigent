@@ -1,0 +1,13 @@
+---
+- name: Provision and deploy Omnigent
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: 1
+  roles:
+    - preflight
+    - base
+    - k3s
+    - cert_manager
+    - omnigent
+

@@ -1,0 +1,26 @@
+name: Validate
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-venv shellcheck
+          curl -fsSLo kubectl https://dl.k8s.io/release/v1.36.4/bin/linux/amd64/kubectl
+          echo '8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a  kubectl' | sha256sum -c -
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl
+      - run: make bootstrap
+      - run: make test ENV=ci INVENTORY=ansible/inventory/production/hosts.yml
+      - name: Validate Kubernetes schemas
+        run: >-
+          docker run --rm -v "$PWD:/work:ro"
+          ghcr.io/yannh/kubeconform@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c
+          -strict -summary -ignore-missing-schemas /work/.generated/ci/manifest.yaml

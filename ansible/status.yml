@@ -1,0 +1,13 @@
+---
+- name: Report Omnigent status
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Run status checks
+      ansible.builtin.command: /usr/local/libexec/omnigent/status
+      register: omnigent_status
+      changed_when: false
+    - name: Show status
+      ansible.builtin.debug:
+        var: omnigent_status.stdout_lines

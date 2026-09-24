@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+hostname="$(k3s kubectl get ingress omnigent-public -n omnigent -o jsonpath='{.spec.rules[0].host}')"
+
+k3s kubectl wait pod \
+  -n omnigent \
+  -l app.kubernetes.io/name=omnigent,app.kubernetes.io/component=server \
+  --for=condition=Ready \
+  --timeout=300s >/dev/null
+
+k3s kubectl get endpoints omnigent -n omnigent -o json \
+  | jq -e '.subsets[]?.addresses | length > 0' >/dev/null
+
+k3s kubectl wait certificate/omnigent-tls \
+  -n omnigent --for=condition=Ready --timeout=300s >/dev/null
+
+curl --fail --silent --show-error \
+  --retry 20 --retry-delay 10 --retry-all-errors \
+  --connect-timeout 10 --max-time 20 \
+  "https://${hostname}/health" >/dev/null
+
+certificate_ready="$(k3s kubectl get certificate omnigent-tls -n omnigent -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')"
+[[ "$certificate_ready" == "True" ]] || {
+  echo "TLS Certificate is not Ready" >&2
+  exit 1
+}
+
+echo "smoke test passed: https://${hostname}/health"

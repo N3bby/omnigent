@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import shutil
+import subprocess
+import sys
+
+from config import ConfigError, ROOT, fail, validate
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--environment", default="production")
+    parser.add_argument("--inventory", default="ansible/inventory/production/hosts.yml")
+    args = parser.parse_args()
+    try:
+        validate(args.environment)
+    except ConfigError as exc:
+        fail(exc)
+    for path in ROOT.rglob("*"):
+        if any(part in {".git", ".generated", ".venv", "node_modules"} for part in path.parts) or not path.is_file():
+            continue
+        if path.suffix in {".sh", ".py"} or path.parent.name == "scripts":
+            if path.name != "config.py" and path.read_bytes().startswith(b"#!") and not (path.stat().st_mode & 0o111):
+                fail(f"script is not executable: {path.relative_to(ROOT)}")
+    subprocess.run([str(ROOT / "scripts" / "render"), "--environment", args.environment], check=True)
+    ansible = shutil.which("ansible-playbook")
+    local_ansible = ROOT / ".venv" / "bin" / "ansible-playbook"
+    if not ansible and local_ansible.is_file():
+        ansible = str(local_ansible)
+    if ansible:
+        subprocess.run([
+            ansible, "-i", args.inventory,
+            "ansible/site.yml", "--syntax-check", "-e", f"omnigent_environment={args.environment}",
+        ], cwd=ROOT, check=True)
+    else:
+        print("warning: ansible-playbook not installed; skipped syntax check", file=sys.stderr)
+    if shutil.which("shellcheck"):
+        scripts = [str(p) for p in (ROOT / "scripts").iterdir() if p.is_file() and p.read_bytes().startswith(b"#!/usr/bin/env bash")]
+        if scripts:
+            subprocess.run(["shellcheck", *scripts], check=True)
+    else:
+        print("warning: shellcheck not installed; skipped shell lint", file=sys.stderr)
+    print(f"configuration and manifests for {args.environment} are valid")
+
+
+if __name__ == "__main__":
+    main()

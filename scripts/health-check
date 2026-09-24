@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+failures=()
+
+ready_nodes="$(k3s kubectl get nodes -o json | jq '[.items[].status.conditions[] | select(.type == "Ready" and .status == "True")] | length')"
+(( ready_nodes > 0 )) || failures+=("no Ready Kubernetes node")
+
+available="$(k3s kubectl get deployment omnigent -n omnigent -o jsonpath='{.status.availableReplicas}' 2>/dev/null || true)"
+[[ "$available" == "1" ]] || failures+=("Omnigent has no available replica")
+
+db_ready="$(k3s kubectl get statefulset postgres -n omnigent -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)"
+[[ "$db_ready" == "1" ]] || failures+=("PostgreSQL is not ready")
+
+certificate="$(k3s kubectl get certificate omnigent-tls -n omnigent -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)"
+[[ "$certificate" == "True" ]] || failures+=("TLS certificate is not Ready")
+
+pending_pvcs="$(k3s kubectl get pvc -A -o json | jq '[.items[] | select(.status.phase != "Bound")] | length')"
+(( pending_pvcs == 0 )) || failures+=("${pending_pvcs} PVC(s) are not Bound")
+
+failed_jobs="$(k3s kubectl get jobs -n omnigent-sandboxes -o json | jq '[.items[] | select((.status.failed // 0) > 0)] | length')"
+(( failed_jobs == 0 )) || failures+=("${failed_jobs} runner Job(s) have failed")
+
+disk_percent="$(df --output=pcent /var/lib/rancher/k3s | tail -n 1 | tr -cd '0-9')"
+(( disk_percent < 85 )) || failures+=("k3s disk usage is ${disk_percent}%")
+
+oom_count="$(k3s kubectl get pods -A -o json | jq '[.items[].status.containerStatuses[]? | select(.lastState.terminated.reason == "OOMKilled")] | length')"
+(( oom_count == 0 )) || failures+=("${oom_count} container(s) show OOMKilled")
+
+if ((${#failures[@]})); then
+  printf 'Omnigent health check failed: %s\n' "$(IFS='; '; echo "${failures[*]}")" >&2
+  exit 1
+fi
+
+echo "Omnigent health check passed"
+

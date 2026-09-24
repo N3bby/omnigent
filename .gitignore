@@ -1,0 +1,6 @@
+.generated/
+.venv/
+*.retry
+__pycache__/
+.DS_Store
+

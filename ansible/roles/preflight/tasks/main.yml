@@ -1,0 +1,66 @@
+---
+- name: Load rendered deployment variables
+  ansible.builtin.include_vars:
+    file: "{{ omnigent_repo_root }}/.generated/{{ omnigent_environment }}/deployment-vars.yml"
+
+- name: Validate supported operating system
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_version is version('22.04', '>=')
+      - ansible_architecture in ['x86_64', 'aarch64']
+    fail_msg: "A supported Ubuntu 22.04+ x86_64/arm64 VM is required."
+
+- name: Validate host capacity
+  ansible.builtin.assert:
+    that:
+      - ansible_processor_vcpus | int >= minimum_vcpus | int
+      - ansible_memtotal_mb | int >= minimum_memory_mb | int
+      - (ansible_mounts | selectattr('mount', 'equalto', '/') | map(attribute='size_total') | first | int) >= (minimum_disk_gb | int * 1000 * 1000 * 1000)
+    fail_msg: >-
+      Host is smaller than {{ minimum_vcpus }} vCPU, {{ minimum_memory_mb }} MiB RAM,
+      or {{ minimum_disk_gb }} GB disk. Tune inventory only after reviewing runner concurrency.
+
+- name: Resolve the public hostname on the server
+  ansible.builtin.command:
+    argv: [getent, ahosts, "{{ omnigent_hostname }}"]
+  register: dns_result
+  changed_when: false
+  failed_when: dns_result.rc != 0 or dns_result.stdout | trim == ''
+
+- name: Verify DNS points at this VM
+  ansible.builtin.assert:
+    that: ansible_default_ipv4.address in dns_result.stdout
+    fail_msg: >-
+      {{ omnigent_hostname }} does not resolve to this VM's primary address
+      {{ ansible_default_ipv4.address }}.
+
+- name: Detect an existing Omnigent namespace
+  ansible.builtin.command:
+    argv:
+      - k3s
+      - kubectl
+      - get
+      - namespace
+      - omnigent
+      - -o
+      - jsonpath={.metadata.labels.app\.kubernetes\.io/managed-by}
+  register: existing_omnigent
+  changed_when: false
+  failed_when: false
+
+- name: Refuse to adopt a legacy installation
+  ansible.builtin.assert:
+    that: existing_omnigent.rc != 0 or existing_omnigent.stdout == 'omnigent-deployment'
+    fail_msg: >-
+      An existing unmanaged Omnigent namespace was found. This repository is
+      greenfield and will not adopt or overwrite the old installation; use a
+      clean VM/cluster.
+
+- name: Check required outbound HTTPS access
+  ansible.builtin.uri:
+    url: https://github.com/
+    method: HEAD
+    status_code: [200, 301, 302]
+    timeout: 15
+  changed_when: false

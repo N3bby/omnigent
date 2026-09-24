@@ -1,0 +1,59 @@
+---
+- name: Create k3s configuration directory
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Configure k3s explicitly
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart k3s
+
+- name: Download the pinned k3s installer
+  ansible.builtin.get_url:
+    url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version | urlencode }}/install.sh"
+    dest: /usr/local/src/k3s-install.sh
+    checksum: "sha256:{{ k3s_installer_sha256 }}"
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Read installed k3s version
+  ansible.builtin.command: k3s --version
+  register: installed_k3s
+  changed_when: false
+  failed_when: false
+
+- name: Install or upgrade the pinned k3s version
+  ansible.builtin.command: /usr/local/src/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: server
+  when: installed_k3s.rc != 0 or k3s_version not in installed_k3s.stdout
+  notify: Restart k3s
+
+- name: Flush k3s handlers before checking the cluster
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start k3s
+  ansible.builtin.systemd_service:
+    name: k3s
+    state: started
+    enabled: true
+
+- name: Wait for the Kubernetes API
+  ansible.builtin.command:
+    argv: [k3s, kubectl, wait, --for=condition=Ready, node, --all, --timeout=240s]
+  register: node_wait
+  changed_when: false
+  retries: 3
+  delay: 10
+  until: node_wait.rc == 0
+

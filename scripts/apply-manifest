@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+manifest="${1:?usage: apply-manifest MANIFEST}"
+[[ -r "$manifest" ]] || { echo "cannot read $manifest" >&2; exit 1; }
+
+set +e
+k3s kubectl diff \
+  --server-side=true \
+  --field-manager=omnigent-deployment \
+  -f "$manifest" >/dev/null
+diff_status=$?
+set -e
+if [[ "$diff_status" -eq 0 ]]; then
+  echo "OMNIGENT_DIFF=unchanged"
+fi
+if [[ "$diff_status" -ne 1 ]]; then
+  if [[ "$diff_status" -ne 0 ]]; then
+    echo "could not calculate desired-state diff" >&2
+    exit "$diff_status"
+  fi
+else
+  echo "OMNIGENT_DIFF=changed"
+fi
+
+# Apply even after an empty diff so --prune can remove objects no longer present.
+k3s kubectl apply \
+  --server-side=true \
+  --field-manager=omnigent-deployment \
+  --prune \
+  -l app.kubernetes.io/managed-by=omnigent-deployment \
+  --prune-allowlist=core/v1/ConfigMap \
+  --prune-allowlist=core/v1/LimitRange \
+  --prune-allowlist=core/v1/Namespace \
+  --prune-allowlist=core/v1/PersistentVolumeClaim \
+  --prune-allowlist=core/v1/ResourceQuota \
+  --prune-allowlist=core/v1/Service \
+  --prune-allowlist=core/v1/ServiceAccount \
+  --prune-allowlist=apps/v1/Deployment \
+  --prune-allowlist=apps/v1/StatefulSet \
+  --prune-allowlist=networking.k8s.io/v1/Ingress \
+  --prune-allowlist=rbac.authorization.k8s.io/v1/Role \
+  --prune-allowlist=rbac.authorization.k8s.io/v1/RoleBinding \
+  --prune-allowlist=cert-manager.io/v1/ClusterIssuer \
+  --prune-allowlist=traefik.io/v1alpha1/Middleware \
+  -f "$manifest"

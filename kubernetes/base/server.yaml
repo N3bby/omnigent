@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: omnigent-server
+  namespace: omnigent
+automountServiceAccountToken: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omnigent
+  namespace: omnigent
+  labels:
+    app.kubernetes.io/name: omnigent
+    app.kubernetes.io/component: server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent
+        app.kubernetes.io/component: server
+      annotations:
+        omnigent.dev/secret-checksum: pending
+    spec:
+      serviceAccountName: omnigent-server
+      automountServiceAccountToken: true
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: omnigent
+          image: ghcr.io/omnigent-ai/omnigent-server-kubernetes:v0.15.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: OMNIGENT_CONFIG
+              value: /etc/omnigent/config.yaml
+          envFrom:
+            - configMapRef:
+                name: omnigent-config
+            - secretRef:
+                name: omnigent-secrets
+          volumeMounts:
+            - name: artifacts
+              mountPath: /data/artifacts
+            - name: sandbox-config
+              mountPath: /etc/omnigent
+              readOnly: true
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: omnigent-artifacts
+        - name: sandbox-config
+          configMap:
+            name: omnigent-sandbox-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnigent
+  namespace: omnigent
+  labels:
+    app.kubernetes.io/name: omnigent
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: omnigent
+    app.kubernetes.io/component: server
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+

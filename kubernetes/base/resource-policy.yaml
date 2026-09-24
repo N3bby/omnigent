@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: runner-defaults
+  namespace: omnigent-sandboxes
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+        ephemeral-storage: 256Mi
+      default:
+        cpu: "2"
+        memory: 4Gi
+        ephemeral-storage: 8Gi
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: runner-capacity
+  namespace: omnigent-sandboxes
+spec:
+  hard:
+    # Finished Jobs remain for diagnostics, so object count is not concurrency.
+    count/jobs.batch: "100"
+    count/pods: "102"
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    requests.ephemeral-storage: 16Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    limits.ephemeral-storage: 32Gi

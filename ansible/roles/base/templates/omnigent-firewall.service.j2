@@ -1,0 +1,17 @@
+[Unit]
+Description=Omnigent public-interface firewall
+After=network-online.target
+Wants=network-online.target
+Before=k3s.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=-/usr/sbin/nft delete table inet omnigent_filter
+ExecStart=/usr/sbin/nft -f /etc/omnigent-firewall.nft
+ExecReload=/bin/sh -c '/usr/sbin/nft delete table inet omnigent_filter 2>/dev/null || true; /usr/sbin/nft -f /etc/omnigent-firewall.nft'
+ExecStop=-/usr/sbin/nft delete table inet omnigent_filter
+
+[Install]
+WantedBy=multi-user.target
+

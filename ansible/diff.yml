@@ -1,0 +1,35 @@
+---
+- name: Diff Omnigent desired state
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    rendered_manifest: "{{ playbook_dir | dirname }}/.generated/{{ omnigent_environment }}/manifest.yaml"
+  tasks:
+    - name: Ensure a manifest has been rendered locally
+      ansible.builtin.assert:
+        that: rendered_manifest is file
+        fail_msg: "Run make render ENV={{ omnigent_environment }} first."
+      delegate_to: localhost
+      become: false
+    - name: Copy manifest for a dry-run diff
+      ansible.builtin.copy:
+        src: "{{ rendered_manifest }}"
+        dest: /tmp/omnigent-manifest.yaml
+        owner: root
+        group: root
+        mode: "0600"
+    - name: Show server-side diff
+      ansible.builtin.command:
+        argv: [k3s, kubectl, diff, --server-side=true, --field-manager=omnigent-deployment, -f, /tmp/omnigent-manifest.yaml]
+      register: manifest_diff
+      changed_when: manifest_diff.rc == 1
+      failed_when: manifest_diff.rc not in [0, 1]
+    - name: Print manifest diff
+      ansible.builtin.debug:
+        var: manifest_diff.stdout_lines
+    - name: Remove temporary manifest
+      ansible.builtin.file:
+        path: /tmp/omnigent-manifest.yaml
+        state: absent
+      changed_when: false

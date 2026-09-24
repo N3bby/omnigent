@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+namespace=omnigent-sandboxes
+pod=codex-login
+image="$(k3s kubectl get configmap -n omnigent -l app.kubernetes.io/managed-by=omnigent-deployment -o json \
+  | jq -r '.items[] | select(.metadata.name | startswith("omnigent-sandbox-config-")) | .data["config.yaml"]' \
+  | awk '/^[[:space:]]*image:/ {print $2; exit}')"
+[[ -n "$image" ]] || { echo "could not determine runner image" >&2; exit 1; }
+
+cleanup() {
+  k3s kubectl delete pod "$pod" -n "$namespace" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+cleanup
+
+sed "s|RUNNER_IMAGE|${image}|" <<'EOF' | k3s kubectl apply -f - >/dev/null
+apiVersion: v1
+kind: Pod
+metadata:
+  name: codex-login
+  namespace: omnigent-sandboxes
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
+    seccompProfile: {type: RuntimeDefault}
+  containers:
+    - name: codex
+      image: RUNNER_IMAGE
+      command: [sh, -lc, 'mkdir -p "$CODEX_HOME"; printf "%s\n" "cli_auth_credentials_store = \"file\"" "forced_login_method = \"chatgpt\"" > "$CODEX_HOME/config.toml"; exec sleep infinity']
+      env:
+        - {name: HOME, value: /home/omnigent}
+        - {name: CODEX_HOME, value: /mnt/codex-home}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: {drop: [ALL]}
+      resources:
+        requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 128Mi}
+        limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 1Gi}
+      volumeMounts:
+        - {name: codex-home, mountPath: /mnt/codex-home}
+  volumes:
+    - name: codex-home
+      persistentVolumeClaim: {claimName: codex-home}
+EOF
+
+k3s kubectl wait -n "$namespace" --for=condition=Ready "pod/${pod}" --timeout=240s >/dev/null
+echo "Complete the device flow shown below."
+k3s kubectl exec -it -n "$namespace" "$pod" -- codex login --device-auth
+k3s kubectl exec -n "$namespace" "$pod" -- codex login status
+echo "Codex login is stored on the codex-home PVC."
+

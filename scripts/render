@@ -1,0 +1,412 @@
+#!/usr/bin/env python3
+"""Render the tracked Kustomize desired state without ever materializing Secrets."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import subprocess
+import uuid
+from pathlib import Path
+
+from config import ConfigError, ROOT, fail, validate
+
+
+def yaml_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def cpu_milli(value: object) -> int:
+    text = str(value)
+    return int(text[:-1]) if text.endswith("m") else int(text) * 1000
+
+
+def binary_mi(value: object) -> int:
+    text = str(value)
+    if text.endswith("Gi"):
+        return int(text[:-2]) * 1024
+    if text.endswith("Mi"):
+        return int(text[:-2])
+    raise ConfigError(f"expected a Mi or Gi quantity, got {text!r}")
+
+
+def as_cpu(value: int) -> str:
+    return str(value // 1000) if value % 1000 == 0 else f"{value}m"
+
+
+def as_mi(value: int) -> str:
+    return f"{value // 1024}Gi" if value % 1024 == 0 else f"{value}Mi"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--environment", default="production")
+    parser.add_argument("--prepare-only", action="store_true")
+    args = parser.parse_args()
+    try:
+        cfg, versions = validate(args.environment)
+    except ConfigError as exc:
+        fail(exc)
+
+    generated = ROOT / ".generated" / args.environment
+    generated.mkdir(parents=True, exist_ok=True)
+    for old in generated.iterdir():
+        if old.is_file():
+            old.unlink()
+
+    registry = str(cfg["image_registry"]).rstrip("/")
+    runner_ref = f"{registry}/{cfg['runner_image']}@{cfg['runner_digest']}"
+    server_name = "ghcr.io/omnigent-ai/omnigent-server-kubernetes"
+    server_digest = versions["omnigent_server_base_digest"]
+    bypass = "1" if cfg["codex_bypass_approvals"] else "0"
+    revision_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=False, capture_output=True, text=True
+    )
+    deployment_revision = revision_result.stdout.strip() if revision_result.returncode == 0 else "uncommitted"
+    if deployment_revision != "uncommitted":
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=ROOT, check=False, capture_output=True, text=True,
+        )
+        if dirty.stdout.strip():
+            deployment_revision += "-dirty"
+    concurrency = int(cfg["runner_max_concurrency"])
+    quota = {
+        "request_cpu": as_cpu(cpu_milli(cfg["runner_cpu_request"]) * concurrency + 500),
+        "request_memory": as_mi(binary_mi(cfg["runner_memory_request"]) * concurrency + 512),
+        "request_storage": as_mi(binary_mi(cfg["runner_ephemeral_request"]) * concurrency + 1024),
+        "limit_cpu": as_cpu(cpu_milli(cfg["runner_cpu_limit"]) * concurrency + 1000),
+        "limit_memory": as_mi(binary_mi(cfg["runner_memory_limit"]) * concurrency + 1024),
+        "limit_storage": as_mi(binary_mi(cfg["runner_ephemeral_limit"]) * concurrency + 1024),
+    }
+
+    (generated / "omnigent-config.env").write_text(
+        "\n".join([
+            "HOST=0.0.0.0",
+            "PORT=8000",
+            "ARTIFACT_DIR=/data/artifacts",
+            "OMNIGENT_FEATURES=",
+            "OMNIGENT_ADMIN_CREDENTIALS_PATH=/data/admin-credentials",
+            "OMNIGENT_AUTH_ENABLED=1",
+            "OMNIGENT_AUTH_PROVIDER=accounts",
+            "OMNIGENT_ACCOUNTS_AUTO_OPEN=0",
+            f"OMNIGENT_ACCOUNTS_BASE_URL=https://{cfg['hostname']}",
+            "CODEX_HOME=/mnt/codex-home",
+            f"OMNIGENT_CODEX_BYPASS_APPROVALS={bypass}",
+            f"OMNIGENT_DEPLOYMENT_REVISION={deployment_revision}",
+            "",
+        ])
+    )
+    (generated / "sandbox-config.yaml").write_text(
+        "\n".join([
+            "admins:",
+            f"  - {yaml_string(str(cfg['admin_email']))}",
+            "providers:",
+            "  claude-subscription:",
+            "    kind: subscription",
+            "    cli: claude",
+            "    default: true",
+            "  codex-subscription:",
+            "    kind: subscription",
+            "    cli: codex",
+            "    default: true",
+            "sandbox:",
+            "  provider: kubernetes",
+            "  server_url: http://omnigent.omnigent.svc.cluster.local",
+            "  host_config:",
+            "    providers:",
+            "      claude-subscription:",
+            "        kind: subscription",
+            "        cli: claude",
+            "        default: true",
+            "      codex-subscription:",
+            "        kind: subscription",
+            "        cli: codex",
+            "        default: true",
+            "  kubernetes:",
+            "    namespace: omnigent-sandboxes",
+            "    secret_name: omnigent-creds",
+            "    service_account: omnigent-runner",
+            f"    image: {runner_ref}",
+            "    in_cluster: true",
+            f"    pod_ready_timeout_s: {cfg['runner_pod_ready_timeout_seconds']}",
+            "    env:",
+            "      - CODEX_HOME",
+            "      - OMNIGENT_CODEX_BYPASS_APPROVALS",
+            "    resources:",
+            "      requests:",
+            f"        cpu: {yaml_string(str(cfg['runner_cpu_request']))}",
+            f"        memory: {yaml_string(str(cfg['runner_memory_request']))}",
+            f"        ephemeral-storage: {yaml_string(str(cfg['runner_ephemeral_request']))}",
+            "      limits:",
+            f"        cpu: {yaml_string(str(cfg['runner_cpu_limit']))}",
+            f"        memory: {yaml_string(str(cfg['runner_memory_limit']))}",
+            f"        ephemeral-storage: {yaml_string(str(cfg['runner_ephemeral_limit']))}",
+            f"    home_size_limit: {cfg['runner_home_limit']}",
+            "    pvc_mounts:",
+            "      - claim_name: codex-home",
+            "        mount_path: /mnt/codex-home",
+            "        read_only: false",
+            "",
+        ])
+    )
+    dynamic = f"""---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: {yaml_string(str(cfg['acme_email']))}
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: omnigent-deployment-record
+  namespace: omnigent
+data:
+  deployment-revision: {yaml_string(deployment_revision)}
+  upstream-omnigent-revision: {yaml_string(versions['omnigent_commit'])}
+  server-image: {yaml_string(server_name + '@' + server_digest)}
+  runner-image: {yaml_string(runner_ref)}
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: omnigent-security
+  namespace: omnigent
+spec:
+  headers:
+    stsSeconds: 31536000
+    stsIncludeSubdomains: true
+    stsPreload: true
+    contentTypeNosniff: true
+    frameDeny: true
+    referrerPolicy: no-referrer
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: omnigent-https-redirect
+  namespace: omnigent
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: omnigent-public
+  namespace: omnigent
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.middlewares: omnigent-omnigent-security@kubernetescrd
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [{yaml_string(str(cfg['hostname']))}]
+      secretName: omnigent-tls
+  rules:
+    - host: {yaml_string(str(cfg['hostname']))}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: omnigent
+                port:
+                  name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: omnigent-http-redirect
+  namespace: omnigent
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: omnigent-omnigent-https-redirect@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: {yaml_string(str(cfg['hostname']))}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: omnigent
+                port:
+                  name: http
+"""
+    (generated / "dynamic.yaml").write_text(dynamic)
+    deployment_vars = f"""---
+omnigent_hostname: {yaml_string(str(cfg['hostname']))}
+omnigent_acme_email: {yaml_string(str(cfg['acme_email']))}
+k3s_version: {yaml_string(versions['k3s'])}
+k3s_installer_sha256: {yaml_string(versions['k3s_installer_sha256'])}
+cert_manager_version: {yaml_string(versions['cert_manager'])}
+cert_manager_manifest_sha256: {yaml_string(versions['cert_manager_manifest_sha256'])}
+omnigent_git_revision: {yaml_string(versions['omnigent_commit'])}
+"""
+    (generated / "deployment-vars.yml").write_text(deployment_vars)
+    kustomization = f"""apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../kubernetes/base
+  - dynamic.yaml
+configMapGenerator:
+  - name: omnigent-config
+    namespace: omnigent
+    envs: [omnigent-config.env]
+  - name: omnigent-sandbox-config
+    namespace: omnigent
+    files: [config.yaml=sandbox-config.yaml]
+generatorOptions:
+  disableNameSuffixHash: false
+  labels:
+    app.kubernetes.io/managed-by: omnigent-deployment
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: omnigent
+      app.kubernetes.io/managed-by: omnigent-deployment
+    includeSelectors: false
+images:
+  - name: ghcr.io/omnigent-ai/omnigent-server-kubernetes
+    newName: {server_name}
+    digest: {server_digest}
+  - name: postgres
+    newName: postgres
+    digest: {versions['postgres_digest']}
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: omnigent
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: {yaml_string(str(cfg['server_cpu_request']))}
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: {yaml_string(str(cfg['server_memory_request']))}
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: {yaml_string(str(cfg['server_cpu_limit']))}
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: {yaml_string(str(cfg['server_memory_limit']))}
+  - target:
+      version: v1
+      kind: PersistentVolumeClaim
+      name: omnigent-artifacts
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: {yaml_string(str(cfg['artifact_storage']))}
+  - target:
+      version: v1
+      kind: PersistentVolumeClaim
+      name: codex-home
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: {yaml_string(str(cfg['codex_storage']))}
+  - target:
+      group: apps
+      version: v1
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: {yaml_string(str(cfg['postgres_storage']))}
+  - target:
+      version: v1
+      kind: ResourceQuota
+      name: runner-capacity
+    patch: |-
+      - op: replace
+        path: /spec/hard/requests.cpu
+        value: {yaml_string(quota['request_cpu'])}
+      - op: replace
+        path: /spec/hard/requests.memory
+        value: {yaml_string(quota['request_memory'])}
+      - op: replace
+        path: /spec/hard/requests.ephemeral-storage
+        value: {yaml_string(quota['request_storage'])}
+      - op: replace
+        path: /spec/hard/limits.cpu
+        value: {yaml_string(quota['limit_cpu'])}
+      - op: replace
+        path: /spec/hard/limits.memory
+        value: {yaml_string(quota['limit_memory'])}
+      - op: replace
+        path: /spec/hard/limits.ephemeral-storage
+        value: {yaml_string(quota['limit_storage'])}
+"""
+    (generated / "kustomization.yaml").write_text(kustomization)
+    if args.prepare_only:
+        print(generated)
+        return
+
+    manifest = generated / "manifest.yaml"
+    command: list[str]
+    if shutil.which("kubectl"):
+        command = ["kubectl", "kustomize", "--load-restrictor", "LoadRestrictionsNone", str(generated)]
+    elif shutil.which("kustomize"):
+        command = ["kustomize", "build", "--load-restrictor", "LoadRestrictionsNone", str(generated)]
+    elif shutil.which("docker"):
+        container = f"omnigent-render-{uuid.uuid4().hex[:12]}"
+        image = f"registry.k8s.io/kubectl:{versions['k3s'].split('+', 1)[0]}"
+        create = subprocess.run([
+            "docker", "create", "--name", container, "-w", "/work", image,
+            "kustomize", "--load-restrictor", "LoadRestrictionsNone",
+            f".generated/{args.environment}",
+        ], check=False, capture_output=True, text=True)
+        if create.returncode:
+            fail(create.stderr.strip() or "could not create render container")
+        try:
+            for source, destination in (
+                (ROOT / "kubernetes", f"{container}:/work/kubernetes"),
+                (ROOT / ".generated", f"{container}:/work/.generated"),
+            ):
+                copied = subprocess.run(
+                    ["docker", "cp", str(source), destination],
+                    check=False, capture_output=True, text=True,
+                )
+                if copied.returncode:
+                    fail(copied.stderr.strip() or f"could not copy {source} into render container")
+            result = subprocess.run(
+                ["docker", "start", "--attach", container],
+                check=False, capture_output=True, text=True,
+            )
+        finally:
+            subprocess.run(["docker", "rm", "--force", container], capture_output=True)
+        command = []
+    else:
+        fail("kubectl, kustomize, or Docker is required to render manifests")
+    if command:
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode:
+        fail(result.stderr.strip() or "kustomize rendering failed")
+    if "kind: Secret" in result.stdout:
+        fail("rendered desired state unexpectedly contains a Secret")
+    manifest.write_text(result.stdout)
+    print(manifest)
+
+
+if __name__ == "__main__":
+    main()

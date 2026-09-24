@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+read -rsp "Private Git HTTPS token (blank cancels): " token
+echo
+[[ -n "$token" ]] || exit 0
+patch="$(jq -nc --arg value "$token" '{stringData:{GIT_TOKEN:$value}}')"
+k3s kubectl patch secret omnigent-creds -n omnigent-sandboxes --type=merge -p "$patch" >/dev/null
+unset token patch
+echo "Git token stored. New runner Jobs will receive it."
+

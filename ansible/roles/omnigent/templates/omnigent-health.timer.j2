@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the Omnigent health check periodically
+
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=5m
+RandomizedDelaySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+

@@ -1,0 +1,123 @@
+---
+- name: Ensure rendered manifest exists on the controller
+  ansible.builtin.assert:
+    that: "(omnigent_repo_root + '/.generated/' + omnigent_environment + '/manifest.yaml') is file"
+    fail_msg: "Run make render ENV={{ omnigent_environment }} first."
+  delegate_to: localhost
+  become: false
+
+- name: Create helper directory
+  ansible.builtin.file:
+    path: /usr/local/libexec/omnigent
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install operational helpers
+  ansible.builtin.copy:
+    src: "{{ omnigent_repo_root }}/scripts/{{ item }}"
+    dest: "/usr/local/libexec/omnigent/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - ensure-secrets
+    - apply-manifest
+    - credential-status
+    - health-check
+    - smoke-test
+    - status
+    - setup-codex
+    - setup-claude
+    - setup-git-token
+
+- name: Install health-check systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - omnigent-health.service
+    - omnigent-health.timer
+
+- name: Enable periodic health checks
+  ansible.builtin.systemd_service:
+    name: omnigent-health.timer
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Copy rendered desired state
+  ansible.builtin.copy:
+    src: "{{ omnigent_repo_root }}/.generated/{{ omnigent_environment }}/manifest.yaml"
+    dest: "{{ omnigent_remote_root }}/manifest.yaml"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Ensure namespaces exist before generating in-cluster Secrets
+  ansible.builtin.command: >-
+    k3s kubectl create namespace {{ item }} --dry-run=client -o yaml
+  loop: [omnigent, omnigent-sandboxes]
+  register: namespace_yaml
+  changed_when: false
+
+- name: Apply prerequisite namespaces
+  ansible.builtin.shell: |
+    set -o pipefail
+    printf '%s\n' {{ item.stdout | quote }} | k3s kubectl apply -f -
+  args:
+    executable: /bin/bash
+  loop: "{{ namespace_yaml.results }}"
+  register: namespace_apply
+  changed_when: "'created' in namespace_apply.stdout"
+
+- name: Create internal Secrets only when absent
+  ansible.builtin.command: /usr/local/libexec/omnigent/ensure-secrets
+  register: secret_checksum
+  changed_when: "'created' in secret_checksum.stderr"
+  no_log: true
+
+- name: Reconcile desired state and prune removed managed objects
+  ansible.builtin.command:
+    argv:
+      - /usr/local/libexec/omnigent/apply-manifest
+      - "{{ omnigent_remote_root }}/manifest.yaml"
+  register: manifest_apply
+  changed_when: "'OMNIGENT_DIFF=changed' in manifest_apply.stdout or 'pruned' in manifest_apply.stdout"
+
+- name: Trigger rollouts when Secret content changes
+  ansible.builtin.command:
+    argv:
+      - k3s
+      - kubectl
+      - patch
+      - "{{ item }}"
+      - -n
+      - omnigent
+      - --type=merge
+      - -p
+      - "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"omnigent.dev/secret-checksum\":\"{{ secret_checksum.stdout | trim }}\"}}}}}"
+  loop:
+    - deployment/omnigent
+    - statefulset/postgres
+  register: checksum_patch
+  changed_when: "'not patched' not in checksum_patch.stdout"
+  no_log: true
+
+- name: Wait for PostgreSQL
+  ansible.builtin.command:
+    argv: [k3s, kubectl, rollout, status, statefulset/postgres, -n, omnigent, --timeout=300s]
+  changed_when: false
+
+- name: Wait for Omnigent
+  ansible.builtin.command:
+    argv: [k3s, kubectl, rollout, status, deployment/omnigent, -n, omnigent, --timeout=600s]
+  changed_when: false
+
+- name: Run deployment smoke tests
+  ansible.builtin.command: /usr/local/libexec/omnigent/smoke-test
+  changed_when: false
