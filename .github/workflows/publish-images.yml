@@ -17,6 +17,10 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Normalize GHCR image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/omnigent-runner" >> "$GITHUB_OUTPUT"
       - name: Read locked build versions
         id: versions
         shell: bash
@@ -31,7 +35,7 @@ jobs:
           context: images/runner
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/omnigent-runner:${{ steps.versions.outputs.release }}
+          tags: ${{ steps.image.outputs.name }}:${{ steps.versions.outputs.release }}
           build-args: |
             OMNIGENT_HOST_IMAGE=ghcr.io/omnigent-ai/omnigent-host@${{ steps.versions.outputs.host_digest }}
           provenance: mode=max
@@ -39,7 +43,7 @@ jobs:
       - name: Scan the published digest
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository_owner }}/omnigent-runner@${{ steps.build.outputs.digest }}
+          image-ref: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
           format: table
           severity: CRITICAL,HIGH
           exit-code: "1"
