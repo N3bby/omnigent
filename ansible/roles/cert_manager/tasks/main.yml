@@ -18,7 +18,7 @@
 
 - name: Apply cert-manager
   ansible.builtin.command:
-    argv: [k3s, kubectl, apply, --server-side=true, --field-manager=omnigent-deployment, -f, "{{ omnigent_remote_root }}/cert-manager.yaml"]
+    argv: [k3s, kubectl, apply, --server-side=true, --force-conflicts, --field-manager=omnigent-deployment, -f, "{{ omnigent_remote_root }}/cert-manager.yaml"]
   register: cert_manager_apply
   changed_when: "'serverside-applied' in cert_manager_apply.stdout"
 
@@ -26,4 +26,3 @@
   ansible.builtin.command:
     argv: [k3s, kubectl, rollout, status, deployment, --all, -n, cert-manager, --timeout=300s]
   changed_when: false
-
