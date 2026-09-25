@@ -96,6 +96,7 @@ def main() -> None:
             "CODEX_HOME=/mnt/codex-home",
             f"OMNIGENT_CODEX_BYPASS_APPROVALS={bypass}",
             f"OMNIGENT_CLAUDE_BYPASS_PERMISSIONS={claude_bypass}",
+            "OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH=/data/artifacts/.deployment/sandbox-model-catalogs.json",
             f"OMNIGENT_DEPLOYMENT_REVISION={deployment_revision}",
             "",
         ])
