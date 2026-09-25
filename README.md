@@ -8,9 +8,11 @@ The production topology is k3s with Traefik, cert-manager, one Omnigent server,
 PostgreSQL, a local Vault credential-encryption service, and ephemeral
 Kubernetes runner Jobs. The runners deliberately have
 unrestricted ingress and egress. Images are built in GitHub Actions, published
-to public GHCR and deployed by digest. The server image only adds the pinned
-Vault client library to the pinned upstream image. Production deployment is
-manual.
+to public GHCR and deployed by digest. The server image adds the pinned Vault
+client library to the pinned upstream image and applies the small upstream
+patches in `images/server/patches/` (the build and `mise run test` fail if one no
+longer applies to `omnigent_commit`; delete a patch once upstream ships the fix).
+Production deployment is manual.
 
 ## One-time prerequisites
 

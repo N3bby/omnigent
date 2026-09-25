@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import py_compile
+import re
 import subprocess
 import sys
+import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,6 +86,28 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotIn("make bootstrap", workflow)
         preflight = (ROOT / "ansible" / "roles" / "preflight" / "tasks" / "main.yml").read_text()
         self.assertIn("ansible_architecture == 'x86_64'", preflight)
+
+    def test_server_patches_apply_to_pinned_upstream(self) -> None:
+        patches = sorted((ROOT / "images" / "server" / "patches").glob("*.patch"))
+        self.assertTrue(patches)
+        dockerfile = (ROOT / "images" / "server" / "Dockerfile").read_text()
+        self.assertIn("COPY patches/", dockerfile)
+        self.assertIn("--fuzz=0", dockerfile)
+        commit = load_versions()["omnigent_commit"]
+        with tempfile.TemporaryDirectory() as tmp:
+            for patch in patches:
+                touched = set(re.findall(r"^--- a/(\S+)$", patch.read_text(), re.MULTILINE))
+                for path in touched:
+                    target = Path(tmp) / path
+                    if target.exists():
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    url = f"https://raw.githubusercontent.com/omnigent-ai/omnigent/{commit}/{path}"
+                    with urllib.request.urlopen(url, timeout=30) as response:
+                        target.write_bytes(response.read())
+                subprocess.run(["git", "apply", str(patch)], cwd=tmp, check=True)
+            for source in Path(tmp).rglob("*.py"):
+                py_compile.compile(str(source), doraise=True)
 
 
 if __name__ == "__main__":

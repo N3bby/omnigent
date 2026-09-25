@@ -1,0 +1,194 @@
+Serve the last live model catalog as the managed-sandbox new-session preview.
+
+Subscription CLI logins have no server-side model listing, so the Kubernetes
+sandbox picker shows "Models unavailable" until a session is running. Record the
+catalog each runner reports per harness in OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH
+and return it from /v1/sandbox-providers/{p}/harnesses/{h}/model-options.
+Inert unless that variable is set. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/server/managed_hosts.py b/omnigent/server/managed_hosts.py
+index c3f61fe70..fce1e0cd4 100644
+--- a/omnigent/server/managed_hosts.py
++++ b/omnigent/server/managed_hosts.py
+@@ -798,8 +798,11 @@ class ManagedSandboxDeployment:
+                 launcher = config.launcher_factory()
+                 caps[config.provider] = {"multi_repo": launcher.capabilities.multi_repo}
+                 from omnigent.inference_config import parse_inference_config
++                from omnigent.server import sandbox_catalog_fallback
+ 
+-                if parse_inference_config(config.host_config or {}):
++                if parse_inference_config(config.host_config or {}) or (
++                    sandbox_catalog_fallback.enabled()
++                ):
+                     caps[config.provider]["inference_models"] = True
+         return caps
+ 
+diff --git a/omnigent/server/routes/_sessions/helpers.py b/omnigent/server/routes/_sessions/helpers.py
+index d57affe41..97c400634 100644
+--- a/omnigent/server/routes/_sessions/helpers.py
++++ b/omnigent/server/routes/_sessions/helpers.py
+@@ -11011,6 +11011,7 @@ async def _load_model_options(
+     session_id: str,
+     path: str,
+     fallback_path: str | None = None,
++    wrapper: str | None = None,
+ ) -> None:
+     """
+     Background single-flight fetch of a session's native model catalog.
+@@ -11023,6 +11024,8 @@ async def _load_model_options(
+         *path* 404s (an older runner without the unified route), e.g.
+         ``"/v1/sessions/conv_abc/cursor-model-options"``. ``None`` disables
+         the fallback.
++    :param wrapper: The session's wrapper label; when given, the catalog is
++        also recorded as that harness's managed-sandbox preview.
+     """
+     # Read the retry schedule off the facade so tests patching
+     # ``sessions._MODEL_OPTIONS_RETRY_DELAYS_S`` reach this impl.
+@@ -11072,6 +11075,10 @@ async def _load_model_options(
+         _model_options_cache[session_id] = options
+         _model_options_stale.discard(session_id)
+         _publish_model_options(session_id)
++        if wrapper is not None:
++            from omnigent.server import sandbox_catalog_fallback
++
++            await asyncio.to_thread(sandbox_catalog_fallback.record, wrapper, options)
+         return
+ 
+ 
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index 35185d00d..863e95f58 100644
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -10401,6 +10401,7 @@ async def _fetch_model_options(
+                 session_id,
+                 f"/v1/sessions/{session_id}/model-options",
+                 fallback_path=f"/v1/sessions/{session_id}/{endpoint}",
++                wrapper=wrapper,
+             )
+         )
+         _model_options_inflight[session_id] = task
+diff --git a/omnigent/server/routes/sandbox_inference.py b/omnigent/server/routes/sandbox_inference.py
+index a4f9b8844..d3bf7ff4f 100644
+--- a/omnigent/server/routes/sandbox_inference.py
++++ b/omnigent/server/routes/sandbox_inference.py
+@@ -203,6 +203,20 @@ def create_sandbox_inference_router(
+                 if isinstance(exc, OmnigentError)
+                 else "Invalid inference configuration",
+             }
++        from omnigent.server import sandbox_catalog_fallback
++
++        fallback = sandbox_catalog_fallback.lookup(harness)
++        if fallback:
++            # No revision: session create must not treat this preview as a
++            # bound inference snapshot.
++            return {
++                "configured": True,
++                "models": fallback,
++                "configuration_revision": None,
++                "provider_label": None,
++                "default_model": None,
++                "status": "ready",
++            }
+         return {
+             "configured": False,
+             "models": [],
+diff --git a/omnigent/server/sandbox_catalog_fallback.py b/omnigent/server/sandbox_catalog_fallback.py
+new file mode 100644
+index 000000000..8b25bb1c6
+--- /dev/null
++++ b/omnigent/server/sandbox_catalog_fallback.py
+@@ -0,0 +1,94 @@
++"""Last live native model catalog per harness, reused as a managed-sandbox preview.
++
++Subscription CLI logins expose no server-side model listing, so a managed
++sandbox's new-session picker has nothing to show until a runner probes the
++harness. When ``OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH`` names a writable JSON
++file, the catalog a runner last reported for a harness is kept there and served
++as that preview. Launch still validates the pick inside the sandbox.
++"""
++
++from __future__ import annotations
++
++import json
++import logging
++import os
++import tempfile
++import threading
++from pathlib import Path
++from typing import Any
++
++from omnigent.inference_config import normalize_inference_harness
++from omnigent.native.native_coding_agents import native_coding_agent_for_wrapper_label
++
++PATH_ENV_VAR = "OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH"
++
++_logger = logging.getLogger(__name__)
++_lock = threading.Lock()
++_catalogs: dict[str, list[dict[str, Any]]] | None = None
++
++
++def _path() -> Path | None:
++    raw = os.environ.get(PATH_ENV_VAR, "").strip()
++    return Path(raw) if raw else None
++
++
++def enabled() -> bool:
++    return _path() is not None
++
++
++def _loaded(path: Path) -> dict[str, list[dict[str, Any]]]:
++    global _catalogs
++    if _catalogs is None:
++        try:
++            raw = json.loads(path.read_text(encoding="utf-8"))
++        except FileNotFoundError:
++            raw = {}
++        except (OSError, ValueError):
++            _logger.warning("Ignoring unreadable sandbox model catalogs at %s", path, exc_info=True)
++            raw = {}
++        _catalogs = {
++            str(harness): [row for row in rows if isinstance(row, dict)]
++            for harness, rows in (raw.items() if isinstance(raw, dict) else ())
++            if isinstance(rows, list)
++        }
++    return _catalogs
++
++
++def _write(path: Path, catalogs: dict[str, list[dict[str, Any]]]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as handle:
++            json.dump(catalogs, handle)
++        os.replace(tmp, path)
++    except BaseException:
++        Path(tmp).unlink(missing_ok=True)
++        raise
++
++
++def record(wrapper: str | None, options: list[dict[str, Any]]) -> None:
++    """Remember a runner-reported catalog for the session wrapper's harness."""
++    path = _path()
++    agent = native_coding_agent_for_wrapper_label(wrapper)
++    if path is None or agent is None or not options:
++        return
++    harness = normalize_inference_harness(agent.harness)
++    with _lock:
++        catalogs = _loaded(path)
++        if catalogs.get(harness) == options:
++            return
++        catalogs[harness] = list(options)
++        try:
++            _write(path, catalogs)
++        except OSError:
++            _logger.warning("Could not persist sandbox model catalogs to %s", path, exc_info=True)
++
++
++def lookup(harness: str) -> list[dict[str, Any]] | None:
++    """Return the last recorded catalog for ``harness``, or ``None``."""
++    path = _path()
++    if path is None:
++        return None
++    with _lock:
++        rows = _loaded(path).get(normalize_inference_harness(harness))
++    return list(rows) if rows else None
