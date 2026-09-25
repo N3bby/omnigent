@@ -12,6 +12,10 @@ postgres_digest: "sha256:029660641a0cfc575b14f336ba448fb8a75fd595d42e1fa316b9fb4
 vault: "2.1.1"
 vault_digest: "sha256:8af37ae9d45e4a0fac48ab700e0d99efc4c2d6cd84354a869f2147f1d3abab46"
 hvac: "2.4.0"
+# Rebuilds the server image's web UI from omnigent_commit with web patches.
+web_builder: "22.23.3-slim"
+web_builder_digest: "sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c"
+pnpm: "11.15.1"
 claude_code: "2.1.281"
 codex_cli: "0.156.1"
-image_release: "v0.15.0-5"
+image_release: "v0.15.0-6"

@@ -22,6 +22,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertRegex(versions["omnigent_host_base_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(versions["omnigent_server_base_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(versions["vault_digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(versions["web_builder_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertNotIn("latest", versions.values())
 
     def test_ci_environment_encodes_accepted_policies(self) -> None:
@@ -40,6 +41,11 @@ class ConfigurationTests(unittest.TestCase):
         server_dockerfile = (ROOT / "images" / "server" / "Dockerfile").read_text()
         self.assertIn(versions["omnigent_server_base_digest"], server_dockerfile)
         self.assertIn(versions["hvac"], server_dockerfile)
+        self.assertIn(
+            f"node:{versions['web_builder']}@{versions['web_builder_digest']}", server_dockerfile
+        )
+        self.assertIn(f"PNPM_VERSION={versions['pnpm']}", server_dockerfile)
+        self.assertIn(f"OMNIGENT_COMMIT={versions['omnigent_commit']}", server_dockerfile)
 
     def test_render_has_no_secret_or_mutable_application_image(self) -> None:
         subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
@@ -87,27 +93,35 @@ class ConfigurationTests(unittest.TestCase):
         preflight = (ROOT / "ansible" / "roles" / "preflight" / "tasks" / "main.yml").read_text()
         self.assertIn("ansible_architecture == 'x86_64'", preflight)
 
-    def test_server_patches_apply_to_pinned_upstream(self) -> None:
-        patches = sorted((ROOT / "images" / "server" / "patches").glob("*.patch"))
-        self.assertTrue(patches)
-        dockerfile = (ROOT / "images" / "server" / "Dockerfile").read_text()
-        self.assertIn("COPY patches/", dockerfile)
-        self.assertIn("--fuzz=0", dockerfile)
+    def test_upstream_patches_apply_to_pinned_upstream(self) -> None:
+        # Each image applies its directory's patches in order with --fuzz=0.
+        patch_sets = {
+            ("server", "patches"): "COPY patches/",
+            ("runner", "patches"): "COPY patches/",
+            ("server", "web-patches"): "COPY web-patches/",
+        }
         commit = load_versions()["omnigent_commit"]
-        with tempfile.TemporaryDirectory() as tmp:
-            for patch in patches:
-                touched = set(re.findall(r"^--- a/(\S+)$", patch.read_text(), re.MULTILINE))
-                for path in touched:
-                    target = Path(tmp) / path
-                    if target.exists():
-                        continue
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    url = f"https://raw.githubusercontent.com/omnigent-ai/omnigent/{commit}/{path}"
-                    with urllib.request.urlopen(url, timeout=30) as response:
-                        target.write_bytes(response.read())
-                subprocess.run(["git", "apply", str(patch)], cwd=tmp, check=True)
-            for source in Path(tmp).rglob("*.py"):
-                py_compile.compile(str(source), doraise=True)
+        for (image, directory), copy in patch_sets.items():
+            with self.subTest(image=image, directory=directory):
+                patches = sorted((ROOT / "images" / image / directory).glob("*.patch"))
+                self.assertTrue(patches)
+                dockerfile = (ROOT / "images" / image / "Dockerfile").read_text()
+                self.assertIn(copy, dockerfile)
+                self.assertIn("--fuzz=0", dockerfile)
+                with tempfile.TemporaryDirectory() as tmp:
+                    for patch in patches:
+                        touched = set(re.findall(r"^--- a/(\S+)$", patch.read_text(), re.MULTILINE))
+                        for path in touched:
+                            target = Path(tmp) / path
+                            if target.exists():
+                                continue
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            url = f"https://raw.githubusercontent.com/omnigent-ai/omnigent/{commit}/{path}"
+                            with urllib.request.urlopen(url, timeout=30) as response:
+                                target.write_bytes(response.read())
+                        subprocess.run(["git", "apply", str(patch)], cwd=tmp, check=True)
+                    for source in Path(tmp).rglob("*.py"):
+                        py_compile.compile(str(source), doraise=True)
 
 
 if __name__ == "__main__":

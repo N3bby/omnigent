@@ -10,9 +10,19 @@ Kubernetes runner Jobs. The runners deliberately have
 unrestricted ingress and egress. Images are built in GitHub Actions, published
 to public GHCR and deployed by digest. The server image adds the pinned Vault
 client library to the pinned upstream image and applies the small upstream
-patches in `images/server/patches/` (the build and `mise run test` fail if one no
-longer applies to `omnigent_commit`; delete a patch once upstream ships the fix).
-Production deployment is manual.
+patches in `images/server/patches/`. The runner image applies
+`images/runner/patches/` the same way. The web UI ships prebuilt, so the server
+image rebuilds it from the upstream source at `omnigent_commit` with
+`images/server/web-patches/` applied, using the pinned `web_builder` image. The
+build and `mise run test` fail if a patch no longer applies to
+`omnigent_commit`; delete a patch once upstream ships the fix, and drop the web
+rebuild once no web patches remain. Production deployment is manual.
+
+The current patches show each harness login's subscription usage (Claude's and
+Codex's 5-hour and weekly limits) next to the composer's context ring. This
+covers the browser, desktop and mobile apps, which all load the server's web
+UI. A session shows the windows after its harness first reports them: for
+Claude, after the first response; for Codex, at the first turn.
 
 ## One-time prerequisites
 
