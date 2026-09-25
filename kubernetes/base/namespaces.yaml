@@ -12,8 +12,7 @@ kind: Namespace
 metadata:
   name: omnigent-sandboxes
   labels:
-    pod-security.kubernetes.io/enforce: restricted
-    pod-security.kubernetes.io/enforce-version: latest
-    pod-security.kubernetes.io/warn: restricted
-    pod-security.kubernetes.io/audit: restricted
+    # Runner Pods need capabilities that Pod Security cannot see are confined
+    # to their user namespace; runner-userns.yaml enforces the real boundary.
+    pod-security.kubernetes.io/enforce: privileged
 

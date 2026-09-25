@@ -39,4 +39,8 @@ k3s kubectl apply \
   --prune-allowlist=rbac.authorization.k8s.io/v1/RoleBinding \
   --prune-allowlist=cert-manager.io/v1/ClusterIssuer \
   --prune-allowlist=traefik.io/v1alpha1/Middleware \
+  --prune-allowlist=admissionregistration.k8s.io/v1/MutatingAdmissionPolicy \
+  --prune-allowlist=admissionregistration.k8s.io/v1/MutatingAdmissionPolicyBinding \
+  --prune-allowlist=admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy \
+  --prune-allowlist=admissionregistration.k8s.io/v1/ValidatingAdmissionPolicyBinding \
   -f "$manifest"

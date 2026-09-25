@@ -6,5 +6,6 @@ resources:
   - postgres.yaml
   - vault.yaml
   - runner-rbac.yaml
+  - runner-userns.yaml
   - storage.yaml
   - resource-policy.yaml

@@ -10,10 +10,18 @@ filter, or protocol filter. Network reachability is not a security boundary.
 
 The boundaries that do exist are:
 
-- runners use a dedicated namespace with Kubernetes `restricted` Pod Security;
+- runners use a dedicated namespace; every Pod there must run in its own user
+  namespace (`hostUsers: false`) and must not use host networking, PID, IPC,
+  ports, hostPath volumes, or privileged mode (`runner-userns.yaml`);
 - the runner ServiceAccount has no RBAC and its token is not mounted;
-- generated Pods run non-root, drop all capabilities, use RuntimeDefault
-  seccomp, and cannot escalate privileges;
+- runner agents are root with all capabilities, unconfined seccomp and
+  AppArmor, and an unmasked `/proc`, so they can `apt-get install` and run
+  Podman. That root maps to an unprivileged host UID and the capabilities only
+  apply inside the Pod's user namespace; escaping still requires a kernel bug,
+  but the reachable kernel surface is larger than under `restricted` Pod
+  Security, which the namespace no longer enforces;
+- Podman containers run without cgroups (the Pod's cgroup is not delegated)
+  and share the Pod's network, so they are bounded only by the Pod's limits;
 - CPU, memory, ephemeral storage, home size, Pod count, and Job count are
   bounded;
 - the Omnigent server can manage Jobs, Pods, launch Secrets, logs, and events
@@ -39,7 +47,7 @@ Turning it off removes that flag on newly created runners.
 
 `claude_bypass_permissions` is a visible production setting. When true, the
 image wrapper writes `/etc/claude-code/managed-settings.json` to set Claude
-Code's default mode to `bypassPermissions`. The runner image makes that
-directory writable by the runner's non-root UID. Turning the setting off
+Code's default mode to `bypassPermissions`. Runner agents are root; the image
+also makes that directory writable by non-root helper Pods. Turning the setting off
 affects newly created runners; any running runner keeps the file until it is
 recreated.

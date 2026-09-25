@@ -123,7 +123,13 @@ deployed automatically by CI.
   unseal material is stored in the same k3s cluster for unattended restarts;
   this protects database-only disclosure, not a root or cluster compromise.
 - Runners have unrestricted networking. Security relies on namespace/RBAC,
-  Pod Security, credentials, and resource boundaries—not network filtering.
+  user namespaces, admission policies, credentials, and resource
+  boundaries—not network filtering.
+- Runner agents are root inside a per-Pod user namespace, so they can
+  `apt-get install` and run Podman (`docker` is an alias). Podman containers
+  share the Pod's network and run without cgroups; `docker buildx` and the
+  Docker daemon API are unavailable. See `scripts/check-userns` to re-verify
+  support after k3s upgrades.
 - Codex's dangerous approval/sandbox bypass is explicit as
   `codex_bypass_approvals`; it is currently enabled per the accepted policy.
 - Claude Code runs in `bypassPermissions` mode via
