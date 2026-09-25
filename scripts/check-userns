@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# Probes whether runner Pods could get root + Podman via user namespaces.
+# Creates a throwaway namespace and Pod, prints results, then deletes both.
+set -uo pipefail
+
+namespace=omnigent-userns-check
+pod=userns-check
+kubectl=(k3s kubectl)
+results=()
+
+record() { results+=("$1: $2"); echo "--> $1: $2"; }
+# Every exec is time-limited so a wedged daemon reports FAIL instead of hanging.
+in_pod() {
+  local seconds="$1" container="$2"; shift 2
+  timeout "$seconds" "${kubectl[@]}" exec -n "$namespace" "$pod" -c "$container" -- "$@"
+}
+
+cleanup() { "${kubectl[@]}" delete namespace "$namespace" --ignore-not-found --wait="$1" >/dev/null 2>&1 || true; }
+
+echo "== Host"
+echo "kernel: $(uname -r)"
+echo "k3s: $(k3s --version | head -n1)"
+echo "containerd: $(k3s ctr version 2>/dev/null | awk '/^Server:/ {s=1} s && /Version:/ {print $2; exit}')"
+echo "max user namespaces: $(cat /proc/sys/user/max_user_namespaces)"
+echo "cgroup filesystem: $(stat -fc %T /sys/fs/cgroup)"
+
+image="$("${kubectl[@]}" get configmap -n omnigent -l app.kubernetes.io/managed-by=omnigent-deployment -o json \
+  | jq -r '.items[] | select(.metadata.name | startswith("omnigent-sandbox-config-")) | .data["config.yaml"]' \
+  | awk '/^[[:space:]]*image:/ {print $2; exit}')"
+[[ -n "$image" ]] || { echo "could not determine runner image" >&2; exit 1; }
+echo "runner image: $image"
+
+cleanup true
+trap 'cleanup false' EXIT
+
+sed "s|RUNNER_IMAGE|${image}|; s|NAMESPACE|${namespace}|g; s|POD|${pod}|" <<'EOF' | "${kubectl[@]}" apply -f - >/dev/null || exit 1
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: NAMESPACE
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: POD
+  namespace: NAMESPACE
+spec:
+  hostUsers: false
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  terminationGracePeriodSeconds: 5
+  containers:
+    - name: runner
+      image: RUNNER_IMAGE
+      command: [sleep, infinity]
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        runAsNonRoot: false
+        seccompProfile: {type: RuntimeDefault}
+      resources:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: "1", memory: 1Gi}
+    - name: podman
+      image: quay.io/podman/stable
+      command: [sleep, infinity]
+      securityContext:
+        runAsUser: 0
+        procMount: Unmasked
+        capabilities: {add: [ALL]}
+        seccompProfile: {type: Unconfined}
+        appArmorProfile: {type: Unconfined}
+      volumeMounts:
+        - {name: containers, mountPath: /var/lib/containers}
+      resources:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: "1", memory: 2Gi}
+  volumes:
+    - name: containers
+      emptyDir: {sizeLimit: 8Gi}
+EOF
+
+echo
+echo "== Starting test Pod (image pulls can take a minute)"
+if ! "${kubectl[@]}" wait -n "$namespace" --for=condition=Ready "pod/$pod" --timeout=240s >/dev/null; then
+  record "pod starts" FAIL
+  "${kubectl[@]}" describe pod -n "$namespace" "$pod" | tail -n 30
+  "${kubectl[@]}" logs -n "$namespace" "$pod" -c docker --tail 40 2>/dev/null
+  exit 1
+fi
+record "pod starts" PASS
+
+echo
+echo "== User namespace"
+uid_map="$(in_pod 20 runner cat /proc/self/uid_map | tr -s ' ')"
+echo "uid_map:$uid_map"
+if [[ "$uid_map" == " 0 0 4294967295" ]]; then
+  record "user namespace active" "FAIL (root in the Pod is real host root; hostUsers: false was ignored)"
+else
+  record "user namespace active" PASS
+fi
+echo "hostUsers in stored spec: $("${kubectl[@]}" get pod -n "$namespace" "$pod" -o jsonpath='{.spec.hostUsers}')"
+
+echo
+echo "== apt install as root"
+if in_pod 300 runner sh -c 'id && apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cowsay >/dev/null && /usr/games/cowsay apt-ok'; then
+  record "apt install" PASS
+else
+  record "apt install" FAIL
+fi
+
+echo
+echo "== Podman (cgroups disabled; the Pod's cgroup is not delegated to its root)"
+in_pod 20 podman sh -c 'mkdir -p /etc/containers/containers.conf.d && printf "[containers]\ncgroups = \"disabled\"\n[engine]\ncgroup_manager = \"cgroupfs\"\nevents_logger = \"file\"\n" > /etc/containers/containers.conf.d/99-no-cgroups.conf'
+
+driver=""
+for candidate in overlay vfs; do
+  echo "trying storage driver: $candidate"
+  if in_pod 240 podman podman --storage-driver "$candidate" run --rm docker.io/library/alpine echo podman-run-ok; then
+    driver="$candidate"
+    break
+  fi
+  in_pod 60 podman podman --storage-driver "$candidate" system reset --force >/dev/null 2>&1 || true
+done
+if [[ -n "$driver" ]]; then
+  record "podman run" "PASS (storage driver: $driver)"
+  pm=(podman --storage-driver "$driver")
+  if in_pod 120 podman "${pm[@]}" run --rm docker.io/library/alpine wget -q -O /dev/null https://example.com; then
+    record "container networking" PASS
+  else
+    record "container networking" FAIL
+  fi
+  if in_pod 300 podman sh -c "printf 'FROM docker.io/library/alpine\nRUN apk add --no-cache curl\n' | ${pm[*]} build -q -t probe - >/dev/null"; then
+    record "podman build" PASS
+  else
+    record "podman build" FAIL
+  fi
+  in_pod 180 podman "${pm[@]}" run -d --name web -p 8080:80 docker.io/library/nginx:alpine >/dev/null
+  # shellcheck disable=SC2016 # expanded inside the Pod
+  in_pod 10 podman sh -c 'f=/proc/sys/net/ipv4/conf/all/route_localnet; echo "route_localnet=$(cat $f); /proc/sys writable: $( (echo 1 > $f) 2>/dev/null && echo yes || echo no)"'
+  pod_ip="$("${kubectl[@]}" get pod -n "$namespace" "$pod" -o jsonpath='{.status.podIP}')"
+  web_ip="$(in_pod 10 podman "${pm[@]}" inspect -f '{{.NetworkSettings.IPAddress}}' web)"
+  for target in "published port via localhost=127.0.0.1:8080" "published port via pod IP=${pod_ip}:8080" "container IP directly=${web_ip}:80"; do
+    label="${target%%=*}" address="${target#*=}"
+    if in_pod 30 podman sh -c "for i in 1 2 3 4 5 6 7 8 9 10; do curl -sf -o /dev/null http://$address && exit 0; sleep 1; done; exit 1"; then
+      record "$label" PASS
+    else
+      record "$label" FAIL
+    fi
+  done
+  if in_pod 60 podman sh -c "${pm[*]} run -d --name web-host --network host docker.io/library/nginx:alpine >/dev/null && for i in 1 2 3 4 5 6 7 8 9 10; do curl -sf -o /dev/null http://127.0.0.1:80 && exit 0; sleep 1; done; exit 1"; then
+    record "host networking (--network host)" PASS
+  else
+    record "host networking (--network host)" FAIL
+  fi
+else
+  record "podman run" FAIL
+fi
+
+echo
+echo "== Summary"
+printf '%s\n' "${results[@]}"

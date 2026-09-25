@@ -69,6 +69,24 @@
   register: manifest_apply
   changed_when: "'OMNIGENT_DIFF=changed' in manifest_apply.stdout or 'pruned' in manifest_apply.stdout"
 
+# Runner Pods use a 65536-ID user namespace; files owned by a larger ID (such
+# as the old runner UID 1000660000) are unreadable there, even by root.
+- name: Keep the Codex login volume owned by IDs runner Pods can map
+  ansible.builtin.shell: |
+    set -euo pipefail
+    pv="$(k3s kubectl get pvc codex-home -n omnigent-sandboxes -o jsonpath='{.spec.volumeName}')"
+    [[ -n "$pv" ]] || exit 0
+    dir="$(k3s kubectl get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}')"
+    [[ -d "$dir" ]] || exit 0
+    if [[ -n "$(find "$dir" \( ! -uid 1000 -o ! -gid 1000 \) -print -quit)" ]]; then
+      chown -R 1000:1000 "$dir"
+      echo changed
+    fi
+  args:
+    executable: /bin/bash
+  register: codex_home_owner
+  changed_when: "'changed' in codex_home_owner.stdout"
+
 - name: Trigger rollouts when Secret content changes
   ansible.builtin.command:
     argv:

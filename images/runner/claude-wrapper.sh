@@ -2,8 +2,8 @@
 set -eu
 
 # Managed settings outrank user and project settings, so the deployment policy
-# holds however Omnigent or the agent configures Claude Code. The image makes
-# this directory writable for the runner's non-root UID.
+# holds however Omnigent or the agent configures Claude Code. Runner agents are
+# root; the image also makes this directory writable for non-root helper Pods.
 managed=/etc/claude-code/managed-settings.json
 
 if [ "${OMNIGENT_CLAUDE_BYPASS_PERMISSIONS:-0}" = "1" ] && [ ! -e "$managed" ]; then

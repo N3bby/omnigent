@@ -1,0 +1,114 @@
+# Runner Pods run as root inside their own user namespace so agents can
+# apt-get install and use Podman. The Omnigent server hard-codes a non-root
+# restricted securityContext, so these policies rewrite runner Pods on
+# admission and reject any Pod in the namespace that would share host IDs.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicy
+metadata:
+  name: omnigent-runner-userns
+spec:
+  failurePolicy: Fail
+  reinvocationPolicy: Never
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  matchConditions:
+    - name: omnigent-runner
+      expression: >-
+        has(object.metadata.labels) &&
+        "omnigent.ai/role" in object.metadata.labels &&
+        object.metadata.labels["omnigent.ai/role"] == "sandbox-host"
+  mutations:
+    # IDs must fit the 65536-ID user namespace; the server's UID 1000660000 does not.
+    - patchType: ApplyConfiguration
+      applyConfiguration:
+        expression: >-
+          Object{
+            spec: Object.spec{
+              hostUsers: false,
+              securityContext: Object.spec.securityContext{
+                runAsNonRoot: false,
+                runAsUser: 0,
+                runAsGroup: 0,
+                fsGroup: 1000
+              }
+            }
+          }
+    # Capabilities only apply inside the Pod's user namespace. Podman needs
+    # them plus an unmasked /proc; seccomp and AppArmor would block it.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [
+            JSONPatch{
+              op: "replace",
+              path: "/spec/containers/" + string(object.spec.containers.map(c, c.name).indexOf("host")) + "/securityContext",
+              value: Object.spec.containers.securityContext{
+                runAsUser: 0,
+                runAsGroup: 0,
+                runAsNonRoot: false,
+                allowPrivilegeEscalation: true,
+                procMount: "Unmasked",
+                capabilities: Object.spec.containers.securityContext.capabilities{add: ["ALL"]},
+                seccompProfile: Object.spec.containers.securityContext.seccompProfile{type: "Unconfined"},
+                appArmorProfile: Object.spec.containers.securityContext.appArmorProfile{type: "Unconfined"}
+              }
+            }
+          ]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingAdmissionPolicyBinding
+metadata:
+  name: omnigent-runner-userns
+spec:
+  policyName: omnigent-runner-userns
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: omnigent-sandboxes
+---
+# Pod Security is "privileged" in the runner namespace because it cannot tell
+# that the added capabilities are confined to a user namespace. This guard is
+# the replacement boundary: no Pod there may use host IDs or host resources.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: omnigent-sandbox-guard
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE]
+        resources: [pods]
+  validations:
+    - expression: has(object.spec.hostUsers) && object.spec.hostUsers == false
+      message: "Pods in omnigent-sandboxes must set hostUsers: false."
+    - expression: >-
+        !(has(object.spec.hostNetwork) && object.spec.hostNetwork) &&
+        !(has(object.spec.hostPID) && object.spec.hostPID) &&
+        !(has(object.spec.hostIPC) && object.spec.hostIPC)
+      message: Pods in omnigent-sandboxes must not share host namespaces.
+    - expression: "!has(object.spec.volumes) || object.spec.volumes.all(v, !has(v.hostPath))"
+      message: Pods in omnigent-sandboxes must not mount hostPath volumes.
+    - expression: >-
+        (object.spec.containers + (has(object.spec.initContainers) ? object.spec.initContainers : [])).all(c,
+          !(has(c.securityContext) && has(c.securityContext.privileged) && c.securityContext.privileged) &&
+          (!has(c.ports) || c.ports.all(p, !has(p.hostPort) || p.hostPort == 0)))
+      message: Pods in omnigent-sandboxes must not be privileged or use host ports.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: omnigent-sandbox-guard
+spec:
+  policyName: omnigent-sandbox-guard
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: omnigent-sandboxes
