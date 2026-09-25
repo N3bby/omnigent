@@ -2,13 +2,14 @@ ARG OMNIGENT_HOST_IMAGE=ghcr.io/omnigent-ai/omnigent-host@sha256:f3dee09609ccecb
 FROM ${OMNIGENT_HOST_IMAGE}
 
 USER root
+RUN install -d -m 1777 /etc/claude-code
 WORKDIR /opt/omnigent-agent-clis
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund \
-    && ln -sf /opt/omnigent-agent-clis/node_modules/.bin/claude /usr/local/bin/claude \
+    && ln -sf /opt/omnigent-agent-clis/node_modules/.bin/claude /usr/local/bin/claude-real \
     && ln -sf /opt/omnigent-agent-clis/node_modules/.bin/codex /usr/local/bin/codex-real \
-    && claude --version \
+    && claude-real --version \
     && codex-real --version
 
 COPY --chmod=0755 codex-wrapper.sh /usr/local/bin/codex
-
+COPY --chmod=0755 claude-wrapper.sh /usr/local/bin/claude

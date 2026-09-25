@@ -35,5 +35,6 @@ runner_max_concurrency = 2
 
 # Deliberate policy choices.
 codex_bypass_approvals = true
+claude_bypass_permissions = true
 backups_enabled = false
 runner_network_policy = "unrestricted"

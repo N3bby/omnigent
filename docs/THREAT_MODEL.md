@@ -36,3 +36,10 @@ ciphertext and the material needed to decrypt it.
 `codex_bypass_approvals` is a visible production setting. When true, the image
 wrapper passes Codex's dangerous bypass flag for native Omnigent Codex sessions.
 Turning it off removes that flag on newly created runners.
+
+`claude_bypass_permissions` is a visible production setting. When true, the
+image wrapper writes `/etc/claude-code/managed-settings.json` to set Claude
+Code's default mode to `bypassPermissions`. The runner image makes that
+directory writable by the runner's non-root UID. Turning the setting off
+affects newly created runners; any running runner keeps the file until it is
+recreated.
