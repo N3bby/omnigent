@@ -1,0 +1,315 @@
+Forward each native harness's subscription usage windows to the server.
+
+claude-native keeps the statusLine's rate_limits (5-hour and weekly) that it
+already captures for the context ring, and posts them whenever the statusLine
+re-renders. codex-native reads account/rateLimits/read from its app-server at
+turn start and end. Both post external_session_usage data.rate_limits, best-
+effort and deduplicated. Pairs with the server patch 0002-rate-limits.patch and
+the web patch 0001-composer-rate-limits.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/harnesses/claude_native/forwarder.py b/omnigent/harnesses/claude_native/forwarder.py
+index f151964..8c4e4a9 100644
+--- a/omnigent/harnesses/claude_native/forwarder.py
++++ b/omnigent/harnesses/claude_native/forwarder.py
+@@ -798,6 +798,8 @@ class _ForwardDedupeState:
+ 
+     usage: dict[str, float] | None = None
+     context_window: int | None = None
++    # Last subscription ``rate_limits`` POSTed from the statusLine capture.
++    posted_rate_limits: dict[str, object] | None = None
+     recorded_token_usage: dict[str, int] | None = None
+     observed_model: str | None = None
+     posted_model: str | None = None
+@@ -1362,7 +1364,15 @@ async def forward_claude_transcript_to_session(
+                         )
+                     # Normalize the statusLine shim's raw capture into
+                     # context.json (one stat when nothing changed).
++                    previous_status_raw_sig = status_raw_sig
+                     status_raw_sig = sync_raw_status_context(bridge_dir, status_raw_sig)
++                    if status_raw_sig != previous_status_raw_sig:
++                        await _forward_rate_limits(
++                            client,
++                            session_id=current_session_id,
++                            bridge_dir=bridge_dir,
++                            dedupe=dedupe,
++                        )
+                     transcript_path = read_transcript_path(bridge_dir)
+                     _observe_transcript_discovery(
+                         bridge_dir=bridge_dir,
+@@ -5277,6 +5287,47 @@ async def _post_external_session_usage(
+         resp.raise_for_status()
+ 
+ 
++async def _forward_rate_limits(
++    client: httpx.AsyncClient,
++    *,
++    session_id: str,
++    bridge_dir: Path,
++    dedupe: _ForwardDedupeState,
++) -> None:
++    """
++    Mirror the statusLine's subscription windows to the web composer.
++
++    Runs once per statusLine render rather than per transcript batch, so the
++    windows update after every API response. Best-effort and not retried: the
++    next render posts again, and a lost snapshot is harmless.
++
++    :param client: Omnigent HTTP client.
++    :param session_id: Omnigent session/conversation id.
++    :param bridge_dir: Native Claude bridge directory.
++    :param dedupe: Per-session baseline; ``posted_rate_limits`` suppresses
++        re-posting unchanged windows.
++    """
++    status_state = await asyncio.to_thread(read_claude_context_state, bridge_dir)
++    rate_limits = status_state.get("rate_limits") if status_state is not None else None
++    if not isinstance(rate_limits, dict) or rate_limits == dedupe.posted_rate_limits:
++        return
++    try:
++        resp = await client.post(
++            f"/v1/sessions/{session_id}/events",
++            json={"type": "external_session_usage", "data": {"rate_limits": rate_limits}},
++        )
++        resp.raise_for_status()
++    except httpx.HTTPError as exc:
++        _logger.debug(
++            "Failed to forward Claude rate limits; session=%s http_status=%s",
++            session_id,
++            _http_status_for_log(exc),
++            extra={"session_id": session_id},
++        )
++        return
++    dedupe.posted_rate_limits = rate_limits
++
++
+ # Usage keys that carry token counts, in the spelling ``record_llm_usage``
+ # expects. ``context_tokens`` is deliberately absent: it is a derived
+ # input+cache total for the context-window gauge, not a GenAI usage counter.
+diff --git a/omnigent/harnesses/claude_native/status.py b/omnigent/harnesses/claude_native/status.py
+index a3e414c..aa4b4f1 100644
+--- a/omnigent/harnesses/claude_native/status.py
++++ b/omnigent/harnesses/claude_native/status.py
+@@ -71,9 +71,56 @@ def normalize_status_payload(payload: dict[str, object]) -> dict[str, object] |
+         model_id = model.strip()
+     if model_id is not None:
+         record["model"] = model_id
++    rate_limits = rate_limits_from_status_payload(payload)
++    if rate_limits is not None:
++        record["rate_limits"] = rate_limits
+     return record
+ 
+ 
++# Claude Code's statusLine subscription windows and their lengths in minutes.
++_RATE_LIMIT_WINDOWS = (("five_hour", 300), ("seven_day", 7 * 24 * 60))
++
++
++def rate_limits_from_status_payload(payload: dict[str, object]) -> dict[str, object] | None:
++    """
++    Extract the claude.ai subscription windows from a raw statusLine payload.
++
++    Claude Code sends ``rate_limits`` only to Pro/Max logins and only after
++    the session's first API response. The result uses the provider-neutral
++    ``external_session_usage`` ``rate_limits`` shape that codex-native posts
++    too.
++
++    :param payload: Decoded statusLine stdin JSON from Claude Code.
++    :returns: ``{"windows": [{"window_minutes": 300, "used_percent": 23.0,
++        "resets_at": 1790370000}, ...]}``, or ``None`` when no window is
++        reported.
++    """
++    raw = payload.get("rate_limits")
++    if not isinstance(raw, dict):
++        return None
++    windows: list[dict[str, object]] = []
++    for key, minutes in _RATE_LIMIT_WINDOWS:
++        window = raw.get(key)
++        if not isinstance(window, dict):
++            continue
++        used = window.get("used_percentage")
++        if not isinstance(used, (int, float)) or isinstance(used, bool):
++            continue
++        resets_at = window.get("resets_at")
++        windows.append(
++            {
++                "window_minutes": minutes,
++                "used_percent": float(used),
++                "resets_at": (
++                    int(resets_at)
++                    if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool)
++                    else None
++                ),
++            }
++        )
++    return {"windows": windows} if windows else None
++
++
+ def sync_raw_status_context(
+     bridge_dir: Path,
+     last_sig: tuple[int, int] | None,
+diff --git a/omnigent/harnesses/codex_native/forwarder.py b/omnigent/harnesses/codex_native/forwarder.py
+index 13310f8..0f7da99 100644
+--- a/omnigent/harnesses/codex_native/forwarder.py
++++ b/omnigent/harnesses/codex_native/forwarder.py
+@@ -438,6 +438,10 @@ class _CodexForwarderState:
+     posted_approval_preset: str | None = None
+     parent_session_id: str | None = None
+     codex_client: CodexAppServerClient | None = None
++    # Last subscription ``rate_limits`` POSTed, and the in-flight
++    # ``account/rateLimits/read`` refresh (at most one at a time).
++    posted_rate_limits: _JsonObject | None = None
++    rate_limits_task: asyncio.Task[None] | None = field(default=None, repr=False)
+     subagents_by_thread: dict[str, str] = field(default_factory=dict)
+     pending_child_threads: dict[str, str | None] = field(default_factory=dict)
+     subscribed_child_threads: set[str] = field(default_factory=set)
+@@ -3584,6 +3588,9 @@ async def _maybe_handle_turn_event(
+                         session_id=session_id,
+                         forwarder_state=forwarder_state,
+                     )
++        _schedule_rate_limits_refresh(
++            client, codex_client, session_id=session_id, forwarder_state=forwarder_state
++        )
+         return True
+     if method in {"turn/completed", "turn/failed"}:
+         await _handle_terminal_turn_boundary(
+@@ -3598,6 +3605,9 @@ async def _maybe_handle_turn_event(
+             codex_client=codex_client,
+             forwarder_state=forwarder_state,
+         )
++        _schedule_rate_limits_refresh(
++            client, codex_client, session_id=session_id, forwarder_state=forwarder_state
++        )
+         return True
+     if method == "thread/tokenUsage/updated":
+         _handle_usage_update(usage_coalescer, params, forwarder_state)
+@@ -3762,6 +3772,132 @@ async def _handle_completed_event(
+     )
+ 
+ 
++# ``account/rateLimits/read`` calls the ChatGPT backend; bound it so a slow
++# answer never pins a refresh task.
++_RATE_LIMITS_READ_TIMEOUT_S = 15.0
++
++
++def _schedule_rate_limits_refresh(
++    client: httpx.AsyncClient,
++    codex_client: CodexAppServerClient | None,
++    *,
++    session_id: str,
++    forwarder_state: _CodexForwarderState | None,
++) -> None:
++    """
++    Refresh the web composer's subscription windows in the background.
++
++    Called at turn start and end. The read runs off the event loop's
++    handling path so the account round-trip never delays turn events.
++    Parent threads only: child threads share the same account.
++
++    :param client: HTTP client for Omnigent event posts.
++    :param codex_client: Connected app-server client, or ``None``.
++    :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
++    :param forwarder_state: Parent forwarder state, or ``None`` for a child.
++    """
++    if codex_client is None or forwarder_state is None:
++        return
++    running = forwarder_state.rate_limits_task
++    if running is not None and not running.done():
++        return
++    forwarder_state.rate_limits_task = asyncio.create_task(
++        _forward_rate_limits(
++            client, codex_client, session_id=session_id, forwarder_state=forwarder_state
++        ),
++        name="codex-native-forwarder-rate-limits",
++    )
++
++
++async def _forward_rate_limits(
++    client: httpx.AsyncClient,
++    codex_client: CodexAppServerClient,
++    *,
++    session_id: str,
++    forwarder_state: _CodexForwarderState,
++) -> None:
++    """
++    Read the account's subscription windows and post any change to Omnigent.
++
++    Best-effort and not retried: the next turn boundary reads again, and a
++    lost snapshot is harmless. Posted directly rather than through
++    :func:`_post_session_event` so a failure neither dead-letters nor counts
++    against forward-sync health.
++
++    :param client: HTTP client for Omnigent event posts.
++    :param codex_client: Connected app-server client.
++    :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
++    :param forwarder_state: Parent forwarder state holding the dedupe baseline.
++    """
++    try:
++        async with asyncio.timeout(_RATE_LIMITS_READ_TIMEOUT_S):
++            response = await codex_client.request("account/rateLimits/read", {})
++    except Exception as exc:  # noqa: BLE001 — a background best-effort read must never raise
++        _logger.debug("Codex rate-limit read failed; session=%s error=%s", session_id, exc)
++        return
++    rate_limits = _rate_limits_from_read_result(response.get("result"))
++    if rate_limits is None or rate_limits == forwarder_state.posted_rate_limits:
++        return
++    try:
++        resp = await client.post(
++            f"/v1/sessions/{url_component(session_id)}/events",
++            json={"type": "external_session_usage", "data": {"rate_limits": rate_limits}},
++        )
++        resp.raise_for_status()
++    except httpx.HTTPError as exc:
++        _logger.debug("Failed to forward Codex rate limits; session=%s error=%s", session_id, exc)
++        return
++    forwarder_state.posted_rate_limits = rate_limits
++
++
++# Fallback window lengths (minutes) when Codex omits ``windowDurationMins``.
++_CODEX_RATE_LIMIT_WINDOWS = (("primary", 300), ("secondary", 7 * 24 * 60))
++
++
++def _rate_limits_from_read_result(result: object) -> _JsonObject | None:
++    """
++    Map an ``account/rateLimits/read`` result to the ``rate_limits`` shape.
++
++    :param result: The JSON-RPC ``result``, e.g. ``{"rateLimits": {"primary":
++        {"usedPercent": 9, "windowDurationMins": 300, "resetsAt": 1790339366},
++        "secondary": {...}}}``.
++    :returns: ``{"windows": [{"window_minutes": 300, "used_percent": 9.0,
++        "resets_at": 1790339366}, ...]}``, or ``None`` when no subscription
++        window is reported (e.g. an API-key login).
++    """
++    if not isinstance(result, dict):
++        return None
++    snapshot = result.get("rateLimits")
++    if not isinstance(snapshot, dict):
++        return None
++    windows: list[_JsonObject] = []
++    for key, fallback_minutes in _CODEX_RATE_LIMIT_WINDOWS:
++        window = snapshot.get(key)
++        if not isinstance(window, dict):
++            continue
++        used = window.get("usedPercent")
++        if not isinstance(used, (int, float)) or isinstance(used, bool):
++            continue
++        minutes = window.get("windowDurationMins")
++        resets_at = window.get("resetsAt")
++        windows.append(
++            {
++                "window_minutes": (
++                    minutes
++                    if isinstance(minutes, int) and not isinstance(minutes, bool) and minutes > 0
++                    else fallback_minutes
++                ),
++                "used_percent": float(used),
++                "resets_at": (
++                    int(resets_at)
++                    if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool)
++                    else None
++                ),
++            }
++        )
++    return {"windows": windows} if windows else None
++
++
+ async def _handle_terminal_turn_boundary(
+     client: httpx.AsyncClient,
+     *,

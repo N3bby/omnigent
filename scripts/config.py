@@ -61,8 +61,8 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     required_versions = {
         "omnigent", "omnigent_commit", "k3s", "k3s_installer_sha256",
         "cert_manager", "cert_manager_manifest_sha256", "postgres",
-        "postgres_digest", "vault", "vault_digest", "hvac", "claude_code",
-        "codex_cli", "image_release",
+        "postgres_digest", "vault", "vault_digest", "hvac", "web_builder",
+        "web_builder_digest", "pnpm", "claude_code", "codex_cli", "image_release",
     }
     missing_versions = sorted(required_versions - versions.keys())
     if missing_versions:

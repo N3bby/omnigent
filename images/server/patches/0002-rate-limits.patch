@@ -1,0 +1,148 @@
+Accept, store and broadcast native harness subscription usage windows.
+
+external_session_usage accepts data.rate_limits ({"windows": [{"window_minutes",
+"used_percent", "resets_at"}]}, at most two windows), stores it in the
+omnigent.rate_limits session label for page loads, and adds it to the
+session.usage SSE event. A rate-limits-only post skips the cost roll-up.
+Applies after 0001-sandbox-model-catalog-fallback.patch. Base: omnigent v0.15.0
+(c8b9b85f822f).
+
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index 863e95f..9379916 100644
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -1670,6 +1670,68 @@ def _persist_native_cumulative_usage(
+     return _priced_cost_for_display(current)
+ 
+ 
++# Latest subscription usage windows a native harness reported (JSON), read by
++# the web composer on load; live updates ride on ``session.usage``.
++_RATE_LIMITS_LABEL_KEY = "omnigent.rate_limits"
++# Session, weekly: two windows keep the JSON well under the label length cap.
++_RATE_LIMITS_MAX_WINDOWS = 2
++
++
++def _rate_limits_from_usage_data(
++    raw: object,
++) -> dict[str, list[dict[str, float | int | None]]] | None:
++    """
++    Validate and canonicalize ``external_session_usage`` ``data.rate_limits``.
++
++    :param raw: ``{"windows": [{"window_minutes": 300, "used_percent": 23.0,
++        "resets_at": 1790370000}, ...]}`` from a native forwarder, or ``None``.
++    :returns: The same shape with only the known keys and percentages rounded
++        to one decimal, or ``None`` when absent.
++    :raises OmnigentError: When present but malformed.
++    """
++    if raw is None:
++        return None
++
++    def invalid(detail: str) -> OmnigentError:
++        return OmnigentError(
++            f"external_session_usage data.rate_limits {detail}", code=ErrorCode.INVALID_INPUT
++        )
++
++    windows = raw.get("windows") if isinstance(raw, dict) else None
++    if not isinstance(windows, list) or not 1 <= len(windows) <= _RATE_LIMITS_MAX_WINDOWS:
++        raise invalid(f"must carry 1-{_RATE_LIMITS_MAX_WINDOWS} windows")
++    canonical: list[dict[str, float | int | None]] = []
++    for window in windows:
++        if not isinstance(window, dict):
++            raise invalid("windows must be objects")
++        minutes = window.get("window_minutes")
++        used = window.get("used_percent")
++        resets_at = window.get("resets_at")
++        if not isinstance(minutes, int) or isinstance(minutes, bool) or not 0 < minutes <= 525_600:
++            raise invalid("window_minutes must be a positive int of at most a year")
++        if (
++            not isinstance(used, (int, float))
++            or isinstance(used, bool)
++            or not math.isfinite(used)
++            or not 0 <= used <= 1000
++        ):
++            raise invalid("used_percent must be a number from 0 to 1000")
++        if resets_at is not None and (
++            not isinstance(resets_at, int)
++            or isinstance(resets_at, bool)
++            or not 0 < resets_at < 2**40
++        ):
++            raise invalid("resets_at must be null or Unix epoch seconds")
++        canonical.append(
++            {
++                "window_minutes": minutes,
++                "used_percent": round(float(used), 1),
++                "resets_at": resets_at,
++            }
++        )
++    return {"windows": canonical}
++
++
+ async def _persist_external_session_usage(
+     session_id: str,
+     body: SessionEventInput,
+@@ -1726,12 +1788,29 @@ async def _persist_external_session_usage(
+         "cumulative_output_tokens",
+     )
+     has_cumulative = any(body.data.get(k) is not None for k in _CUMULATIVE_USAGE_KEYS)
++    rate_limits = _rate_limits_from_usage_data(body.data.get("rate_limits"))
+     if raw_tokens is None and raw_window is None and not has_cumulative:
+-        raise OmnigentError(
+-            "external_session_usage requires at least one of "
+-            "data.context_tokens, data.context_window, or a cumulative usage field",
+-            code=ErrorCode.INVALID_INPUT,
++        if rate_limits is None:
++            raise OmnigentError(
++                "external_session_usage requires at least one of "
++                "data.context_tokens, data.context_window, data.rate_limits, "
++                "or a cumulative usage field",
++                code=ErrorCode.INVALID_INPUT,
++            )
++        # A subscription-window refresh touches no context or cost state, so
++        # it skips the usage persist and subtree roll-up below.
++        await asyncio.to_thread(
++            conversation_store.set_labels,
++            session_id,
++            {_RATE_LIMITS_LABEL_KEY: json.dumps(rate_limits, separators=(",", ":"))},
+         )
++        session_stream.publish(
++            session_id,
++            SessionUsageEvent(
++                type="session.usage", conversation_id=session_id, rate_limits=rate_limits
++            ).model_dump(exclude_none=True),
++        )
++        return None
+ 
+     # Native harnesses report cumulative cost / tokens (SET semantics) — distinct
+     # from the Omnigent relay's per-response accumulation. Persist this session's
+@@ -1769,6 +1848,8 @@ async def _persist_external_session_usage(
+         label_updates[_LAST_CONTEXT_TOKENS_LABEL_KEY] = str(raw_tokens)
+     if raw_window is not None:
+         label_updates[_LAST_CONTEXT_WINDOW_LABEL_KEY] = str(raw_window)
++    if rate_limits is not None:
++        label_updates[_RATE_LIMITS_LABEL_KEY] = json.dumps(rate_limits, separators=(",", ":"))
+     await asyncio.to_thread(
+         conversation_store.set_labels,
+         session_id,
+@@ -1807,6 +1888,8 @@ async def _persist_external_session_usage(
+         event_payload["total_cost_usd"] = subtree_cost
+     if usage_by_model is not None:
+         event_payload["usage_by_model"] = usage_by_model
++    if rate_limits is not None:
++        event_payload["rate_limits"] = rate_limits
+     event = SessionUsageEvent(**event_payload)
+     session_stream.publish(session_id, event.model_dump(exclude_none=True))
+     # This session's usage also moves its ANCESTORS' subtree cost (its spend
+diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
+index fca259e..f0513ec 100644
+--- a/omnigent/server/schemas.py
++++ b/omnigent/server/schemas.py
+@@ -3173,6 +3173,9 @@ class SessionUsageEvent(_SSEEventBase):
+     context_window: int | None = None
+     total_cost_usd: float | None = None
+     usage_by_model: dict[str, ModelUsage] | None = None
++    # Subscription usage windows from a native harness, e.g. ``{"windows":
++    # [{"window_minutes": 300, "used_percent": 23.0, "resets_at": 1790370000}]}``.
++    rate_limits: dict[str, list[dict[str, float | int | None]]] | None = None
+ 
+ 
+ class SessionModelEvent(_SSEEventBase):
