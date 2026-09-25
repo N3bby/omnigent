@@ -147,6 +147,9 @@ deployed automatically by CI.
 - Ordinary containerd isolation is used; gVisor/Kata are not installed.
 - One server replica is used because Omnigent's runner registry is in memory.
 
+See [the custom features overview](docs/CUSTOM_FEATURES.md) for what this
+deployment adds on top of upstream Omnigent.
+
 See [the threat model](docs/THREAT_MODEL.md),
 [operations contract](docs/OPERATIONS.md), and [implementation plan](plan.md).
 See the [simplified architecture diagram](docs/architecture-simple.svg) for a
