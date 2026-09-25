@@ -14,4 +14,4 @@ vault_digest: "sha256:8af37ae9d45e4a0fac48ab700e0d99efc4c2d6cd84354a869f2147f1d3
 hvac: "2.4.0"
 claude_code: "2.1.281"
 codex_cli: "0.156.1"
-image_release: "v0.15.0-2"
+image_release: "v0.15.0-4"

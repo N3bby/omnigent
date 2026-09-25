@@ -24,6 +24,7 @@ class ConfigurationTests(unittest.TestCase):
         values, _ = validate("ci")
         self.assertEqual(values["runner_network_policy"], "unrestricted")
         self.assertFalse(values["backups_enabled"])
+        self.assertTrue(values["claude_bypass_permissions"])
 
     def test_runner_lock_matches_authoritative_versions(self) -> None:
         versions = load_versions()

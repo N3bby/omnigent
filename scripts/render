@@ -60,6 +60,7 @@ def main() -> None:
     server_name = f"{registry}/{cfg['server_image']}"
     server_digest = str(cfg["server_digest"])
     bypass = "1" if cfg["codex_bypass_approvals"] else "0"
+    claude_bypass = "1" if cfg["claude_bypass_permissions"] else "0"
     revision_result = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, check=False, capture_output=True, text=True
     )
@@ -94,6 +95,7 @@ def main() -> None:
             f"OMNIGENT_ACCOUNTS_BASE_URL=https://{cfg['hostname']}",
             "CODEX_HOME=/mnt/codex-home",
             f"OMNIGENT_CODEX_BYPASS_APPROVALS={bypass}",
+            f"OMNIGENT_CLAUDE_BYPASS_PERMISSIONS={claude_bypass}",
             f"OMNIGENT_DEPLOYMENT_REVISION={deployment_revision}",
             "",
         ])
@@ -134,6 +136,7 @@ def main() -> None:
             "    env:",
             "      - CODEX_HOME",
             "      - OMNIGENT_CODEX_BYPASS_APPROVALS",
+            "      - OMNIGENT_CLAUDE_BYPASS_PERMISSIONS",
             "    resources:",
             "      requests:",
             f"        cpu: {yaml_string(str(cfg['runner_cpu_request']))}",

@@ -124,6 +124,8 @@ deployed automatically by CI.
   Pod Security, credentials, and resource boundaries—not network filtering.
 - Codex's dangerous approval/sandbox bypass is explicit as
   `codex_bypass_approvals`; it is currently enabled per the accepted policy.
+- Claude Code runs in `bypassPermissions` mode via
+  `claude_bypass_permissions`; it is currently enabled per the accepted policy.
 - Ordinary containerd isolation is used; gVisor/Kata are not installed.
 - One server replica is used because Omnigent's runner registry is in memory.
 
