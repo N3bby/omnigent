@@ -23,7 +23,7 @@ postgres_storage = "10Gi"
 artifact_storage = "10Gi"
 codex_storage = "1Gi"
 
-runner_cpu_request = "500m"
+runner_cpu_request = "250m"
 runner_memory_request = "1Gi"
 runner_ephemeral_request = "2Gi"
 runner_cpu_limit = "2"
@@ -31,7 +31,7 @@ runner_memory_limit = "4Gi"
 runner_ephemeral_limit = "8Gi"
 runner_home_limit = "8Gi"
 runner_pod_ready_timeout_seconds = 300
-runner_max_concurrency = 2
+runner_max_concurrency = 10
 
 # Deliberate policy choices.
 codex_bypass_approvals = true

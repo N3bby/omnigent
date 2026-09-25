@@ -229,7 +229,7 @@ vm: {
       class: namespace
       direction: down
 
-      jobs: "Ephemeral runner Jobs / Pods\nmax concurrency: 2\n500m/1Gi request | 2CPU/4Gi limit\n8Gi ephemeral + 8Gi home limit" {
+      jobs: "Ephemeral runner Jobs / Pods\nmax concurrency: 10\n250m/1Gi request | 2CPU/4Gi limit\n8Gi ephemeral + 8Gi home limit" {
         class: workload
       }
       runner_image: "omnigent-runner image\nCodex + Claude CLIs\npinned GHCR digest" {
