@@ -47,7 +47,8 @@ Turning it off removes that flag on newly created runners.
 
 `claude_bypass_permissions` is a visible production setting. When true, the
 image wrapper writes `/etc/claude-code/managed-settings.json` to set Claude
-Code's default mode to `bypassPermissions`. Runner agents are root; the image
+Code's default mode to `bypassPermissions` and skip its interactive consent
+dialog (`skipDangerousModePermissionPrompt`). Runner agents are root; the image
 also makes that directory writable by non-root helper Pods. Turning the setting off
 affects newly created runners; any running runner keeps the file until it is
 recreated.
