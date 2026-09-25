@@ -31,7 +31,7 @@ runner_memory_limit = "4Gi"
 runner_ephemeral_limit = "8Gi"
 runner_home_limit = "8Gi"
 runner_pod_ready_timeout_seconds = 300
-runner_max_concurrency = 2
+runner_max_concurrency = 3
 
 # Deliberate policy choices.
 codex_bypass_approvals = true

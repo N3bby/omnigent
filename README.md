@@ -15,7 +15,7 @@ manual.
 ## One-time prerequisites
 
 1. Create an Ubuntu 22.04+ netcup VM. The checked-in baseline expects at least
-   4 vCPU, 16 GiB RAM, and 60 GB disk for the checked-in two-runner baseline.
+   4 vCPU, 16 GiB RAM, and 60 GB disk for the checked-in three-runner baseline.
 2. Add the operator's SSH key for `n3bby`, and ensure `n3bby` has sudo access.
 3. Point the intended DNS name at the VM.
 4. Create a public Git repository and push this directory. Public repositories
