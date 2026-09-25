@@ -15,9 +15,7 @@ runner_digest = "sha256:11303f3bb0ca7d1a206780a48b04a8e1c82086fcdbdfaa2b444b1535
 server_digest = "sha256:5045f5a490cb22276292dec4b61e1f437d0b57064f6d978bf393e19ec0d5ff35"
 
 server_cpu_request = "500m"
-server_memory_request = "1Gi"
-server_cpu_limit = "2"
-server_memory_limit = "2Gi"
+server_memory_request = "2Gi"
 
 postgres_storage = "10Gi"
 artifact_storage = "10Gi"
@@ -26,8 +24,10 @@ codex_storage = "1Gi"
 runner_cpu_request = "500m"
 runner_memory_request = "1Gi"
 runner_ephemeral_request = "2Gi"
-runner_cpu_limit = "2"
-runner_memory_limit = "4Gi"
+# The pinned Omnigent server always sets runner CPU/memory limits. Keep them
+# far above node capacity so runners can use whatever the node has free.
+runner_cpu_limit = "1000"
+runner_memory_limit = "1024Gi"
 runner_ephemeral_limit = "8Gi"
 runner_home_limit = "8Gi"
 runner_pod_ready_timeout_seconds = 300
