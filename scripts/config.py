@@ -79,8 +79,7 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     for key in ("runner_image", "server_image"):
         require_string(data, key, r"[A-Za-z0-9_.-]+")
     for key in (
-        "server_cpu_request", "server_memory_request", "server_cpu_limit",
-        "server_memory_limit", "postgres_storage", "artifact_storage",
+        "server_cpu_request", "server_memory_request", "postgres_storage", "artifact_storage",
         "codex_storage", "runner_cpu_request", "runner_memory_request",
         "runner_ephemeral_request", "runner_cpu_limit", "runner_memory_limit",
         "runner_ephemeral_limit", "runner_home_limit",

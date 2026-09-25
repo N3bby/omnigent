@@ -29,6 +29,7 @@ spec:
       annotations:
         omnigent.dev/secret-checksum: pending
     spec:
+      priorityClassName: omnigent-core
       serviceAccountName: omnigent-server
       automountServiceAccountToken: true
       securityContext:
@@ -58,9 +59,6 @@ spec:
           resources:
             requests:
               cpu: 500m
-              memory: 1Gi
-            limits:
-              cpu: "2"
               memory: 2Gi
           securityContext:
             allowPrivilegeEscalation: false

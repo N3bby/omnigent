@@ -22,8 +22,9 @@ The boundaries that do exist are:
   Security, which the namespace no longer enforces;
 - Podman containers run without cgroups (the Pod's cgroup is not delegated)
   and share the Pod's network, so they are bounded only by the Pod's limits;
-- CPU, memory, ephemeral storage, home size, Pod count, and Job count are
-  bounded;
+- ephemeral storage, home size, Pod count, and Job count are bounded; runner
+  CPU and memory limits sit above node capacity so runners share the node,
+  and the server, PostgreSQL, and Vault have a higher priority than runners;
 - the Omnigent server can manage Jobs, Pods, launch Secrets, logs, and events
   only in the runner namespace;
 - PostgreSQL and the server's Secrets remain in a different namespace;

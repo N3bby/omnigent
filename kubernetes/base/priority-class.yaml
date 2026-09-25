@@ -1,0 +1,10 @@
+# Runners keep the default priority 0. Among Pods using more memory than they
+# request, the kubelet evicts lower priority first, and these Pods can preempt
+# runners when they need to be scheduled.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: omnigent-core
+value: 100000
+globalDefault: false
+description: Omnigent server, PostgreSQL, and Vault.
