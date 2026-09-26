@@ -67,7 +67,7 @@ Runner agents can `apt-get install` packages and build or run containers.
 ## Agent permission bypass policies
 
 Both of these are explicit settings in `environments/production.toml`, and
-both are currently enabled per the accepted policy. See
+both are enabled by default. See
 [the threat model](THREAT_MODEL.md).
 
 - `claude_bypass_permissions`: the runner's `claude` wrapper writes

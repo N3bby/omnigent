@@ -95,10 +95,10 @@ clients: {
   class: boundary
   direction: down
 
-  browser: "Browser\nhttps://omni.n3b.by" {
+  browser: "Browser\nhttps://omnigent.example.com" {
     class: external
   }
-  dns: "Public DNS\nomni.n3b.by -> netcup IP" {
+  dns: "Public DNS\nomnigent.example.com -> VM IP" {
     class: external
   }
   letsencrypt: "Let's Encrypt\nACME certificates" {
@@ -115,7 +115,7 @@ clients: {
 }
 
 vm: {
-  label: "netcup Ubuntu VM | single x86_64 node"
+  label: "Ubuntu VM | single x86_64 node"
   class: boundary
   direction: down
 

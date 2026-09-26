@@ -31,7 +31,7 @@ The boundaries that do exist are:
 - normal containerd isolation is accepted; gVisor and Kata are out of scope.
 
 The shared Codex PVC and shared Claude token mean one compromised runner can use
-the operator's agent identities. That is accepted while the operator is the
+the operator's agent identities. That is acceptable while the operator is the
 only user. Revisit per-user identities and dedicated runner nodes before
 inviting anyone who is not equally trusted.
 
@@ -41,11 +41,11 @@ unattended. This protects against disclosure of the database alone; root access
 to the VM or administrative access to the cluster can recover both the
 ciphertext and the material needed to decrypt it.
 
-`codex_bypass_approvals` is a visible production setting. When true, the image
+`codex_bypass_approvals` is a setting in `environments/production.toml`. When true, the image
 wrapper passes Codex's dangerous bypass flag for native Omnigent Codex sessions.
 Turning it off removes that flag on newly created runners.
 
-`claude_bypass_permissions` is a visible production setting. When true, the
+`claude_bypass_permissions` is a setting in `environments/production.toml`. When true, the
 image wrapper writes `/etc/claude-code/managed-settings.json` to set Claude
 Code's default mode to `bypassPermissions` and skip its interactive consent
 dialog (`skipDangerousModePermissionPrompt`). Runner agents are root; the image

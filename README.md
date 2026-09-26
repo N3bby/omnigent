@@ -1,158 +1,123 @@
 # Omnigent deployment
 
-This repository provisions a fresh single-node Omnigent installation on an
-existing Ubuntu VM and reconciles later changes through the same command. It is
-greenfield: it does not read or migrate the old installation.
+Deploy your own [Omnigent](https://github.com/omnigent-ai/omnigent) server on a
+single Ubuntu VM. One command provisions a fresh VM and later reconciles any
+change you commit.
 
-The production topology is k3s with Traefik, cert-manager, one Omnigent server,
-PostgreSQL, a local Vault credential-encryption service, and ephemeral
-Kubernetes runner Jobs. The runners deliberately have
-unrestricted ingress and egress. Images are built in GitHub Actions, published
-to public GHCR and deployed by digest. The server image adds the pinned Vault
-client library to the pinned upstream image and applies the small upstream
-patches in `images/server/patches/`. The runner image applies
-`images/runner/patches/` the same way. The web UI ships prebuilt, so the server
-image rebuilds it from the upstream source at `omnigent_commit` with
-`images/server/web-patches/` applied, using the pinned `web_builder` image. The
-build and `mise run test` fail if a patch no longer applies to
-`omnigent_commit`; delete a patch once upstream ships the fix, and drop the web
-rebuild once no web patches remain. Production deployment is manual.
+What you get:
 
-The current patches show each harness login's subscription usage (Claude's and
-Codex's 5-hour and weekly limits) next to the composer's context ring. This
-covers the browser, desktop and mobile apps, which all load the server's web
-UI. A session shows the windows after its harness first reports them: for
-Claude, after the first response; for Codex, at the first turn.
+- k3s with Traefik and cert-manager (automatic HTTPS)
+- one Omnigent server, PostgreSQL, and a small in-cluster Vault
+- agent sessions in short-lived Kubernetes runner Pods
+- a few features on top of upstream Omnigent, such as usage limits in the
+  composer and Podman inside runners. See
+  [custom features](docs/CUSTOM_FEATURES.md).
 
-## One-time prerequisites
+Images are built by GitHub Actions, published to your GHCR namespace, and
+deployed by digest.
 
-1. Create an Ubuntu 22.04+ netcup VM. The checked-in baseline expects at least
-   4 vCPU, 16 GiB RAM, and 60 GB disk for the checked-in two-runner baseline.
-2. Add the operator's SSH key for `n3bby`, and ensure `n3bby` has sudo access.
-3. Point the intended DNS name at the VM.
-4. Create a public Git repository and push this directory. Public repositories
-   can expose their linked GHCR packages without server-side registry secrets.
-5. Install mise, Docker with Buildx, `jq`, and OpenSSH on the operator machine.
-   `kubectl` or `kustomize` is optional; rendering falls back to the pinned
-   kubectl container. Mise installs the pinned Python and Ansible versions.
+![Architecture overview](docs/architecture-simple.svg)
 
-Edit these tracked files:
+## Prerequisites
 
-- `ansible/inventory/production/hosts.yml`: SSH host/user.
-- `ansible/inventory/production/group_vars/all.yml`: actual VM sizing and any
-  private CIDR that may reach the Kubernetes API.
-- `environments/production.toml`: hostname, emails, GHCR namespace, resource
-  limits, runner concurrency, and explicit policy settings.
+- An Ubuntu 22.04+ VM with at least 4 vCPU, 16 GiB RAM and 60 GB disk,
+  reachable over SSH by a user with sudo.
+- A DNS name pointing at the VM.
+- On your machine: [mise](https://mise.jdx.dev), Docker with Buildx, `jq`, and
+  OpenSSH. Mise installs the pinned Python and Ansible versions.
 
-The deployment firewall only protects the Kubernetes API: public TCP/6443 is
-blocked unless its source is in `k3s_api_private_cidrs`. It does not filter
-other service ports or outbound traffic. Provider-level netcup firewall rules
-and the DNS record remain manual prerequisites.
+## Set up your own deployment
 
-Install the pinned operator tools with:
+1. **Fork this repository** and keep it public, so the VM can pull its GHCR
+   images without registry credentials.
 
-```bash
-mise install
-```
+2. **Edit the configuration** for your setup:
 
-## Publish and lock the images
+   - `ansible/inventory/production/hosts.yml`: SSH host and user of your VM.
+   - `ansible/inventory/production/group_vars/all.yml`: VM size, and any
+     private CIDR allowed to reach the Kubernetes API.
+   - `environments/production.toml`: hostname, ACME and admin email,
+     `image_registry` (`ghcr.io/<your-github-user>`), resource limits and
+     runner concurrency.
 
-Run the manually triggered `Publish immutable images` workflow once. It builds
-the amd64 runner and server images, attaches provenance/SBOM attestations, and
-publishes the release tag from `versions.yaml`. Make both packages public, then run:
+3. **Install the tools:**
 
-```bash
-mise run lock-images
-git add environments/production.toml
-git commit -m "Lock production image digests"
-```
+   ```bash
+   mise install
+   ```
 
-## First deployment
+4. **Publish the images.** Run the `Publish immutable images` workflow from the
+   Actions tab of your fork. Make both new GHCR packages public, then pin their
+   digests:
 
-```bash
-mise run check
-mise run diff
-mise run deploy
-```
+   ```bash
+   mise run lock-images
+   git commit -am "Lock image digests"
+   ```
 
-The deploy is idempotent. It validates the VM and DNS, installs the pinned k3s
-and cert-manager releases with checked installer/manifest hashes, protects the
-public k3s API port, creates internal random secrets only when absent, applies and
-prunes the tracked desired state, waits for rollouts, and tests the public HTTPS
-health endpoint. It never copies secrets back to the operator machine.
-It also refuses to adopt an existing unmanaged `omnigent` namespace; use a
-clean VM/cluster so the old installation remains untouched.
+5. **Deploy:**
 
-Open the configured HTTPS URL and claim the initial administrator account with
-the configured admin email. Then authenticate the shared agent identities:
+   ```bash
+   mise run check
+   mise run diff
+   mise run deploy
+   ```
 
-```bash
-mise run setup-codex
-mise run setup-claude       # optional
-mise run setup-git-token    # optional private HTTPS repositories
-mise run setup-github-app   # GitHub repository picker
-```
+   The deploy is idempotent. It installs k3s and cert-manager, creates
+   internal secrets, applies the manifests and checks the public HTTPS
+   endpoint. Use a clean VM: it refuses to take over an existing `omnigent`
+   namespace.
 
-Codex uses a device flow and stores its shared auth on the `codex-home` PVC.
-Claude and the optional Git token are entered with hidden prompts and stored in
-the runner namespace Secret. Existing runner Jobs retain their original
-environment; create a new runner after rotating a credential.
+6. **Sign in.** Open your HTTPS URL and claim the admin account with the admin
+   email you configured.
 
-`setup-github-app` first prints the exact GitHub App settings, then prompts for
-the Client ID, Client secret, and App slug. It initializes the in-cluster Vault
-and stores the encryption material only in Kubernetes Secrets. It does not need
-a GitHub App private key or an external key store. After it finishes, connect
-GitHub once from Omnigent under Settings -> Sandbox Integrations.
+7. **Connect agent accounts** (all optional except at least one harness):
 
-## Applying changes
+   ```bash
+   mise run setup-codex        # Codex device login
+   mise run setup-claude       # Claude subscription token
+   mise run setup-git-token    # HTTPS token for private repositories
+   mise run setup-github-app   # GitHub repository picker
+   ```
 
-Every change uses the same path:
+   `setup-github-app` prints the GitHub App settings to use, then asks for its
+   Client ID, secret and slug. Afterwards, connect GitHub under Settings ->
+   Sandbox Integrations. Runners that already exist keep their old
+   credentials, so start a new session after rotating one.
+
+## Making changes
+
+Change files in Git, never on the server or in the cluster, then run:
 
 ```bash
 mise run check
 mise run diff
 mise run deploy
-mise run status
-mise run credential-status
+mise run status              # health, TLS, storage, failed runners
+mise run credential-status   # which credentials are present
 ```
 
-Do not edit the server or live Kubernetes objects. The renderer hashes
-ConfigMaps, Secret content produces an opaque Pod-template checksum, and images
-are digest-pinned, so relevant changes always trigger a rollout. Apply uses a
-dedicated label-scoped object inventory and prunes removed resources.
+- **Upgrade versions** in `versions.yaml`.
+- **Change images** (`images/`): bump `image_release`, run the publish
+  workflow again, then `mise run lock-images`, commit and deploy.
+- **Roll back** by reverting the commit and deploying again.
 
-Version changes belong only in `versions.yaml`. Image-input changes require a
-new `image_release`, a workflow run, and `mise run lock-images`. Production is never
-deployed automatically by CI.
+Production is never deployed automatically by CI.
 
-## Deliberate boundaries
+## Things to know
 
-- No backups or restore workflow are provided. Loss of the VM/disk means a
-  clean deployment and fresh authentication; application data is lost.
-- GitHub App connections use the in-cluster Vault Transit engine. The Vault
-  unseal material is stored in the same k3s cluster for unattended restarts;
-  this protects database-only disclosure, not a root or cluster compromise.
-- Runners have unrestricted networking. Security relies on namespace/RBAC,
-  user namespaces, admission policies, credentials, and resource
-  boundaries—not network filtering.
-- Runner agents are root inside a per-Pod user namespace, so they can
-  `apt-get install` and run Podman (`docker` is an alias). Podman containers
-  share the Pod's network and run without cgroups; `docker buildx` and the
-  Docker daemon API are unavailable. See `scripts/check-userns` to re-verify
-  support after k3s upgrades.
-- Codex's dangerous approval/sandbox bypass is explicit as
-  `codex_bypass_approvals`; it is currently enabled per the accepted policy.
-- Claude Code runs in `bypassPermissions` mode via
-  `claude_bypass_permissions`; it is currently enabled per the accepted policy.
-- Ordinary containerd isolation is used; gVisor/Kata are not installed.
-- One server replica is used because Omnigent's runner registry is in memory.
+- **No backups.** If the VM or its disk is lost, so is the data. Recovery
+  means a fresh VM, a new deploy and signing in again.
+- **Runners are trusted.** They have unrestricted network access, run as root
+  inside a per-Pod user namespace, and share the operator's agent logins. That
+  suits a single operator or a trusted team. Read the
+  [threat model](docs/THREAT_MODEL.md) before inviting others.
+- **Agents skip permission prompts** by default. Turn off
+  `claude_bypass_permissions` and `codex_bypass_approvals` in
+  `environments/production.toml` to change that.
+- **One server replica**, because Omnigent keeps its runner registry in memory.
+- **Outside monitoring.** The VM cannot report its own outage, so use an
+  external HTTPS monitor or your provider's console.
 
-See [the custom features overview](docs/CUSTOM_FEATURES.md) for what this
-deployment adds on top of upstream Omnigent.
-
-See [the threat model](docs/THREAT_MODEL.md),
-[operations contract](docs/OPERATIONS.md), and [implementation plan](plan.md).
-See the [simplified architecture diagram](docs/architecture-simple.svg) for a
-high-level overview and the [detailed deployment diagram](docs/architecture.svg)
-for the complete topology. Regenerate both with `mise run diagram` after
-architectural changes.
+The [detailed diagram](docs/architecture.svg) shows the complete topology.
+Regenerate both diagrams with `mise run diagram` after architectural changes.
