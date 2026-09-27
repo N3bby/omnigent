@@ -1,0 +1,80 @@
+name: Deploy
+# Runs the same mise tasks as a local deploy. Only ever started by hand, from
+# main, and gated by the `production` Environment, which holds the secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Task to run against production
+        type: choice
+        default: diff
+        options: [diff, deploy, status, smoke]
+permissions:
+  contents: read
+concurrency:
+  group: production
+  cancel-in-progress: false
+jobs:
+  run:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 45
+    env:
+      ENV: production
+      INVENTORY: ansible/inventory/production/hosts.yml
+      ANSIBLE_BECOME_ASK_PASS: "false"
+      USE_TAILSCALE: ${{ secrets.TS_OAUTH_CLIENT_ID != '' }}
+    steps:
+      # Third-party actions are pinned by SHA because this job holds root-level
+      # access to the VM.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - name: Join the tailnet
+        if: env.USE_TAILSCALE == 'true'
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+      - name: Configure SSH and sudo
+        shell: bash
+        env:
+          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          BECOME_PASSWORD: ${{ secrets.DEPLOY_BECOME_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in SSH_HOST SSH_PRIVATE_KEY SSH_KNOWN_HOSTS; do
+            [[ -n "${!name}" ]] || { echo "::error::secret DEPLOY_$name is not set"; exit 1; }
+          done
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          # The inventory's ansible_host may be an alias from the operator's
+          # own SSH config, so map it to the real host here.
+          alias="$(ansible-inventory -i "$INVENTORY" --host omnigent | jq -r '.ansible_host')"
+          cat > ~/.ssh/config <<EOF
+          Host $alias
+            HostName $SSH_HOST
+          Host *
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+          # Leave DEPLOY_BECOME_PASSWORD unset if the SSH user has passwordless sudo.
+          if [[ -n "$BECOME_PASSWORD" ]]; then
+            printf '%s' "$BECOME_PASSWORD" > "$RUNNER_TEMP/become-password"
+            echo "ANSIBLE_BECOME_PASSWORD_FILE=$RUNNER_TEMP/become-password" >> "$GITHUB_ENV"
+          fi
+      - run: mise run check
+      - run: mise run "$TASK"
+        env:
+          TASK: ${{ inputs.task }}
+      - name: Remove credentials
+        if: always()
+        run: rm -f ~/.ssh/deploy_key "$RUNNER_TEMP/become-password"

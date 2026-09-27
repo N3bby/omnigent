@@ -85,6 +85,22 @@ class ConfigurationTests(unittest.TestCase):
         tasks = (ROOT / ".mise.toml").read_text()
         self.assertIn("[tasks.setup-github-app]", tasks)
 
+    def test_production_deploys_are_manual_and_gated(self) -> None:
+        # ci/deploy.yml is a staging copy until it's moved into .github/workflows.
+        path = ROOT / ".github" / "workflows" / "deploy.yml"
+        workflow = (path if path.exists() else ROOT / "ci" / "deploy.yml").read_text()
+        triggers = workflow.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertIn("workflow_dispatch:", triggers)
+        self.assertNotIn("push:", triggers)
+        self.assertNotIn("pull_request", triggers)
+        self.assertIn("environment: production", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        for action in re.findall(r"uses: (\S+)", workflow):
+            self.assertRegex(action, r"@[0-9a-f]{40}$")
+        tasks = (ROOT / ".mise.toml").read_text()
+        self.assertNotIn("--ask-become-pass", tasks)
+        self.assertIn("become_ask_pass = True", (ROOT / "ansible.cfg").read_text())
+
     def test_ci_uses_mise_and_matches_published_architecture(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "validate.yml").read_text()
         self.assertIn("jdx/mise-action@v4", workflow)
