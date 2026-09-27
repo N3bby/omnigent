@@ -8,7 +8,7 @@ does, what you'll notice, and how to turn it off where that's possible.
 | --- | --- | --- |
 | [Usage limits in the UI](#see-your-usage-limits) | Your Claude and Codex usage, right in the composer | No |
 | [Model picker before the first session](#pick-a-model-straight-away) | Choose a model without starting a session first | No |
-| [Root and containers in runners](#install-packages-and-run-containers) | Agents can `apt-get install` and use Docker commands | No |
+| [Root and containers in runners](#install-packages-and-run-containers) | Agents can `apt-get install`, and use Docker, Compose and Testcontainers | No |
 | [No permission prompts](#agents-dont-stop-to-ask) | Agents work without waiting for approval | Yes, one setting per agent |
 | [GitHub repository picker](#pick-repositories-from-github) | Choose repositories from a list | Optional setup step |
 
@@ -65,18 +65,23 @@ saves the list to the artifacts volume, at the path set by
 ## Install packages and run containers
 
 Agents in a runner are root, so they can install whatever a task needs with
-`apt-get install`. They can also build and run containers with Podman, and
-`docker` commands work too.
+`apt-get install`. They can also build and run containers with Podman. The
+usual Docker tools work too: `docker` commands, `docker compose` with a
+`compose.yaml`, and test libraries like Testcontainers.
 
 That root only applies inside the pod. A Linux user namespace maps it to an
 ordinary, unprivileged user on the host.
 
 ![Root inside the pod maps to an unprivileged user on the host](images/runner-root.svg)
 
+Published ports (`-p 8080:80`, or `ports:` in compose) are reachable on
+`localhost` inside the runner, and compose services can reach each other by
+name.
+
 A few things don't work:
 
-- `docker buildx`, and tools that talk to the Docker daemon API
-- publishing container ports
+- `docker buildx` and BuildKit. `docker build` and compose `build:` services
+  still work, using Podman's builder.
 - per-container resource limits (the pod's limits still apply)
 
 Container images count towards the runner's home volume, which is capped by
@@ -89,10 +94,14 @@ Container images count towards the runner's home volume, which is capped by
   every runner pod use its own user namespace (`hostUsers: false`) and run as
   UID 0. The other rejects pods in `omnigent-sandboxes` that are privileged,
   mount `hostPath`, share host namespaces, or use host ports.
-- The runner image installs Podman with `docker` as an alias, configured by
-  `images/runner/containers/`. Containers
-  share the pod's network and run without their own cgroups, because
-  containerd doesn't hand cgroups to user-namespaced pods.
+- The runner image installs Podman with `docker` as an alias, and Docker
+  Compose, configured by `images/runner/containers/`. Containers run without
+  their own cgroups, because containerd doesn't hand cgroups to
+  user-namespaced pods.
+- `omnigent-podman-service` starts when the pod starts and serves the Docker
+  API at `/var/run/docker.sock`, which is where Docker tools look by default.
+  It also runs container healthchecks, which Podman normally leaves to
+  systemd, so `depends_on: service_healthy` works.
 - After upgrading k3s, run `scripts/check-userns` on the VM to check that
   all of this still works.
 

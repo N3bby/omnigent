@@ -18,4 +18,4 @@ web_builder_digest: "sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe42383
 pnpm: "11.15.1"
 claude_code: "2.1.281"
 codex_cli: "0.156.1"
-image_release: "v0.15.0-6"
+image_release: "v0.15.0-7"
