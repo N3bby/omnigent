@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 420" width="760" height="420" role="img" aria-labelledby="t d">
+  <title id="t">Usage limits in the composer</title>
+  <desc id="d">Illustration of the Omnigent composer. Next to the context ring it shows "5h 23% · 7d 81%". Clicking it opens a "Usage limits" popover with a bar and reset time for the 5-hour and weekly limits.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+    .pop { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; filter: drop-shadow(0 6px 12px rgba(15, 23, 42, .12)); }
+    .chip { fill: #f1f5f9; stroke: #e2e8f0; }
+    .hl { fill: #dbeafe; stroke: #2563eb; stroke-width: 1.5; }
+    .track { fill: #e2e8f0; }
+    .fill { fill: #64748b; }
+    .warnfill { fill: #d97706; }
+    .ring { fill: none; stroke: #e2e8f0; stroke-width: 3; }
+    .ringfill { fill: none; stroke: #64748b; stroke-width: 3; stroke-linecap: round; }
+    .send { fill: #0f172a; }
+    .sendicon { fill: none; stroke: #ffffff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .line { fill: none; stroke: #2563eb; stroke-width: 1.5; }
+    .head { fill: #2563eb; }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0f172a; }
+    .muted { fill: #64748b; }
+    .warn { fill: #b45309; }
+    .note { font-size: 13px; fill: #1d4ed8; }
+    .num { font-variant-numeric: tabular-nums; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0f172a; }
+      .panel, .pop { fill: #1e293b; stroke: #475569; }
+      .chip { fill: #334155; stroke: #475569; }
+      .hl { fill: #1e3a8a; stroke: #60a5fa; }
+      .track, .ring { fill: none; stroke: #475569; }
+      .track { fill: #334155; stroke: none; }
+      .fill { fill: #94a3b8; }
+      .warnfill { fill: #f59e0b; }
+      .ringfill { stroke: #94a3b8; }
+      .send { fill: #e2e8f0; }
+      .sendicon { stroke: #0f172a; }
+      .line { stroke: #60a5fa; }
+      .head { fill: #60a5fa; }
+      text { fill: #e2e8f0; }
+      .muted { fill: #94a3b8; }
+      .warn { fill: #fbbf24; }
+      .note { fill: #93c5fd; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0 L10 5 L0 10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="760" height="420" rx="16"/>
+
+  <!-- Popover -->
+  <rect class="pop" x="436" y="40" width="288" height="168" rx="10"/>
+  <text x="452" y="58" font-size="12" font-weight="600" class="muted">Usage limits</text>
+
+  <text x="452" y="86" font-size="14">5-hour limit</text>
+  <text x="708" y="86" font-size="14" text-anchor="end" class="muted num">23% used</text>
+  <rect class="track" x="452" y="94" width="256" height="6" rx="3"/>
+  <rect class="fill" x="452" y="94" width="59" height="6" rx="3"/>
+  <text x="452" y="118" font-size="12" class="muted num">Resets in 3h 12m · Sat 4:40 PM</text>
+
+  <text x="452" y="152" font-size="14">Weekly limit</text>
+  <text x="708" y="152" font-size="14" text-anchor="end" class="warn num">81% used</text>
+  <rect class="track" x="452" y="160" width="256" height="6" rx="3"/>
+  <rect class="warnfill" x="452" y="160" width="207" height="6" rx="3"/>
+  <text x="452" y="184" font-size="12" class="muted num">Resets in 2d 5h · Mon 9:00 AM</text>
+
+  <!-- Composer -->
+  <rect class="panel" x="36" y="252" width="688" height="84" rx="14"/>
+  <text x="56" y="282" font-size="14" class="muted">Ask the agent to do something…</text>
+
+  <rect class="chip" x="52" y="300" width="84" height="24" rx="12"/>
+  <text x="94" y="316" font-size="12" text-anchor="middle" class="muted">Model ▾</text>
+  <rect class="chip" x="144" y="300" width="96" height="24" rx="12"/>
+  <text x="192" y="316" font-size="12" text-anchor="middle" class="muted">my-repo · main</text>
+
+  <rect class="hl" x="524" y="299" width="118" height="26" rx="6"/>
+  <text x="583" y="316" font-size="12.5" text-anchor="middle" class="num"><tspan class="muted">5h</tspan> 23% <tspan class="muted">·</tspan> <tspan class="muted">7d</tspan> <tspan class="warn">81%</tspan></text>
+
+  <circle class="ring" cx="662" cy="312" r="8"/>
+  <path class="ringfill" d="M662 304 A8 8 0 0 1 669.6 314.5"/>
+  <circle class="send" cx="698" cy="312" r="14"/>
+  <path class="sendicon" d="M698 318 V306 M693 311 L698 306 L703 311"/>
+
+  <!-- Callouts -->
+  <text class="note" x="36" y="112">Click or tap the numbers to see</text>
+  <text class="note" x="36" y="130">how much is used and when each</text>
+  <text class="note" x="36" y="148">limit resets.</text>
+  <text class="note" x="36" y="184">Numbers turn amber at 75%</text>
+  <text class="note" x="36" y="202">and red at 90%.</text>
+  <path class="line" d="M262 124 C340 124 380 124 432 124" marker-end="url(#a)"/>
+
+  <path class="line" d="M583 356 V329" marker-end="url(#a)"/>
+  <text class="note" x="583" y="378" text-anchor="middle">Usage for this session's Claude or Codex login,</text>
+  <text class="note" x="583" y="396" text-anchor="middle">next to the context ring</text>
+</svg>

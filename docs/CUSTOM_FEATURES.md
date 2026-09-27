@@ -1,90 +1,158 @@
 # Custom features
 
-This deployment runs Omnigent `v0.15.0` (`omnigent_commit` in
-`versions.yaml`) with a few additions on top of upstream. Each one is either an
-upstream patch applied at image build time or deployment-side configuration.
-The image build and `mise run test` fail if a patch no longer applies. Delete a
-patch once upstream ships the same behaviour.
+This deployment runs upstream Omnigent `v0.15.0` (pinned as `omnigent_commit`
+in `versions.yaml`) with a few extras on top. This page explains what each one
+does, what you'll notice, and how to turn it off where that's possible.
 
-| Feature | Where it lives | Toggle |
+| Feature | What you get | Can you turn it off? |
 | --- | --- | --- |
-| Usage limits in the composer | `images/runner/patches/0001-rate-limits.patch`, `images/server/patches/0002-rate-limits.patch`, `images/server/web-patches/0001-composer-rate-limits.patch` | Always on |
-| Sandbox model picker before first runner | `images/server/patches/0001-sandbox-model-catalog-fallback.patch`, `scripts/render` | Always on |
-| Root + Podman in runner Pods | `kubernetes/base/runner-userns.yaml`, `images/runner/containers/`, `scripts/check-userns` | Always on |
-| Claude Code permission bypass | `images/runner/claude-wrapper.sh` | `claude_bypass_permissions` |
-| Codex approval/sandbox bypass | `images/runner/codex-wrapper.sh` | `codex_bypass_approvals` |
-| GitHub App repository picker | `kubernetes/base/vault.yaml`, `scripts/setup-github-app` | `mise run setup-github-app` |
+| [Usage limits in the UI](#see-your-usage-limits) | Your Claude and Codex usage, right in the composer | No |
+| [Model picker before the first session](#pick-a-model-straight-away) | Choose a model without starting a session first | No |
+| [Root and containers in runners](#install-packages-and-run-containers) | Agents can `apt-get install` and use Docker commands | No |
+| [No permission prompts](#agents-dont-stop-to-ask) | Agents work without waiting for approval | Yes, one setting per agent |
+| [GitHub repository picker](#pick-repositories-from-github) | Choose repositories from a list | Optional setup step |
 
-## Harness usage limits next to the context ring
+## See your usage limits
 
-The composer shows each harness login's subscription usage (the 5-hour and
-weekly windows for Claude and Codex) next to the context ring. This appears in
-the browser, desktop and mobile apps, because all three load the server's web UI.
+Claude and Codex subscriptions have a 5-hour limit and a weekly limit. The
+composer shows how much of each you've used, next to the context ring, so you
+don't hit a limit halfway through a task. Click or tap the numbers to see bars
+and reset times. It works in the browser and in the desktop and mobile apps.
 
-- **Runner patch:** the Claude and Codex forwarders report the rate-limit
-  windows their CLI exposes.
-- **Server patch:** stores the latest windows per session and broadcasts them
-  as a session event.
-- **Web patch:** adds `ComposerRateLimits` and wires the event into the chat
-  store.
+![Illustration of the usage limits in the composer](images/usage-limits.svg)
 
-The upstream image ships a prebuilt web UI, so the server image rebuilds it
-from `omnigent_commit` with `images/server/web-patches/` applied. It uses the
-pinned `web_builder` Node image and `pnpm`. A session shows the windows once
-its harness first reports them: for Claude that is after the first response,
-and for Codex at the first turn. Drop the web rebuild once no web patches
-remain.
+The numbers appear once the agent first reports them. For Claude that's after
+its first reply; for Codex it's when the first turn starts. They belong to the
+login, so every session using the same account shows the same numbers.
 
-## Sandbox models before a session starts
+<details>
+<summary>How it works</summary>
 
-With subscription logins the server has no way to list models, so the
-Kubernetes sandbox picker showed "Models unavailable" until a runner existed.
-The server patch keeps the model catalog that runners last reported for each
-harness and serves it as a preview. The catalog is stored in
-`/data/artifacts/.deployment/sandbox-model-catalogs.json`, set through
-`OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH`. The runner still validates the chosen
-model at launch.
+Three small patches work together:
 
-## Root and Podman inside runner Pods
+- **Runner** (`images/runner/patches/0001-rate-limits.patch`): passes on the
+  usage numbers that the Claude and Codex CLIs report.
+- **Server** (`images/server/patches/0002-rate-limits.patch`): keeps the latest
+  numbers per session and sends them to the UI.
+- **Web UI** (`images/server/web-patches/0001-composer-rate-limits.patch`):
+  adds the `ComposerRateLimits` display.
 
-Runner agents can `apt-get install` packages and build or run containers.
+The upstream server image comes with a prebuilt web UI, so the server image
+build rebuilds the UI from source with the web patch applied.
 
-- A `MutatingAdmissionPolicy` rewrites runner Pods (`omnigent.ai/role:
-  sandbox-host`) to use `hostUsers: false` and run as UID 0. That is root
-  inside a per-Pod user namespace, not on the host. A validating policy rejects
-  any Pod in `omnigent-sandboxes` that shares host users or namespaces, mounts
-  `hostPath`, runs privileged, or uses host ports.
-- The runner image ships Podman, with `docker` as an alias. Containers run
-  without cgroups and share the Pod's network, because containerd does not
-  delegate cgroups to user-namespaced Pods. The Pod's own resource limits
-  still apply. Image storage lives on the HOME volume, which is bounded by
-  `runner_home_limit`.
-- Not available: the Docker daemon API, `docker buildx`, and container port
-  publishing.
-- Run `scripts/check-userns` to re-verify user-namespace support after k3s
-  upgrades.
+</details>
 
-## Agent permission bypass policies
+## Pick a model straight away
 
-Both of these are explicit settings in `environments/production.toml`, and
-both are enabled by default. See
-[the threat model](THREAT_MODEL.md).
+Upstream Omnigent can only list models once a runner has started. With
+subscription logins, the model picker would say "Models unavailable" until
+then. This deployment remembers the list that runners last reported and shows
+it straight away. The runner still checks the chosen model when it starts.
 
-- `claude_bypass_permissions`: the runner's `claude` wrapper writes
+![How the model list is remembered](images/model-picker.svg)
+
+On a brand-new install the list is empty until the first session has run once.
+
+<details>
+<summary>How it works</summary>
+
+The server patch (`images/server/patches/0001-sandbox-model-catalog-fallback.patch`)
+saves the list to the artifacts volume, at the path set by
+`OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH` in `scripts/render`.
+
+</details>
+
+## Install packages and run containers
+
+Agents in a runner are root, so they can install whatever a task needs with
+`apt-get install`. They can also build and run containers with Podman, and
+`docker` commands work too.
+
+That root only applies inside the pod. A Linux user namespace maps it to an
+ordinary, unprivileged user on the host.
+
+![Root inside the pod maps to an unprivileged user on the host](images/runner-root.svg)
+
+A few things don't work:
+
+- `docker buildx`, and tools that talk to the Docker daemon API
+- publishing container ports
+- per-container resource limits (the pod's limits still apply)
+
+Container images count towards the runner's home volume, which is capped by
+`runner_home_limit`.
+
+<details>
+<summary>How it works</summary>
+
+- `kubernetes/base/runner-userns.yaml` holds two admission policies. One makes
+  every runner pod use its own user namespace (`hostUsers: false`) and run as
+  UID 0. The other rejects pods in `omnigent-sandboxes` that are privileged,
+  mount `hostPath`, share host namespaces, or use host ports.
+- The runner image installs Podman with `docker` as an alias, configured by
+  `images/runner/containers/`. Containers
+  share the pod's network and run without their own cgroups, because
+  containerd doesn't hand cgroups to user-namespaced pods.
+- After upgrading k3s, run `scripts/check-userns` on the VM to check that
+  all of this still works.
+
+</details>
+
+## Agents don't stop to ask
+
+By default, Claude Code and Codex run without asking for approval before each
+command or edit. The runner sandbox is what keeps them contained. See the
+[threat model](THREAT_MODEL.md) for what that does and doesn't protect.
+
+To make an agent ask again, turn off its setting in
+`environments/production.toml` and deploy:
+
+| Setting | Agent |
+| --- | --- |
+| `claude_bypass_permissions` | Claude Code |
+| `codex_bypass_approvals` | Codex |
+
+New runners use the new setting; runners that already exist keep the old one.
+
+<details>
+<summary>How it works</summary>
+
+- **Claude Code** (`images/runner/claude-wrapper.sh`): writes
   `/etc/claude-code/managed-settings.json` with
-  `defaultMode: bypassPermissions`. Managed settings outrank user and project
-  settings, so the policy holds whatever the session configures. It also sets
-  `skipDangerousModePermissionPrompt`. Without it, Claude Code shows a consent
-  dialog the first time it starts in bypass mode, and session start blocks
-  because Omnigent cannot answer the dialog.
-- `codex_bypass_approvals`: the `codex` wrapper adds
+  `defaultMode: bypassPermissions`, which a session's own settings can't
+  override. It also sets `skipDangerousModePermissionPrompt`, because Claude
+  Code otherwise shows a one-time consent dialog that Omnigent can't answer.
+- **Codex** (`images/runner/codex-wrapper.sh`): adds
   `--dangerously-bypass-approvals-and-sandbox`. It also links the shared Codex
-  auth from the `codex-home` PVC into each session's `CODEX_HOME`.
+  login into each session.
 
-## GitHub App integration
+</details>
 
-`mise run setup-github-app` configures a GitHub App (Client ID, secret and
-slug) for the repository picker under Settings -> Sandbox Integrations. The
-credentials are encrypted by an in-cluster Vault Transit engine. The Vault
-unseal material stays in Kubernetes Secrets so restarts need no one present.
-The server image adds the pinned `hvac` client for this.
+## Pick repositories from GitHub
+
+Connect a GitHub App and you can pick repositories from your GitHub account
+when you start a session.
+
+1. Run `mise run setup-github-app`. It prints the settings to use for a new
+   GitHub App, then asks for its Client ID, Client secret and slug.
+2. In Omnigent, go to Settings -> Sandbox Integrations and connect GitHub.
+
+Each user's GitHub tokens are encrypted by a small Vault service inside the
+cluster before they're stored in the database.
+
+<details>
+<summary>How it works</summary>
+
+Vault runs from `kubernetes/base/vault.yaml` and uses its Transit engine for
+the encryption. The key that unlocks Vault is stored in a Kubernetes Secret,
+so Vault comes back by itself after a restart. The server image adds the
+`hvac` Python client so the server can talk to Vault.
+
+</details>
+
+## Keeping the patches up to date
+
+The patches are applied when the images are built. If a patch no longer
+applies to the pinned `omnigent_commit`, the image build and `mise run test`
+fail. Once upstream Omnigent ships the same behaviour, delete the patch. Once
+no web patches are left, the server image can stop rebuilding the web UI.

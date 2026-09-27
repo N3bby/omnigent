@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 320" width="900" height="320" role="img" aria-labelledby="t d">
+  <title id="t">Root inside a runner pod</title>
+  <desc id="d">Inside the runner pod the agent is root and can run apt-get and Podman. A user namespace maps that root to a high, unprivileged UID on the host. An admission policy rejects privileged pods, hostPath mounts, host namespaces and host ports.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+    .term { fill: #0f172a; stroke: #334155; stroke-width: 1.5; }
+    .guard { fill: #fef2f2; stroke: #dc2626; stroke-width: 1.5; }
+    .line { fill: none; stroke: #475569; stroke-width: 1.6; }
+    .head { fill: #475569; }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0f172a; }
+    .h { font-size: 13px; font-weight: 700; letter-spacing: .06em; fill: #475569; }
+    .sub { font-size: 13px; fill: #334155; }
+    .lbl { font-size: 11.5px; fill: #475569; }
+    .t { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; fill: #e2e8f0; }
+    .p { fill: #94a3b8; }
+    .ok { fill: #4ade80; }
+    .bad { fill: #b91c1c; font-weight: 650; font-size: 13px; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0f172a; }
+      .card { fill: #1e293b; stroke: #475569; }
+      .term { fill: #020617; stroke: #475569; }
+      .guard { fill: #2a0f12; stroke: #f87171; }
+      .line { stroke: #94a3b8; }
+      .head { fill: #94a3b8; }
+      text { fill: #e2e8f0; }
+      .h, .lbl { fill: #94a3b8; }
+      .sub { fill: #cbd5e1; }
+      .bad { fill: #fca5a5; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0 L10 5 L0 10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="900" height="320" rx="16"/>
+
+  <text class="h" x="32" y="44">INSIDE THE RUNNER POD</text>
+  <rect class="term" x="32" y="58" width="400" height="148" rx="10"/>
+  <text class="t" x="50" y="88"><tspan class="p">$ </tspan>id</text>
+  <text class="t" x="50" y="108">uid=0(root) gid=0(root)</text>
+  <text class="t" x="50" y="138"><tspan class="p">$ </tspan>apt-get install -y ripgrep <tspan class="ok">✓</tspan></text>
+  <text class="t" x="50" y="168"><tspan class="p">$ </tspan>docker run --rm alpine echo hi <tspan class="ok">✓</tspan></text>
+  <text class="t" x="50" y="188"><tspan class="p">  (docker runs Podman)</tspan></text>
+
+  <path class="line" d="M436 132 H500" marker-end="url(#a)"/>
+  <text class="lbl" x="468" y="122" text-anchor="middle">user</text>
+  <text class="lbl" x="468" y="152" text-anchor="middle">namespace</text>
+
+  <text class="h" x="504" y="44">ON THE HOST</text>
+  <rect class="card" x="504" y="58" width="364" height="148" rx="10"/>
+  <text class="sub" x="524" y="90" font-weight="650">The same process is an ordinary user</text>
+  <text class="sub" x="524" y="118">• runs as a high, unused UID such as 131072</text>
+  <text class="sub" x="524" y="142">• can't read or change host files</text>
+  <text class="sub" x="524" y="166">• its root powers only work inside the pod</text>
+  <text class="sub" x="524" y="190">• still bound by the pod's CPU, memory, disk</text>
+
+  <rect class="guard" x="32" y="230" width="836" height="62" rx="10"/>
+  <text class="bad" x="52" y="256">Rejected in the sandbox namespace</text>
+  <text class="sub" x="52" y="278">privileged pods · hostPath mounts · sharing host users, network, PID or IPC · host ports</text>
+</svg>
