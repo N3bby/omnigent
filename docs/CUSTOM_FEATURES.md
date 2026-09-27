@@ -131,7 +131,9 @@ New runners use the new setting; runners that already exist keep the old one.
 ## Pick repositories from GitHub
 
 Connect a GitHub App and you can pick repositories from your GitHub account
-when you start a session.
+when you start a session. Runners can clone and push to whichever
+repositories the App is installed on, private ones included, so you don't
+also need `mise run setup-git-token`.
 
 1. Run `mise run setup-github-app`. It prints the settings to use for a new
    GitHub App, then asks for its Client ID, Client secret and slug.

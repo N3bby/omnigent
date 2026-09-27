@@ -73,19 +73,31 @@ deployed by digest.
 6. **Sign in.** Open your HTTPS URL and claim the admin account with the admin
    email you configured.
 
-7. **Connect agent accounts** (all optional except at least one harness):
+7. **Connect at least one agent:**
 
    ```bash
    mise run setup-codex        # Codex device login
    mise run setup-claude       # Claude subscription token
-   mise run setup-git-token    # HTTPS token for private repositories
-   mise run setup-github-app   # GitHub repository picker
    ```
 
-   `setup-github-app` prints the GitHub App settings to use, then asks for its
-   Client ID, secret and slug. Afterwards, connect GitHub under Settings ->
-   Sandbox Integrations. Runners that already exist keep their old
-   credentials, so start a new session after rotating one.
+8. **Give runners access to your repositories.** Pick one of these:
+
+   ```bash
+   mise run setup-github-app   # GitHub App (recommended)
+   mise run setup-git-token    # a single HTTPS Git token
+   ```
+
+   The GitHub App adds a repository picker and gives each user their own
+   access. It reaches whichever repositories the App is installed on,
+   including private ones. `setup-github-app` prints the App settings to use,
+   then asks for its Client ID, secret and slug. Afterwards, connect GitHub
+   under Settings -> Sandbox Integrations.
+
+   A Git token is simpler to set up, but every session shares the same token
+   and there's no repository picker.
+
+Runners that already exist keep their old credentials, so start a new session
+after rotating one.
 
 ## Making changes
 
