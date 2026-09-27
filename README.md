@@ -16,12 +16,13 @@ What you get:
 Images are built by GitHub Actions, published to your GHCR namespace, and
 deployed by digest.
 
-![Architecture overview](docs/architecture-simple.svg)
+![How the deployment fits together](docs/architecture.svg)
 
 ## Prerequisites
 
-- An Ubuntu 22.04+ VM with at least 4 vCPU, 16 GiB RAM and 60 GB disk,
-  reachable over SSH by a user with sudo.
+- An x86_64 Ubuntu 22.04+ VM that you can reach over SSH as a user with sudo.
+  2 vCPU, 4 GiB RAM and 40 GB disk is enough for a session or two at a time.
+  Each extra concurrent session needs about 0.5 vCPU and 1 GiB more.
 - A DNS name pointing at the VM.
 - On your machine: [mise](https://mise.jdx.dev), Docker with Buildx, `jq`, and
   OpenSSH. Mise installs the pinned Python and Ansible versions.
@@ -34,8 +35,9 @@ deployed by digest.
 2. **Edit the configuration** for your setup:
 
    - `ansible/inventory/production/hosts.yml`: SSH host and user of your VM.
-   - `ansible/inventory/production/group_vars/all.yml`: VM size, and any
-     private CIDR allowed to reach the Kubernetes API.
+   - `ansible/inventory/production/group_vars/all.yml`: your VM's size (the
+     deploy refuses smaller hosts), and any private CIDR allowed to reach the
+     Kubernetes API.
    - `environments/production.toml`: hostname, ACME and admin email,
      `image_registry` (`ghcr.io/<your-github-user>`), resource limits and
      runner concurrency.
@@ -108,16 +110,11 @@ Production is never deployed automatically by CI.
 
 - **No backups.** If the VM or its disk is lost, so is the data. Recovery
   means a fresh VM, a new deploy and signing in again.
-- **Runners are trusted.** They have unrestricted network access, run as root
-  inside a per-Pod user namespace, and share the operator's agent logins. That
-  suits a single operator or a trusted team. Read the
+- **Runners are trusted.** They have unrestricted network access and share
+  the operator's agent logins. Agents are root inside their own Pod so they can
+  install packages, but a user namespace maps that root to an unprivileged
+  user on the host. That suits a single operator or a trusted team. Read the
   [threat model](docs/THREAT_MODEL.md) before inviting others.
 - **Agents skip permission prompts** by default. Turn off
   `claude_bypass_permissions` and `codex_bypass_approvals` in
   `environments/production.toml` to change that.
-- **One server replica**, because Omnigent keeps its runner registry in memory.
-- **Outside monitoring.** The VM cannot report its own outage, so use an
-  external HTTPS monitor or your provider's console.
-
-The [detailed diagram](docs/architecture.svg) shows the complete topology.
-Regenerate both diagrams with `mise run diagram` after architectural changes.
