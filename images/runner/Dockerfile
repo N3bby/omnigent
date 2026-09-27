@@ -4,13 +4,17 @@ FROM ${OMNIGENT_HOST_IMAGE}
 USER root
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        podman podman-docker crun \
+        podman podman-docker crun aardvark-dns catatonit docker-compose curl \
     && rm -rf /var/lib/apt/lists/* \
     && touch /etc/containers/nodocker \
-    && podman --version
+    && podman --version \
+    && docker-compose version
 RUN install -d -m 1777 /etc/claude-code
 COPY containers/containers.conf /etc/containers/containers.conf.d/50-omnigent.conf
 COPY containers/storage.conf /etc/containers/storage.conf
+COPY --chmod=0755 containers/podman-service.sh /usr/local/bin/omnigent-podman-service
+COPY --chmod=0755 containers/docker-compose.sh /usr/local/bin/docker-compose
+COPY containers/podman-service-profile.sh /etc/profile.d/omnigent-podman-service.sh
 
 WORKDIR /opt/omnigent-agent-clis
 COPY package.json package-lock.json ./
