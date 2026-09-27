@@ -9,8 +9,8 @@ What you get:
 - k3s with Traefik and cert-manager (automatic HTTPS)
 - one Omnigent server, PostgreSQL, and a small in-cluster Vault
 - agent sessions in short-lived Kubernetes runner Pods
-- a few features on top of upstream Omnigent, such as usage limits in the
-  composer and Podman inside runners. See
+- a few features on top of upstream Omnigent, such as showing your Claude and
+  Codex usage limits in the Omnigent UI, and Podman inside runners. See
   [custom features](docs/CUSTOM_FEATURES.md).
 
 Images are built by GitHub Actions, published to your GHCR namespace, and
