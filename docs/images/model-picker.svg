@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 236" width="900" height="236" role="img" aria-labelledby="t d">
+  <title id="t">Model picker before a runner exists</title>
+  <desc id="d">A runner reports the models its agent can use. The server saves that list per agent. New sessions show the saved list in the model picker straight away, and the runner checks the chosen model when it starts.</desc>
+  <style>
+    .bg { fill: #f8fafc; }
+    .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+    .accent { fill: #dbeafe; stroke: #2563eb; stroke-width: 2; }
+    .store { fill: #fef3c7; stroke: #d97706; stroke-width: 1.5; }
+    .line { fill: none; stroke: #475569; stroke-width: 1.6; }
+    .loop { fill: none; stroke: #475569; stroke-width: 1.4; stroke-dasharray: 5 4; }
+    .head { fill: #475569; }
+    .badge { fill: #0f172a; }
+    .badgetext { fill: #ffffff; font-size: 12px; font-weight: 700; }
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0f172a; }
+    .title { font-size: 15px; font-weight: 650; }
+    .sub { font-size: 12.5px; fill: #475569; }
+    .lbl { font-size: 11.5px; fill: #475569; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; fill: #475569; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0f172a; }
+      .card { fill: #1e293b; stroke: #475569; }
+      .accent { fill: #1e3a8a; stroke: #60a5fa; }
+      .store { fill: #422006; stroke: #f59e0b; }
+      .line, .loop { stroke: #94a3b8; }
+      .head { fill: #94a3b8; }
+      .badge { fill: #e2e8f0; }
+      .badgetext { fill: #0f172a; }
+      text { fill: #e2e8f0; }
+      .sub, .lbl, .mono { fill: #94a3b8; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0 L10 5 L0 10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="900" height="236" rx="16"/>
+
+  <rect class="card" x="32" y="40" width="252" height="92" rx="10"/>
+  <circle class="badge" cx="56" cy="66" r="11"/>
+  <text class="badgetext" x="56" y="70" text-anchor="middle">1</text>
+  <text class="title" x="76" y="71">A runner starts</text>
+  <text class="sub" x="52" y="96">Claude Code or Codex reports</text>
+  <text class="sub" x="52" y="115">which models it can use</text>
+
+  <rect class="store" x="324" y="40" width="252" height="92" rx="10"/>
+  <circle class="badge" cx="348" cy="66" r="11"/>
+  <text class="badgetext" x="348" y="70" text-anchor="middle">2</text>
+  <text class="title" x="368" y="71">The server saves it</text>
+  <text class="sub" x="344" y="96">latest list per agent, kept</text>
+  <text class="sub" x="344" y="115">across restarts</text>
+
+  <rect class="accent" x="616" y="40" width="252" height="92" rx="10"/>
+  <circle class="badge" cx="640" cy="66" r="11"/>
+  <text class="badgetext" x="640" y="70" text-anchor="middle">3</text>
+  <text class="title" x="660" y="71">New sessions</text>
+  <text class="sub" x="636" y="96">the model picker shows the saved</text>
+  <text class="sub" x="636" y="115">list right away</text>
+
+  <path class="line" d="M284 86 H322" marker-end="url(#a)"/>
+  <path class="line" d="M576 86 H614" marker-end="url(#a)"/>
+
+  <path class="loop" d="M742 132 V172 C742 190 730 196 712 196 H176 C160 196 158 188 158 172 V134" marker-end="url(#a)"/>
+  <text class="lbl" x="450" y="188" text-anchor="middle">the chosen model starts the next runner, which checks it and refreshes the list</text>
+
+  <text class="mono" x="450" y="224" text-anchor="middle">saved in /data/artifacts/.deployment/sandbox-model-catalogs.json</text>
+</svg>
