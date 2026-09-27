@@ -116,7 +116,47 @@ mise run credential-status   # which credentials are present
   workflow again, then `mise run lock-images`, commit and deploy.
 - **Roll back** by reverting the commit and deploying again.
 
-Production is never deployed automatically by CI.
+Production is never deployed automatically. You can also run these steps
+from GitHub Actions instead of your machine; see below.
+
+## Deploying from GitHub Actions
+
+> **Not active yet.** The workflow is staged at `ci/deploy.yml`. Enable it with
+> `git mv ci/deploy.yml .github/workflows/deploy.yml`, then commit and push
+> from an account that is allowed to change workflows.
+
+The `Deploy` workflow runs `mise run check` followed by `diff`, `deploy`,
+`status` or `smoke` against production. It only runs when started by hand from
+the Actions tab, only from `main`, and only in the `production` Environment.
+
+1. **Create an SSH key for CI** and add its public half to the SSH user's
+   `~/.ssh/authorized_keys` on the VM.
+
+2. **Create the `production` Environment** under Settings -> Environments.
+   Add yourself as a required reviewer, and limit deployment branches to
+   `main`.
+
+3. **Add these Environment secrets:**
+
+   | Secret | Value |
+   | --- | --- |
+   | `DEPLOY_SSH_HOST` | The VM's real hostname or IP. `ansible_host` in `hosts.yml` may be an alias from your own SSH config. |
+   | `DEPLOY_SSH_PRIVATE_KEY` | The CI private key. |
+   | `DEPLOY_SSH_KNOWN_HOSTS` | Output of `ssh-keyscan <DEPLOY_SSH_HOST>`. Check it against the VM's host key. |
+   | `DEPLOY_BECOME_PASSWORD` | The SSH user's sudo password. Leave it out if that user has passwordless sudo. |
+
+4. **Make SSH reachable.** GitHub-hosted runners connect from public IPs that
+   change. If SSH on your VM is only reachable over [Tailscale](https://tailscale.com),
+   also add `TS_OAUTH_CLIENT_ID` and `TS_OAUTH_SECRET`, from a Tailscale OAuth
+   client that can create `tag:ci` auth keys. The workflow then joins your
+   tailnet before connecting.
+
+Anyone who can get a run approved, or who compromises an action used in the
+workflow, has root on the VM. Only give write access to people you would
+give sudo, and keep third-party actions pinned by commit SHA.
+
+The credential setup tasks (`setup-codex`, `setup-claude`, `setup-git-token`,
+`setup-github-app`) are interactive, so they still run from your machine.
 
 ## Things to know
 
