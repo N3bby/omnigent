@@ -23,7 +23,7 @@ Short of a Linux kernel bug, it **can't**:
 
 - take over the VM
 - read the database or the server's secrets
-- touch other namespaces or the Kubernetes API
+- use the Kubernetes API, or touch other namespaces
 - use more CPU, memory or disk than its limits allow
 
 ## The network is open
