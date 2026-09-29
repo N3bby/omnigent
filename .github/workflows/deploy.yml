@@ -1,19 +1,12 @@
 name: Deploy
-# Runs `mise run deploy` and friends as a short-lived GitHub OIDC identity that
-# can only manage the application in the Omnigent namespaces. There are no
-# stored credentials. Platform changes still need `mise run bootstrap` from
-# your machine; the deploy refuses to run until that is done.
-#
-# `release` builds both images, commits their digests to main, then deploys
-# that commit, all after one approval when the run starts.
+# Builds both images, commits their digests to main, then deploys that commit,
+# all after one approval when the run starts. It deploys as a short-lived
+# GitHub OIDC identity that can only manage the application in the Omnigent
+# namespaces; there are no stored credentials. Platform changes still need
+# `mise run bootstrap` from your machine; the deploy refuses to run until that
+# is done.
 on:
   workflow_dispatch:
-    inputs:
-      task:
-        description: Task to run against production
-        type: choice
-        default: release
-        options: [release, diff, deploy, status, smoke]
 permissions: {}
 concurrency:
   group: production
@@ -27,8 +20,8 @@ jobs:
     environment: production
     timeout-minutes: 60
     permissions:
-      contents: write # a release commits the new digests to main
-      packages: write # a release pushes the new images
+      contents: write # commits the new digests to main
+      packages: write # pushes the new images
       id-token: write # OIDC tokens for Tailscale and the Kubernetes API
     env:
       ENV: production
@@ -40,13 +33,11 @@ jobs:
           persist-credentials: false
       - name: Build the images
         id: images
-        if: inputs.task == 'release'
         uses: ./.github/actions/build-images
         with:
           token: ${{ github.token }}
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       - name: Lock the new images
-        if: inputs.task == 'release'
         shell: bash
         env:
           RUNNER_DIGEST: ${{ steps.images.outputs.runner_digest }}
@@ -64,7 +55,7 @@ jobs:
             -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
             commit -qam "Lock image digests from Deploy run ${GITHUB_RUN_ID}"
           git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main \
-            || { echo "::error::main moved during the build; run the release again"; exit 1; }
+            || { echo "::error::main moved during the build; run Deploy again"; exit 1; }
           git log --oneline -1
       - name: Join the tailnet
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
@@ -89,9 +80,4 @@ jobs:
             sleep 10
           done
           exit 1
-      - run: mise run check
-      - name: Run the task
-        shell: bash
-        env:
-          TASK: ${{ inputs.task }}
-        run: mise run "${TASK/#release/deploy}"
+      - run: mise run deploy
