@@ -93,7 +93,7 @@ def main() -> None:
             "OMNIGENT_AUTH_PROVIDER=accounts",
             "OMNIGENT_ACCOUNTS_AUTO_OPEN=0",
             f"OMNIGENT_ACCOUNTS_BASE_URL=https://{cfg['hostname']}",
-            "CODEX_HOME=/mnt/codex-home",
+            "CODEX_HOME=/opt/codex-home",
             f"OMNIGENT_CODEX_BYPASS_APPROVALS={bypass}",
             f"OMNIGENT_CLAUDE_BYPASS_PERMISSIONS={claude_bypass}",
             "OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH=/data/artifacts/.deployment/sandbox-model-catalogs.json",

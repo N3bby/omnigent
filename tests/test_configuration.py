@@ -62,6 +62,14 @@ class ConfigurationTests(unittest.TestCase):
             if line.lstrip().startswith("image:"):
                 self.assertIn("@sha256:", line)
 
+    def test_runners_share_only_the_codex_login(self) -> None:
+        subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
+        env = (ROOT / ".generated" / "ci" / "omnigent-config.env").read_text()
+        self.assertIn("CODEX_HOME=/opt/codex-home\n", env)
+        dockerfile = (ROOT / "images" / "runner" / "Dockerfile").read_text()
+        self.assertIn("ln -s /mnt/codex-home/auth.json /opt/codex-home/auth.json", dockerfile)
+        self.assertIn("codex-config.toml /opt/codex-home/config.toml", dockerfile)
+
     def test_production_contains_no_secret_values(self) -> None:
         text = (ROOT / "environments" / "production.toml").read_text().lower()
         for forbidden in ("password", "oauth_token", "client_secret", "git_token"):
