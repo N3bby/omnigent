@@ -3,6 +3,16 @@ hostname = "omni.n3b.by"
 acme_email = "levi.vandenbempt.sjcm@gmail.com"
 admin_email = "levi.vandenbempt.sjcm@gmail.com"
 
+# Where kubectl reaches the Kubernetes API. The firewall blocks port 6443 on
+# the public interface, so use a private name such as the VM's Tailscale
+# MagicDNS name. Defaults to hostname.
+# kubernetes_api_host = "netcup.your-tailnet.ts.net"
+
+# The GitHub repository (by numeric ID) and Environment whose Actions runs may
+# deploy. Remove both to turn off deploying from GitHub Actions.
+deploy_github_repository_id = "1386328125"
+deploy_github_environment = "production"
+
 # Change this to the public GHCR namespace used by this repository.
 image_registry = "ghcr.io/n3bby"
 runner_image = "omnigent-runner"

@@ -3,8 +3,12 @@ omnigent_environment: production
 omnigent_repo_root: "{{ playbook_dir | dirname }}"
 omnigent_remote_root: /var/lib/omnigent-deployment
 omnigent_ssh_port: 22
+# Written by `mise run bootstrap`; `mise run deploy` and the setup tasks use it.
+omnigent_local_kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/omnigent-{{ omnigent_environment }}.yaml"
 
-# Kubernetes API access is local-only unless an explicit private CIDR is added.
+# The firewall drops Kubernetes API traffic on the public interface unless it
+# comes from one of these CIDRs. Other interfaces, such as tailscale0, are not
+# filtered.
 k3s_api_private_cidrs: []
 
 # Record the actual VM capacity here. Preflight refuses smaller hosts.

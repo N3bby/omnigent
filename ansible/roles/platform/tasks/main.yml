@@ -1,0 +1,112 @@
+---
+- name: Ensure the platform manifest has been rendered locally
+  ansible.builtin.assert:
+    that: "(omnigent_repo_root + '/.generated/' + omnigent_environment + '/platform.yaml') is file"
+    fail_msg: "Run ENV={{ omnigent_environment }} mise run render first."
+  delegate_to: localhost
+  become: false
+
+# Older versions deployed the application from the VM with these.
+- name: Remove on-host deploy helpers from older versions
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/local/libexec/omnigent
+    - "{{ omnigent_remote_root }}/manifest.yaml"
+
+- name: Copy the platform manifest
+  ansible.builtin.copy:
+    src: "{{ omnigent_repo_root }}/.generated/{{ omnigent_environment }}/platform.yaml"
+    dest: "{{ omnigent_remote_root }}/platform.yaml"
+    owner: root
+    group: root
+    mode: "0600"
+
+# The prune only touches objects labelled omnigent-platform, so it never
+# removes what `mise run deploy` manages. Objects that older versions labelled
+# omnigent-deployment are relabelled here.
+- name: Apply the platform and prune removed platform objects
+  ansible.builtin.command:
+    argv:
+      - k3s
+      - kubectl
+      - apply
+      - --prune
+      - -l
+      - app.kubernetes.io/managed-by=omnigent-platform
+      - --prune-allowlist=core/v1/ConfigMap
+      - --prune-allowlist=core/v1/LimitRange
+      - --prune-allowlist=core/v1/Namespace
+      - --prune-allowlist=core/v1/ResourceQuota
+      - --prune-allowlist=core/v1/ServiceAccount
+      - --prune-allowlist=rbac.authorization.k8s.io/v1/ClusterRole
+      - --prune-allowlist=rbac.authorization.k8s.io/v1/ClusterRoleBinding
+      - --prune-allowlist=rbac.authorization.k8s.io/v1/Role
+      - --prune-allowlist=rbac.authorization.k8s.io/v1/RoleBinding
+      - --prune-allowlist=cert-manager.io/v1/ClusterIssuer
+      - --prune-allowlist=admissionregistration.k8s.io/v1/MutatingAdmissionPolicy
+      - --prune-allowlist=admissionregistration.k8s.io/v1/MutatingAdmissionPolicyBinding
+      - --prune-allowlist=admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+      - --prune-allowlist=admissionregistration.k8s.io/v1/ValidatingAdmissionPolicyBinding
+      - -f
+      - "{{ omnigent_remote_root }}/platform.yaml"
+  register: platform_apply
+  changed_when: >-
+    platform_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
+
+# Runner Pods use a 65536-ID user namespace; files owned by a larger ID (such
+# as the old runner UID 1000660000) are unreadable there, even by root, and
+# only the host can fix them. `mise run deploy` fixes files within that range.
+- name: Fix Codex login files owned by IDs runner Pods cannot map
+  ansible.builtin.shell: |
+    set -euo pipefail
+    pv="$(k3s kubectl get pvc codex-home -n omnigent-sandboxes -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)"
+    [[ -n "$pv" ]] || exit 0
+    dir="$(k3s kubectl get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}')"
+    [[ -d "$dir" ]] || exit 0
+    if [[ -n "$(find "$dir" \( -uid +65535 -o -gid +65535 \) -print -quit)" ]]; then
+      find "$dir" \( -uid +65535 -o -gid +65535 \) -exec chown -h 1000:1000 {} +
+      echo changed
+    fi
+  args:
+    executable: /bin/bash
+  register: codex_home_owner
+  changed_when: "'changed' in codex_home_owner.stdout"
+
+- name: Read the cluster admin kubeconfig
+  ansible.builtin.slurp:
+    src: /etc/rancher/k3s/k3s.yaml
+  register: admin_kubeconfig
+  no_log: true
+
+- name: Create the local kubeconfig directory
+  ansible.builtin.file:
+    path: "{{ omnigent_local_kubeconfig | dirname }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+# Your own admin access for `mise run deploy` and the setup tasks. It is
+# equivalent to root on the VM; keep it off shared machines.
+- name: Save the admin kubeconfig on this machine
+  ansible.builtin.copy:
+    content: >-
+      {{ admin_kubeconfig.content | b64decode
+         | regex_replace('https://127\.0\.0\.1:6443', 'https://' + omnigent_kubernetes_api_host + ':6443') }}
+    dest: "{{ omnigent_local_kubeconfig }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Record the cluster CA for GitHub Actions to pin
+  ansible.builtin.copy:
+    content: >-
+      {{ (admin_kubeconfig.content | b64decode | from_yaml).clusters[0].cluster['certificate-authority-data']
+         | b64decode }}
+    dest: "{{ omnigent_repo_root }}/environments/{{ omnigent_environment }}.kubernetes-ca.crt"
+    mode: "0644"
+  delegate_to: localhost
+  become: false

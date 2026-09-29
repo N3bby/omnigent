@@ -51,7 +51,7 @@
 
 - name: Refuse to adopt a legacy installation
   ansible.builtin.assert:
-    that: existing_omnigent.rc != 0 or existing_omnigent.stdout == 'omnigent-deployment'
+    that: existing_omnigent.rc != 0 or existing_omnigent.stdout in ['omnigent-deployment', 'omnigent-platform']
     fail_msg: >-
       An existing unmanaged Omnigent namespace was found. This repository is
       greenfield and will not adopt or overwrite the old installation; use a

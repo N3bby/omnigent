@@ -105,9 +105,72 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         for action in re.findall(r"uses: (\S+)", workflow):
             self.assertRegex(action, r"@[0-9a-f]{40}$")
+        # No stored credentials and no host access: OIDC to Tailscale and Kubernetes only.
+        self.assertIn("id-token: write", workflow)
+        self.assertNotIn("secrets.", workflow)
+        self.assertNotIn("bootstrap", re.findall(r"options: \[(.*)\]", workflow)[0])
         tasks = (ROOT / ".mise.toml").read_text()
         self.assertNotIn("--ask-become-pass", tasks)
         self.assertIn("become_ask_pass = True", (ROOT / "ansible.cfg").read_text())
+
+    def test_deploy_layer_needs_only_namespaced_access(self) -> None:
+        subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
+        generated = ROOT / ".generated" / "ci"
+        app = generated / "manifest.yaml"
+        platform = (generated / "platform.yaml").read_text()
+        # Plural resource name for every kind the deploy identity must manage.
+        resources = {
+            "ConfigMap": "configmaps", "Deployment": "deployments", "Ingress": "ingresses",
+            "Middleware": "middlewares", "PersistentVolumeClaim": "persistentvolumeclaims",
+            "Service": "services", "ServiceAccount": "serviceaccounts", "StatefulSet": "statefulsets",
+        }
+        rbac = (ROOT / "kubernetes" / "platform" / "deployer-rbac.yaml").read_text()
+        apply_script = (ROOT / "scripts" / "apply-manifest").read_text()
+        namespaces = set(re.findall(r"^  namespace: (\S+)$", app.read_text(), re.MULTILINE))
+        self.assertEqual(namespaces, {"omnigent", "omnigent-sandboxes"})
+        for kind in set(re.findall(r"^kind: (\S+)$", app.read_text(), re.MULTILINE)):
+            with self.subTest(kind=kind):
+                self.assertIn(kind, resources, "new app kinds need a deployer-rbac.yaml rule")
+                self.assertIn(resources[kind], rbac)
+                self.assertRegex(apply_script, rf"--prune-allowlist=\S+/{kind} ")
+        for kind in ("Namespace", "ValidatingAdmissionPolicy", "ClusterIssuer", "ResourceQuota", "Role"):
+            self.assertIn(f"kind: {kind}\n", platform)
+            self.assertNotRegex(apply_script, rf"--prune-allowlist=\S+/{kind} ")
+        self.assertNotIn("managed-by: omnigent-deployment", platform)
+        revision = (generated / "platform-revision").read_text().strip()
+        self.assertIn(f'revision: "{revision}"', platform)
+        # The deployer must never be able to loosen the platform or reach the host.
+        granted = set()
+        for items in re.findall(r"(?:resources|verbs): \[([^\]]*)\]", rbac):
+            granted.update(item.strip() for item in items.split(","))
+        for forbidden in (
+            "*", "namespaces", "roles", "rolebindings", "clusterroles", "clusterrolebindings",
+            "validatingadmissionpolicies", "mutatingadmissionpolicies", "nodes/proxy",
+            "pods/exec", "serviceaccounts/token", "escalate", "bind", "impersonate",
+        ):
+            self.assertNotIn(forbidden, granted)
+
+    def test_github_oidc_trust_is_pinned_to_one_environment(self) -> None:
+        template = (ROOT / "ansible" / "roles" / "k3s" / "templates" / "authentication-config.yaml.j2").read_text()
+        self.assertIn("url: https://token.actions.githubusercontent.com", template)
+        self.assertIn("anonymous:\n  enabled: false", template)
+        for claim in ("repository_id", "environment", "ref"):
+            self.assertIn(f"claims.?{claim}.orValue('')", template)
+        self.assertIn("name: github-actions:deploy", (ROOT / "kubernetes" / "platform" / "deployer-rbac.yaml").read_text())
+        self.assertIn("'github-actions:deploy'", template)
+        values, _ = validate("ci")
+        with tempfile.TemporaryDirectory() as tmp:
+            ca = ROOT / "environments" / "ci.kubernetes-ca.crt"
+            self.assertFalse(ca.exists())
+            ca.write_text("-----BEGIN CERTIFICATE-----\nci\n-----END CERTIFICATE-----\n")
+            try:
+                output = Path(tmp) / "kubeconfig.json"
+                subprocess.run([str(ROOT / "scripts" / "ci-kubeconfig"), "--environment", "ci", str(output)], check=True, capture_output=True)
+                kubeconfig = json.loads(output.read_text())
+            finally:
+                ca.unlink()
+        self.assertEqual(kubeconfig["clusters"][0]["cluster"]["server"], f"https://{values['kubernetes_api_host']}:6443")
+        self.assertEqual(kubeconfig["users"][0]["user"]["exec"]["args"], [f"https://{values['hostname']}/kubernetes"])
 
     def test_ci_uses_mise_and_matches_published_architecture(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "validate.yml").read_text()

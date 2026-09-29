@@ -24,8 +24,12 @@ deployed by digest.
   2 vCPU, 4 GiB RAM and 40 GB disk is enough for a session or two at a time.
   Each extra concurrent session needs about 0.5 vCPU and 1 GiB more.
 - A DNS name pointing at the VM.
+- A private way to reach the VM's Kubernetes API (port 6443), which the
+  firewall blocks on the public interface. [Tailscale](https://tailscale.com)
+  on the VM and your machine is the easiest; it's also how GitHub Actions
+  connects.
 - On your machine: [mise](https://mise.jdx.dev), Docker with Buildx, `jq`, and
-  OpenSSH. Mise installs the pinned Python and Ansible versions.
+  OpenSSH. Mise installs the pinned Python, Ansible and kubectl versions.
 
 ## Set up your own deployment
 
@@ -35,12 +39,15 @@ deployed by digest.
 2. **Edit the configuration** for your setup:
 
    - `ansible/inventory/production/hosts.yml`: SSH host and user of your VM.
-   - `ansible/inventory/production/group_vars/all.yml`: your VM's size (the
-     deploy refuses smaller hosts), and any private CIDR allowed to reach the
+   - `ansible/inventory/production/group_vars/all.yml`: your VM's size
+     (bootstrap refuses smaller hosts), and any private CIDR allowed to reach the
      Kubernetes API.
    - `environments/production.toml`: hostname, ACME and admin email,
-     `image_registry` (`ghcr.io/<your-github-user>`), resource limits and
-     runner concurrency.
+     `image_registry` (`ghcr.io/<your-github-user>`), resource limits,
+     runner concurrency, `kubernetes_api_host` (the VM's private name, such
+     as its Tailscale MagicDNS name), and `deploy_github_repository_id`
+     (your fork's numeric ID, from `gh api repos/OWNER/REPO --jq .id`; remove
+     it if you won't deploy from GitHub Actions).
 
 3. **Install the tools:**
 
@@ -57,30 +64,42 @@ deployed by digest.
    git commit -am "Lock image digests"
    ```
 
-5. **Deploy:**
+5. **Bootstrap the VM.** This is the only step that needs SSH and sudo; it
+   asks for your sudo password:
 
    ```bash
-   mise run check
+   mise run bootstrap
+   git add environments/production.kubernetes-ca.crt
+   git commit -m "Record the cluster CA"
+   ```
+
+   It installs k3s and cert-manager, and applies the platform: namespaces,
+   runner security policies, quotas and access rules. It also saves an admin
+   kubeconfig to `~/.kube/omnigent-production.yaml`, and records the cluster
+   CA for GitHub Actions. Use a clean VM: it refuses to take over an existing
+   `omnigent` namespace.
+
+6. **Deploy the application.** This needs only the Kubernetes API:
+
+   ```bash
    mise run diff
    mise run deploy
    ```
 
-   The deploy is idempotent. It installs k3s and cert-manager, creates
-   internal secrets, applies the manifests and checks the public HTTPS
-   endpoint. Use a clean VM: it refuses to take over an existing `omnigent`
-   namespace.
+   The deploy is idempotent. It creates internal secrets, applies the
+   manifests, waits for the rollout and checks the public HTTPS endpoint.
 
-6. **Sign in.** Open your HTTPS URL and claim the admin account with the admin
+7. **Sign in.** Open your HTTPS URL and claim the admin account with the admin
    email you configured.
 
-7. **Connect at least one agent:**
+8. **Connect at least one agent:**
 
    ```bash
    mise run setup-codex        # Codex device login
    mise run setup-claude       # Claude subscription token
    ```
 
-8. **Give runners access to your repositories.** Pick one of these:
+9. **Give runners access to your repositories.** Pick one of these:
 
    ```bash
    mise run setup-github-app   # GitHub App (recommended)
@@ -111,13 +130,17 @@ mise run status              # health, TLS, storage, failed runners
 mise run credential-status   # which credentials are present
 ```
 
-- **Upgrade versions** in `versions.yaml`.
+Changes to `versions.yaml`, `ansible/` or `kubernetes/platform/` also need
+`mise run bootstrap` first. `mise run deploy` compares the cluster with your
+checkout and refuses to run until you have.
+
+- **Upgrade versions** in `versions.yaml`, then bootstrap and deploy.
 - **Change images** (`images/`): bump `image_release`, run the publish
   workflow again, then `mise run lock-images`, commit and deploy.
 - **Roll back** by reverting the commit and deploying again.
 
-Production is never deployed automatically. You can also run these steps
-from GitHub Actions instead of your machine; see below.
+Production is never deployed automatically. You can also run `diff`,
+`deploy`, `status` and `smoke` from GitHub Actions; see below.
 
 ## Deploying from GitHub Actions
 
@@ -125,38 +148,40 @@ from GitHub Actions instead of your machine; see below.
 > `git mv ci/deploy.yml .github/workflows/deploy.yml`, then commit and push
 > from an account that is allowed to change workflows.
 
-The `Deploy` workflow runs `mise run check` followed by `diff`, `deploy`,
-`status` or `smoke` against production. It only runs when started by hand from
-the Actions tab, only from `main`, and only in the `production` Environment.
+The `Deploy` workflow runs `mise run diff`, `deploy`, `status` or `smoke`
+against production. It only runs when started by hand from the Actions tab,
+only from `main`, and only in the `production` Environment. It stores no
+credentials: it joins your tailnet and authenticates to Kubernetes with the
+job's short-lived GitHub OIDC token. `mise run bootstrap` configures the VM's
+Kubernetes API to accept that token only from your repository's `production`
+Environment on `main`, and it can only manage the application in the two
+Omnigent namespaces. It can't change the platform or touch the VM.
 
-1. **Create an SSH key for CI** and add its public half to the SSH user's
-   `~/.ssh/authorized_keys` on the VM.
+1. **Run `mise run bootstrap`** with `deploy_github_repository_id` and
+   `kubernetes_api_host` set, and commit
+   `environments/production.kubernetes-ca.crt`.
 
-2. **Create the `production` Environment** under Settings -> Environments.
-   Add yourself as a required reviewer, and limit deployment branches to
-   `main`.
+2. **Set up Tailscale for CI.** In the Tailscale admin console:
 
-3. **Add these Environment secrets:**
+   - Add `tag:ci` to `tagOwners`, and allow `tag:ci` to reach the VM on
+     `tcp:6443` and nothing else.
+   - Under Trust credentials, add an OpenID Connect credential with issuer
+     `https://token.actions.githubusercontent.com`, the `auth_keys` write
+     scope and tag `tag:ci`. Restrict its subject to your repository's
+     `production` Environment.
 
-   | Secret | Value |
-   | --- | --- |
-   | `DEPLOY_SSH_HOST` | The VM's real hostname or IP. `ansible_host` in `hosts.yml` may be an alias from your own SSH config. |
-   | `DEPLOY_SSH_PRIVATE_KEY` | The CI private key. |
-   | `DEPLOY_SSH_KNOWN_HOSTS` | Output of `ssh-keyscan <DEPLOY_SSH_HOST>`. Check it against the VM's host key. |
-   | `DEPLOY_BECOME_PASSWORD` | The SSH user's sudo password. Leave it out if that user has passwordless sudo. |
+3. **Create the `production` Environment** under Settings -> Environments.
+   Add yourself as a required reviewer, limit deployment branches to `main`,
+   and add two Environment variables from step 2: `TS_OAUTH_CLIENT_ID` and
+   `TS_AUDIENCE`.
 
-4. **Make SSH reachable.** GitHub-hosted runners connect from public IPs that
-   change. If SSH on your VM is only reachable over [Tailscale](https://tailscale.com),
-   also add `TS_OAUTH_CLIENT_ID` and `TS_OAUTH_SECRET`, from a Tailscale OAuth
-   client that can create `tag:ci` auth keys. The workflow then joins your
-   tailnet before connecting.
+A run you approve can still read and change everything in the two Omnigent
+namespaces, including the database and all secrets. See the
+[threat model](docs/THREAT_MODEL.md#deploying-from-github-actions).
 
-Anyone who can get a run approved, or who compromises an action used in the
-workflow, has root on the VM. Only give write access to people you would
-give sudo, and keep third-party actions pinned by commit SHA.
-
-The credential setup tasks (`setup-codex`, `setup-claude`, `setup-git-token`,
-`setup-github-app`) are interactive, so they still run from your machine.
+`mise run bootstrap` and the credential setup tasks (`setup-codex`,
+`setup-claude`, `setup-git-token`, `setup-github-app`) still run from your
+machine.
 
 ## Things to know
 

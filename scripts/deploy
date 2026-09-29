@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Reconcile the application layer. Needs only the Kubernetes API, so it runs
+# the same way from your machine or as the GitHub Actions deploy identity.
+set -euo pipefail
+
+environment="${1:?usage: deploy ENVIRONMENT}"
+export ENV="$environment"
+scripts="$(dirname "${BASH_SOURCE[0]}")"
+KUBECTL=("$scripts/kube")
+
+"$scripts/check-platform" "$environment"
+secret_checksum="$("$scripts/ensure-secrets")"
+"$scripts/apply-manifest" "$scripts/../.generated/$environment/manifest.yaml"
+"$scripts/fix-codex-home" "$environment"
+
+# Restart the server and database when their Secret content changes.
+patch="$(jq -nc --arg checksum "$secret_checksum" \
+  '{spec:{template:{metadata:{annotations:{"omnigent.dev/secret-checksum":$checksum}}}}}')"
+for workload in deployment/omnigent statefulset/postgres; do
+  "${KUBECTL[@]}" patch "$workload" -n omnigent --type=merge -p "$patch"
+done
+unset secret_checksum patch
+
+"${KUBECTL[@]}" rollout status statefulset/postgres -n omnigent --timeout=300s
+"${KUBECTL[@]}" rollout status statefulset/vault -n omnigent --timeout=300s
+"${KUBECTL[@]}" rollout status deployment/omnigent -n omnigent --timeout=600s
+"$scripts/smoke-test"

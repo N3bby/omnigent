@@ -1,0 +1,26 @@
+# Lets GitHub Actions deploy with a short-lived OIDC token instead of a stored
+# credential. Only jobs from one repository, one Environment and main pass the
+# checks below; they all become the user bound in deployer-rbac.yaml.
+apiVersion: apiserver.config.k8s.io/v1
+kind: AuthenticationConfiguration
+# k3s stops passing --anonymous-auth=false once this file is used, so keep
+# anonymous requests disabled here.
+anonymous:
+  enabled: false
+jwt:
+  - issuer:
+      url: https://token.actions.githubusercontent.com
+      audiences:
+        - "{{ omnigent_deploy_audience }}"
+    claimValidationRules:
+      # Any GitHub repository can request a token for any audience, so these
+      # checks are what restrict access, not the audience.
+      - expression: "claims.?repository_id.orValue('') == '{{ omnigent_deploy_github_repository_id }}'"
+        message: token is not from the deployment repository
+      - expression: "claims.?environment.orValue('') == '{{ omnigent_deploy_github_environment }}'"
+        message: token is not from the deployment Environment
+      - expression: "claims.?ref.orValue('') == 'refs/heads/main'"
+        message: token is not from main
+    claimMappings:
+      username:
+        expression: "'github-actions:deploy'"

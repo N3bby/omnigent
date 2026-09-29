@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+KUBECTL=("$(dirname "${BASH_SOURCE[0]}")/kube")
+
 namespace=omnigent-sandboxes
 pod=claude-login
-image="$(k3s kubectl get configmap -n omnigent -l app.kubernetes.io/managed-by=omnigent-deployment -o json \
+image="$("${KUBECTL[@]}" get configmap -n omnigent -l app.kubernetes.io/managed-by=omnigent-deployment -o json \
   | jq -r '.items[] | select(.metadata.name | startswith("omnigent-sandbox-config-")) | .data["config.yaml"]' \
   | awk '/^[[:space:]]*image:/ {print $2; exit}')"
 [[ -n "$image" ]] || { echo "could not determine runner image" >&2; exit 1; }
 
 cleanup() {
-  k3s kubectl delete pod "$pod" -n "$namespace" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  "${KUBECTL[@]}" delete pod "$pod" -n "$namespace" --ignore-not-found --wait=false >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 cleanup
 
-sed "s|RUNNER_IMAGE|${image}|" <<'EOF' | k3s kubectl apply -f - >/dev/null
+sed "s|RUNNER_IMAGE|${image}|" <<'EOF' | "${KUBECTL[@]}" apply -f - >/dev/null
 apiVersion: v1
 kind: Pod
 metadata:
@@ -42,14 +44,14 @@ spec:
         requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: 128Mi}
         limits: {cpu: "1", memory: 1Gi, ephemeral-storage: 1Gi}
 EOF
-k3s kubectl wait -n "$namespace" --for=condition=Ready "pod/${pod}" --timeout=240s >/dev/null
+"${KUBECTL[@]}" wait -n "$namespace" --for=condition=Ready "pod/${pod}" --timeout=240s >/dev/null
 
 echo "Complete Claude's setup-token flow, then copy the token it prints."
-k3s kubectl exec -it -n "$namespace" "$pod" -- claude setup-token
+"${KUBECTL[@]}" exec -it -n "$namespace" "$pod" -- claude setup-token
 read -rsp "Paste the printed Claude subscription OAuth token (blank cancels): " token
 echo
 [[ -n "$token" ]] || exit 0
 patch="$(jq -nc --arg value "$token" '{stringData:{CLAUDE_CODE_OAUTH_TOKEN:$value}}')"
-k3s kubectl patch secret omnigent-creds -n omnigent-sandboxes --type=merge -p "$patch" >/dev/null
+"${KUBECTL[@]}" patch secret omnigent-creds -n omnigent-sandboxes --type=merge -p "$patch" >/dev/null
 unset token patch
 echo "Claude token stored. New runner Jobs will receive it."

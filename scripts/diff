@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Show what `mise run deploy` would change, without changing anything.
+set -euo pipefail
+
+environment="${1:?usage: diff ENVIRONMENT}"
+export ENV="$environment"
+scripts="$(dirname "${BASH_SOURCE[0]}")"
+
+"$scripts/check-platform" "$environment" || exit 1
+
+set +e
+"$scripts/kube" diff -f "$scripts/../.generated/$environment/manifest.yaml"
+status=$?
+set -e
+case "$status" in
+  0) echo "no application changes" ;;
+  1) ;;
+  *) echo "could not calculate the application diff" >&2; exit "$status" ;;
+esac

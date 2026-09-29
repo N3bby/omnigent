@@ -16,6 +16,23 @@
     mode: "0600"
   notify: Restart k3s
 
+- name: Trust GitHub Actions OIDC tokens for deploys
+  ansible.builtin.template:
+    src: authentication-config.yaml.j2
+    dest: /etc/rancher/k3s/authentication-config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  when: omnigent_deploy_github_repository_id | length > 0
+  notify: Restart k3s
+
+- name: Remove GitHub Actions OIDC trust when it is turned off
+  ansible.builtin.file:
+    path: /etc/rancher/k3s/authentication-config.yaml
+    state: absent
+  when: omnigent_deploy_github_repository_id | length == 0
+  notify: Restart k3s
+
 - name: Download the pinned k3s installer
   ansible.builtin.get_url:
     url: "https://raw.githubusercontent.com/k3s-io/k3s/{{ k3s_version | urlencode }}/install.sh"

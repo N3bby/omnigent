@@ -1,0 +1,15 @@
+---
+# Everything that needs root on the VM or cluster-admin. Run it once, then
+# again when versions.yaml, ansible/ or kubernetes/platform change;
+# `mise run deploy` says when.
+- name: Provision the VM and the Omnigent platform
+  hosts: all
+  become: true
+  gather_facts: true
+  serial: 1
+  roles:
+    - preflight
+    - base
+    - k3s
+    - cert_manager
+    - platform

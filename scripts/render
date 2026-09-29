@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
 import uuid
 from pathlib import Path
 
-from config import ConfigError, ROOT, fail, validate
+from config import ConfigError, ROOT, deploy_audience, fail, validate
 
 
 def yaml_string(value: str) -> str:
@@ -156,21 +157,6 @@ def main() -> None:
         ])
     )
     dynamic = f"""---
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    email: {yaml_string(str(cfg['acme_email']))}
-    server: https://acme-v02.api.letsencrypt.org/directory
-    privateKeySecretRef:
-      name: letsencrypt-prod-account-key
-    solvers:
-      - http01:
-          ingress:
-            ingressClassName: traefik
----
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -255,14 +241,17 @@ spec:
                   name: http
 """
     (generated / "dynamic.yaml").write_text(dynamic)
+    deploy_repository_id = str(cfg.get("deploy_github_repository_id", ""))
     deployment_vars = f"""---
 omnigent_hostname: {yaml_string(str(cfg['hostname']))}
-omnigent_acme_email: {yaml_string(str(cfg['acme_email']))}
+omnigent_kubernetes_api_host: {yaml_string(str(cfg['kubernetes_api_host']))}
+omnigent_deploy_github_repository_id: {yaml_string(deploy_repository_id)}
+omnigent_deploy_github_environment: {yaml_string(str(cfg.get('deploy_github_environment', '')))}
+omnigent_deploy_audience: {yaml_string(deploy_audience(cfg) if deploy_repository_id else '')}
 k3s_version: {yaml_string(versions['k3s'])}
 k3s_installer_sha256: {yaml_string(versions['k3s_installer_sha256'])}
 cert_manager_version: {yaml_string(versions['cert_manager'])}
 cert_manager_manifest_sha256: {yaml_string(versions['cert_manager_manifest_sha256'])}
-omnigent_git_revision: {yaml_string(versions['omnigent_commit'])}
 """
     (generated / "deployment-vars.yml").write_text(deployment_vars)
     kustomization = f"""apiVersion: kustomize.config.k8s.io/v1beta1
@@ -340,6 +329,38 @@ patches:
       - op: replace
         path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
         value: {yaml_string(str(cfg['postgres_storage']))}
+"""
+    (generated / "kustomization.yaml").write_text(kustomization)
+
+    platform = generated / "platform"
+    platform.mkdir(exist_ok=True)
+    (platform / "dynamic.yaml").write_text(f"""---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    email: {yaml_string(str(cfg['acme_email']))}
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: traefik
+""")
+    (platform / "kustomization.yaml").write_text(f"""apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../../kubernetes/platform
+  - dynamic.yaml
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: omnigent
+      app.kubernetes.io/managed-by: omnigent-platform
+    includeSelectors: false
+patches:
   - target:
       version: v1
       kind: ResourceQuota
@@ -363,25 +384,74 @@ patches:
       - op: replace
         path: /spec/hard/limits.ephemeral-storage
         value: {yaml_string(quota['limit_storage'])}
-"""
-    (generated / "kustomization.yaml").write_text(kustomization)
+""")
     if args.prepare_only:
         print(generated)
         return
 
-    manifest = generated / "manifest.yaml"
+    manifest = build(generated, versions)
+    (generated / "manifest.yaml").write_text(manifest)
+    platform_manifest = build(platform, versions)
+    revision = platform_revision(platform, deployment_vars, args.environment)
+    (generated / "platform.yaml").write_text(platform_manifest + f"""---
+# Written by `mise run bootstrap`. `mise run deploy` refuses to run when this
+# does not match the platform it rendered, so a pending bootstrap is not missed.
+# It guards against mistakes only: the deploy identity can edit ConfigMaps here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: omnigent-platform
+  namespace: omnigent
+  labels:
+    app.kubernetes.io/part-of: omnigent
+    app.kubernetes.io/managed-by: omnigent-platform
+data:
+  revision: {yaml_string(revision)}
+  k3s: {yaml_string(versions['k3s'])}
+  cert-manager: {yaml_string(versions['cert_manager'])}
+""")
+    (generated / "platform-revision").write_text(revision + "\n")
+    print(generated / "manifest.yaml")
+    print(generated / "platform.yaml")
+
+
+def platform_revision(platform: Path, deployment_vars: str, environment: str) -> str:
+    """Hash every input of `mise run bootstrap`, so any change to it shows.
+
+    Inputs rather than rendered output, so different kubectl builds agree.
+    """
+    digest = hashlib.sha256(deployment_vars.encode())
+    sources = [
+        *(ROOT / "kubernetes" / "platform").rglob("*"),
+        *platform.glob("*.yaml"),
+        *(ROOT / "ansible").rglob("*"),
+    ]
+    inventory = ROOT / "ansible" / "inventory"
+    for path in sorted(sources):
+        if not path.is_file() or path.suffix == ".retry":
+            continue
+        if path.is_relative_to(inventory) and not path.is_relative_to(inventory / environment):
+            continue
+        # Generated files by name only, so the checkout location does not matter.
+        name = path.name if path.parent == platform else path.relative_to(ROOT)
+        digest.update(str(name).encode() + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
+def build(directory: Path, versions: dict[str, str]) -> str:
+    """Run kustomize on a generated directory and return the manifest."""
+    relative = directory.relative_to(ROOT)
     command: list[str]
     if shutil.which("kubectl"):
-        command = ["kubectl", "kustomize", "--load-restrictor", "LoadRestrictionsNone", str(generated)]
+        command = ["kubectl", "kustomize", "--load-restrictor", "LoadRestrictionsNone", str(directory)]
     elif shutil.which("kustomize"):
-        command = ["kustomize", "build", "--load-restrictor", "LoadRestrictionsNone", str(generated)]
+        command = ["kustomize", "build", "--load-restrictor", "LoadRestrictionsNone", str(directory)]
     elif shutil.which("docker"):
         container = f"omnigent-render-{uuid.uuid4().hex[:12]}"
         image = f"registry.k8s.io/kubectl:{versions['k3s'].split('+', 1)[0]}"
         create = subprocess.run([
             "docker", "create", "--name", container, "-w", "/work", image,
-            "kustomize", "--load-restrictor", "LoadRestrictionsNone",
-            f".generated/{args.environment}",
+            "kustomize", "--load-restrictor", "LoadRestrictionsNone", str(relative),
         ], check=False, capture_output=True, text=True)
         if create.returncode:
             fail(create.stderr.strip() or "could not create render container")
@@ -410,9 +480,8 @@ patches:
     if result.returncode:
         fail(result.stderr.strip() or "kustomize rendering failed")
     if "kind: Secret" in result.stdout:
-        fail("rendered desired state unexpectedly contains a Secret")
-    manifest.write_text(result.stdout)
-    print(manifest)
+        fail(f"rendered {relative} unexpectedly contains a Secret")
+    return result.stdout
 
 
 if __name__ == "__main__":

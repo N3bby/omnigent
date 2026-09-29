@@ -1,6 +1,11 @@
 name: Deploy
-# Runs the same mise tasks as a local deploy. Only ever started by hand, from
-# main, and gated by the `production` Environment, which holds the secrets.
+# Runs `mise run deploy` and friends as a short-lived GitHub OIDC identity that
+# can only manage the application in the Omnigent namespaces. There are no
+# stored credentials. Platform changes still need `mise run bootstrap` from
+# your machine; the deploy refuses to run until that is done.
+#
+# Staged outside .github/workflows until someone who may change workflows
+# moves it there.
 on:
   workflow_dispatch:
     inputs:
@@ -11,11 +16,14 @@ on:
         options: [diff, deploy, status, smoke]
 permissions:
   contents: read
+  id-token: write # OIDC tokens for Tailscale and the Kubernetes API
 concurrency:
   group: production
   cancel-in-progress: false
 jobs:
   run:
+    # The Environment's deployment branch rule and required reviewer are what
+    # enforce this; the API server also rejects tokens from other refs.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     environment: production
@@ -23,58 +31,33 @@ jobs:
     env:
       ENV: production
       INVENTORY: ansible/inventory/production/hosts.yml
-      ANSIBLE_BECOME_ASK_PASS: "false"
-      USE_TAILSCALE: ${{ secrets.TS_OAUTH_CLIENT_ID != '' }}
     steps:
-      # Third-party actions are pinned by SHA because this job holds root-level
-      # access to the VM.
+      # Pinned by SHA: every step can mint the job's OIDC tokens.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
       - name: Join the tailnet
-        if: env.USE_TAILSCALE == 'true'
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
           tags: tag:ci
-      - name: Configure SSH and sudo
+      - name: Connect to the Kubernetes API
         shell: bash
-        env:
-          SSH_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
-          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
-          BECOME_PASSWORD: ${{ secrets.DEPLOY_BECOME_PASSWORD }}
         run: |
           set -euo pipefail
-          for name in SSH_HOST SSH_PRIVATE_KEY SSH_KNOWN_HOSTS; do
-            [[ -n "${!name}" ]] || { echo "::error::secret DEPLOY_$name is not set"; exit 1; }
+          kubeconfig="$RUNNER_TEMP/kubeconfig.json"
+          ./scripts/ci-kubeconfig --environment "$ENV" "$kubeconfig"
+          echo "OMNIGENT_KUBECONFIG=$kubeconfig" >> "$GITHUB_ENV"
+          export OMNIGENT_KUBECONFIG="$kubeconfig"
+          # New tailnet nodes take a moment to become reachable.
+          for _ in $(seq 1 18); do
+            ./scripts/kube auth whoami >/dev/null 2>&1 && break
+            sleep 10
           done
-          umask 077
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          # The inventory's ansible_host may be an alias from the operator's
-          # own SSH config, so map it to the real host here.
-          alias="$(ansible-inventory -i "$INVENTORY" --host omnigent | jq -r '.ansible_host')"
-          cat > ~/.ssh/config <<EOF
-          Host $alias
-            HostName $SSH_HOST
-          Host *
-            IdentityFile ~/.ssh/deploy_key
-            IdentitiesOnly yes
-            StrictHostKeyChecking yes
-          EOF
-          # Leave DEPLOY_BECOME_PASSWORD unset if the SSH user has passwordless sudo.
-          if [[ -n "$BECOME_PASSWORD" ]]; then
-            printf '%s' "$BECOME_PASSWORD" > "$RUNNER_TEMP/become-password"
-            echo "ANSIBLE_BECOME_PASSWORD_FILE=$RUNNER_TEMP/become-password" >> "$GITHUB_ENV"
-          fi
+          ./scripts/kube auth whoami
       - run: mise run check
       - run: mise run "$TASK"
         env:
           TASK: ${{ inputs.task }}
-      - name: Remove credentials
-        if: always()
-        run: rm -f ~/.ssh/deploy_key "$RUNNER_TEMP/become-password"

@@ -1,34 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+KUBECTL=("$(dirname "${BASH_SOURCE[0]}")/kube")
+namespaces=(omnigent omnigent-sandboxes)
+
 echo "NODE"
-k3s kubectl get nodes -o wide
-k3s kubectl top nodes 2>/dev/null || echo "metrics are not ready"
-df -h / /var/lib/rancher/k3s 2>/dev/null | awk 'NR == 1 || !seen[$6]++'
+"${KUBECTL[@]}" get nodes -o wide
+"${KUBECTL[@]}" top nodes 2>/dev/null || echo "metrics are not ready"
+"${KUBECTL[@]}" get nodes -o json | jq -r '
+  .items[] | .metadata.name as $node | .status.conditions[]
+  | select(.type == "DiskPressure" or .type == "MemoryPressure" or .type == "PIDPressure")
+  | "\($node) \(.type)=\(.status)"'
+
+echo
+echo "PLATFORM"
+"${KUBECTL[@]}" get configmap omnigent-platform -n omnigent -o json 2>/dev/null \
+  | jq -r '.data | "k3s \(.k3s), cert-manager \(."cert-manager"), revision \(.revision[0:12])"' \
+  || echo "no platform record; run mise run bootstrap"
 
 echo
 echo "SERVER AND DATABASE"
-k3s kubectl get deployment,statefulset,pods,svc,ingress,pvc -n omnigent -o wide
+"${KUBECTL[@]}" get deployment,statefulset,pods,svc,ingress,pvc -n omnigent -o wide
 
 echo
 echo "TLS"
-k3s kubectl get certificate,certificaterequest -n omnigent 2>/dev/null || true
+"${KUBECTL[@]}" get certificate,certificaterequest -n omnigent 2>/dev/null || true
 
 echo
 echo "RUNNERS (network unrestricted by policy)"
-k3s kubectl get jobs,pods,pvc,resourcequota -n omnigent-sandboxes -o wide
-credential_keys="$(k3s kubectl get secret omnigent-creds -n omnigent-sandboxes -o json | jq -r '.data // {} | keys | join(", ")')"
+"${KUBECTL[@]}" get jobs,pods,pvc,resourcequota -n omnigent-sandboxes -o wide
+credential_keys="$("${KUBECTL[@]}" get secret omnigent-creds -n omnigent-sandboxes -o json | jq -r '.data // {} | keys | join(", ")')"
 echo "Configured optional runner credential keys: ${credential_keys:-none}"
 
 echo
 echo "RESOURCE USE"
-k3s kubectl top pods -A 2>/dev/null || echo "metrics are not ready"
+for namespace in "${namespaces[@]}"; do
+  "${KUBECTL[@]}" top pods -n "$namespace" 2>/dev/null || echo "metrics for $namespace are not ready"
+done
 
 echo
 echo "WARNINGS"
-k3s kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp 2>/dev/null | tail -n 30 || true
+for namespace in "${namespaces[@]}"; do
+  "${KUBECTL[@]}" get events -n "$namespace" --field-selector type=Warning --sort-by=.lastTimestamp 2>/dev/null | tail -n 15 || true
+done
 
-restarts="$(k3s kubectl get pods -A -o json | jq '[.items[].status.containerStatuses[]? | select(.lastState.terminated.reason == "OOMKilled")] | length')"
+restarts=0
+for namespace in "${namespaces[@]}"; do
+  count="$("${KUBECTL[@]}" get pods -n "$namespace" -o json | jq '[.items[].status.containerStatuses[]? | select(.lastState.terminated.reason == "OOMKilled")] | length')"
+  restarts=$((restarts + count))
+done
 if (( restarts > 0 )); then
   echo "WARNING: ${restarts} container(s) have an OOMKilled last state"
 fi
