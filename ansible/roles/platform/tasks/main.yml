@@ -55,25 +55,6 @@
   changed_when: >-
     platform_apply.stdout_lines | reject('search', ' unchanged$') | list | length > 0
 
-# Runner Pods use a 65536-ID user namespace; files owned by a larger ID (such
-# as the old runner UID 1000660000) are unreadable there, even by root, and
-# only the host can fix them. `mise run deploy` fixes files within that range.
-- name: Fix Codex login files owned by IDs runner Pods cannot map
-  ansible.builtin.shell: |
-    set -euo pipefail
-    pv="$(k3s kubectl get pvc codex-home -n omnigent-sandboxes -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)"
-    [[ -n "$pv" ]] || exit 0
-    dir="$(k3s kubectl get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}')"
-    [[ -d "$dir" ]] || exit 0
-    if [[ -n "$(find "$dir" \( -uid +65535 -o -gid +65535 \) -print -quit)" ]]; then
-      find "$dir" \( -uid +65535 -o -gid +65535 \) -exec chown -h 1000:1000 {} +
-      echo changed
-    fi
-  args:
-    executable: /bin/bash
-  register: codex_home_owner
-  changed_when: "'changed' in codex_home_owner.stdout"
-
 - name: Read the cluster admin kubeconfig
   ansible.builtin.slurp:
     src: /etc/rancher/k3s/k3s.yaml

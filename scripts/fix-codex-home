@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Runner Pods are root inside their user namespace, so Codex can leave login
 # files owned by root there, which the UID 1000 login and status Pods cannot
-# read. Hand them back to UID 1000 from a Pod with the same ID mapping. IDs the
-# user namespace cannot map need the host; `mise run bootstrap` fixes those.
+# read. Hand them back to UID 1000 from a Pod with the same ID mapping.
 set -euo pipefail
 
 environment="${1:?usage: fix-codex-home ENVIRONMENT}"
@@ -69,6 +68,6 @@ for _ in $(seq 1 120); do
 done
 "${KUBECTL[@]}" logs "$pod" -n "$namespace" 2>/dev/null || true
 if [[ "$phase" != Succeeded ]]; then
-  echo "could not fix codex-home ownership (Pod ${phase:-not started}); files owned by IDs above 65535 need ENV=$environment mise run bootstrap" >&2
+  echo "could not fix codex-home ownership (Pod ${phase:-not started})" >&2
   exit 1
 fi
