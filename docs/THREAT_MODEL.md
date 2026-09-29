@@ -85,12 +85,17 @@ Deploys come in two levels of access:
   the token only from this repository's `production` Environment on `main`,
   and the token can only manage the application in the two Omnigent
   namespaces (`kubernetes/platform/deployer-rbac.yaml`).
+- **The `Deploy` workflow** runs that deploy after building the images. Its
+  job can also push images to GHCR and commit to `main`, because it records
+  the new digests there.
 
 So a compromised deploy run, or a compromised action inside it, can't change
 the firewall, k3s, admission policies or namespace labels, and can't start
 Pods outside those two namespaces. It can still run Pods in them, so it gets
 every Secret there: the database, Vault and its key, the GitHub App secret,
-and the agent logins. Treat approving a deploy run as handing out those.
+and the agent logins. It can also publish its own images, point production at
+them, and push commits to `main`, including changes to later deploys. Treat
+approving a deploy run as handing out all of that.
 
 The kubeconfig `mise run bootstrap` saves on your machine is cluster-admin,
 which is equivalent to root on the VM.

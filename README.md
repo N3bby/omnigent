@@ -40,8 +40,8 @@ deployed by digest.
 
    - `ansible/inventory/production/hosts.yml`: SSH host and user of your VM.
    - `ansible/inventory/production/group_vars/all.yml`: your VM's size
-     (bootstrap refuses smaller hosts), and any private CIDR allowed to reach the
-     Kubernetes API.
+     (bootstrap refuses smaller hosts), and any private CIDR allowed to reach
+     the Kubernetes API.
    - `environments/production.toml`: hostname, ACME and admin email,
      `image_registry` (`ghcr.io/<your-github-user>`), resource limits,
      runner concurrency, `kubernetes_api_host` (the VM's private name, such
@@ -153,7 +153,8 @@ credentials: it joins your tailnet and authenticates to Kubernetes with the
 job's short-lived GitHub OIDC token. `mise run bootstrap` configures the VM's
 Kubernetes API to accept that token only from your repository's `production`
 Environment on `main`, and it can only manage the application in the two
-Omnigent namespaces. It can't change the platform or touch the VM.
+Omnigent namespaces. It can't change the platform or touch the VM, but the job
+can also push images to GHCR and commit to `main`.
 
 1. **Run `mise run bootstrap`** with `deploy_github_repository_id` and
    `kubernetes_api_host` set, and commit
@@ -161,12 +162,15 @@ Omnigent namespaces. It can't change the platform or touch the VM.
 
 2. **Set up Tailscale for CI.** In the Tailscale admin console:
 
-   - Add `tag:omnigent-ci` to `tagOwners`, and allow `tag:omnigent-ci` to reach the VM on
-     `tcp:6443` and nothing else.
+   - Add `tag:omnigent` and `tag:omnigent-ci` to `tagOwners`, and tag the VM
+     `tag:omnigent`, keeping any tags it already has. Allow `tag:omnigent-ci`
+     to reach `tag:omnigent` on `tcp:6443` and nothing else.
    - Under Trust credentials, add an OpenID Connect credential with issuer
      `https://token.actions.githubusercontent.com`, the `auth_keys` write
-     scope and tag `tag:omnigent-ci`. Restrict its subject to your repository's
-     `production` Environment.
+     scope and tag `tag:omnigent-ci`. Set its subject to your repository's
+     `production` Environment. Repositories created after July 15, 2026 use
+     `repo:OWNER@OWNER_ID/REPO@REPO_ID:environment:production`; older ones use
+     `repo:OWNER/REPO:environment:production`.
 
 3. **Create the `production` Environment** under Settings -> Environments.
    Add yourself as a required reviewer, limit deployment branches to `main`,
@@ -175,7 +179,8 @@ Omnigent namespaces. It can't change the platform or touch the VM.
    logs.
 
 A run you approve can still read and change everything in the two Omnigent
-namespaces, including the database and all secrets. See the
+namespaces, including the database and all secrets, and it decides which
+images and digest commit production gets. See the
 [threat model](docs/THREAT_MODEL.md#deploying-from-github-actions).
 
 `mise run bootstrap` and the credential setup tasks (`setup-codex`,
