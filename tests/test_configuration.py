@@ -115,7 +115,9 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertIn("id-token: write", workflow)
                 self.assertEqual(set(re.findall(r"secrets\.(\w+)", workflow)), {"TS_OAUTH_CLIENT_ID", "TS_AUDIENCE"})
                 self.assertNotIn("vars.", workflow)
-                self.assertNotIn("bootstrap", re.findall(r"options: \[(.*)\]", workflow)[0])
+                # Bootstrap needs sudo on the VM, so it never runs from CI.
+                code = "\n".join(line for line in workflow.splitlines() if not line.lstrip().startswith("#"))
+                self.assertNotIn("bootstrap", code)
         # The shared image build feeds release deploys, so pin it too.
         build = (ROOT / ".github" / "actions" / "build-images" / "action.yml").read_text()
         for action in re.findall(r"uses: (\S+)", build):
