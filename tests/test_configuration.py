@@ -107,7 +107,9 @@ class ConfigurationTests(unittest.TestCase):
             self.assertRegex(action, r"@[0-9a-f]{40}$")
         # No stored credentials and no host access: OIDC to Tailscale and Kubernetes only.
         self.assertIn("id-token: write", workflow)
-        self.assertNotIn("secrets.", workflow)
+        # Only the two Tailscale identifiers, as secrets so public run logs mask them.
+        self.assertEqual(set(re.findall(r"secrets\.(\w+)", workflow)), {"TS_OAUTH_CLIENT_ID", "TS_AUDIENCE"})
+        self.assertNotIn("vars.", workflow)
         self.assertNotIn("bootstrap", re.findall(r"options: \[(.*)\]", workflow)[0])
         tasks = (ROOT / ".mise.toml").read_text()
         self.assertNotIn("--ask-become-pass", tasks)

@@ -172,8 +172,9 @@ Omnigent namespaces. It can't change the platform or touch the VM.
 
 3. **Create the `production` Environment** under Settings -> Environments.
    Add yourself as a required reviewer, limit deployment branches to `main`,
-   and add two Environment variables from step 2: `TS_OAUTH_CLIENT_ID` and
-   `TS_AUDIENCE`.
+   and add two Environment secrets from step 2: `TS_OAUTH_CLIENT_ID` and
+   `TS_AUDIENCE`. They aren't sensitive, but secrets are masked in public run
+   logs.
 
 A run you approve can still read and change everything in the two Omnigent
 namespaces, including the database and all secrets. See the
