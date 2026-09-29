@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 1280 692" width="1280" height="692" role="img" aria-labelledby="t d">
   <title id="t">Omnigent deployment overview</title>
-  <desc id="d">GitHub Actions builds images for your fork and mise deploys them to a single Ubuntu VM running k3s. Traefik serves HTTPS to the Omnigent server, which stores data in PostgreSQL and Vault and starts one runner pod per session. Runner pods call the model APIs and GitHub.</desc>
+  <desc id="d">The Deploy workflow in GitHub Actions builds images for your fork, commits their digests, and deploys them over Tailscale through the Kubernetes API of a single Ubuntu VM running k3s. mise run bootstrap sets up the VM itself over SSH. Traefik serves HTTPS to the Omnigent server, which stores data in PostgreSQL and Vault and starts one runner pod per session. Runner pods call the model APIs and GitHub.</desc>
   <style>
     .bg { fill: #f8fafc; }
     .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
@@ -50,19 +50,21 @@
   <text class="sub" x="48" y="162">config, versions, manifests</text>
 
   <rect class="ext" x="32" y="228" width="260" height="64" rx="10"/>
-  <text class="title" x="48" y="254">GitHub Actions</text>
-  <text class="sub" x="48" y="274">builds server + runner images</text>
+  <text class="title" x="48" y="254">GitHub Actions · Deploy</text>
+  <text class="sub" x="48" y="274">builds, locks digests, deploys</text>
 
   <rect class="ext" x="32" y="334" width="260" height="64" rx="10"/>
   <text class="title" x="48" y="360">GHCR</text>
   <text class="sub" x="48" y="380">public images, pinned by digest</text>
 
   <rect class="card" x="32" y="470" width="260" height="64" rx="10"/>
-  <text class="title mono" x="48" y="496">mise run deploy</text>
-  <text class="sub" x="48" y="516">from your clone, runs Ansible</text>
+  <text class="title mono" x="48" y="496">mise run bootstrap</text>
+  <text class="sub" x="48" y="516">from your clone: k3s, platform</text>
 
-  <path class="line" d="M162 180 V226" marker-end="url(#a)"/>
-  <text class="lbl" x="172" y="208">publish workflow</text>
+  <path class="line" d="M92 180 V226" marker-end="url(#a)"/>
+  <text class="lbl" x="100" y="208">checkout</text>
+  <path class="line" d="M192 226 V182" marker-end="url(#a)"/>
+  <text class="lbl" x="200" y="208">commit digests</text>
   <path class="line" d="M162 292 V332" marker-end="url(#a)"/>
   <text class="lbl" x="172" y="316">push images</text>
 
@@ -70,6 +72,11 @@
   <text class="lbl" x="321" y="358" text-anchor="middle">pull</text>
   <path class="line" d="M292 502 H350" marker-end="url(#a)"/>
   <text class="lbl" x="321" y="494" text-anchor="middle">SSH</text>
+  <text class="lbl" x="321" y="518" text-anchor="middle">sudo</text>
+
+  <path class="line" d="M292 260 H350" marker-end="url(#a)"/>
+  <text class="lbl" x="321" y="252" text-anchor="middle">k8s API</text>
+  <text class="lbl" x="321" y="276" text-anchor="middle">Tailscale</text>
 
   <!-- Middle: the VM -->
   <rect class="vm" x="352" y="72" width="576" height="628" rx="14"/>
