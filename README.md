@@ -135,8 +135,9 @@ Changes to `versions.yaml`, `ansible/` or `kubernetes/platform/` also need
 checkout and refuses to run until you have.
 
 - **Upgrade versions** in `versions.yaml`, then bootstrap and deploy.
-- **Change images** (`images/`): bump `image_release`, run the publish
-  workflow again, then `mise run lock-images`, commit and deploy.
+- **Change images** (`images/`): bump `image_release`, then run **Deploy**
+  with `release`, which builds, locks and deploys them. From your machine:
+  run the publish workflow, then `mise run lock-images`, commit and deploy.
 - **Roll back** by reverting the commit and deploying again.
 
 Production is never deployed automatically. You can also run `diff`,
@@ -144,7 +145,10 @@ Production is never deployed automatically. You can also run `diff`,
 
 ## Deploying from GitHub Actions
 
-The `Deploy` workflow runs `mise run diff`, `deploy`, `status` or `smoke`
+The `Deploy` workflow's default task, `release`, builds both images, commits
+their digests to `production.toml` on `main`, and deploys that commit. The
+build runs before approval; nothing is committed or deployed until you
+approve. It can also run just `mise run diff`, `deploy`, `status` or `smoke`
 against production. It only runs when started by hand from the Actions tab,
 only from `main`, and only in the `production` Environment. It stores no
 credentials: it joins your tailnet and authenticates to Kubernetes with the

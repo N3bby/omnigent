@@ -1,0 +1,102 @@
+name: Deploy
+# Runs `mise run deploy` and friends as a short-lived GitHub OIDC identity that
+# can only manage the application in the Omnigent namespaces. There are no
+# stored credentials. Platform changes still need `mise run bootstrap` from
+# your machine; the deploy refuses to run until that is done.
+#
+# `release` builds both images, commits their digests to main, then deploys
+# that commit. The build runs before approval; nothing is committed or
+# deployed until the production Environment approves.
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Task to run against production
+        type: choice
+        default: release
+        options: [release, diff, deploy, status, smoke]
+permissions: {}
+concurrency:
+  group: production
+  cancel-in-progress: false
+jobs:
+  images:
+    if: inputs.task == 'release' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/publish-images.yml
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+  run:
+    needs: images
+    # The Environment's deployment branch rule and required reviewer are what
+    # enforce main; the API server also rejects tokens from other refs.
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/main' &&
+      (needs.images.result == 'success' || needs.images.result == 'skipped')
+    runs-on: ubuntu-24.04
+    environment: production
+    timeout-minutes: 45
+    permissions:
+      contents: write # a release commits the new digests to main
+      id-token: write # OIDC tokens for Tailscale and the Kubernetes API
+    env:
+      ENV: production
+      INVENTORY: ansible/inventory/production/hosts.yml
+    steps:
+      # Pinned by SHA: every step can mint the job's OIDC tokens.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - name: Lock the new images
+        if: inputs.task == 'release'
+        shell: bash
+        env:
+          RUNNER_DIGEST: ${{ needs.images.outputs.runner_digest }}
+          SERVER_DIGEST: ${{ needs.images.outputs.server_digest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ./scripts/lock-images --environment "$ENV" \
+            --runner-digest "$RUNNER_DIGEST" --server-digest "$SERVER_DIGEST"
+          if git diff --quiet; then
+            echo "image digests are unchanged"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -qam "Lock image digests from Deploy run ${GITHUB_RUN_ID}"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main \
+            || { echo "::error::main moved during the build; run the release again"; exit 1; }
+          git log --oneline -1
+      - name: Join the tailnet
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:omnigent-ci
+      - name: Connect to the Kubernetes API
+        shell: bash
+        run: |
+          set -euo pipefail
+          kubeconfig="$RUNNER_TEMP/kubeconfig.json"
+          ./scripts/ci-kubeconfig --environment "$ENV" "$kubeconfig"
+          echo "OMNIGENT_KUBECONFIG=$kubeconfig" >> "$GITHUB_ENV"
+          export OMNIGENT_KUBECONFIG="$kubeconfig"
+          # New tailnet nodes take a moment to become reachable.
+          for attempt in $(seq 1 12); do
+            if ./scripts/kube --request-timeout=10s auth whoami; then
+              exit 0
+            fi
+            echo "attempt $attempt failed; retrying in 10s"
+            sleep 10
+          done
+          exit 1
+      - run: mise run check
+      - name: Run the task
+        shell: bash
+        env:
+          TASK: ${{ inputs.task }}
+        run: mise run "${TASK/#release/deploy}"

@@ -23,6 +23,9 @@ def resolve(reference: str) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--environment", default="production")
+    # Digests a build just produced; otherwise they are resolved from the release tag.
+    parser.add_argument("--runner-digest")
+    parser.add_argument("--server-digest")
     args = parser.parse_args()
     try:
         cfg, versions = load_environment(args.environment), load_versions()
@@ -33,9 +36,12 @@ def main() -> None:
         fail("set image_registry before locking images")
     release = versions["image_release"]
     digests = {
-        "runner_digest": resolve(f"{registry}/{cfg['runner_image']}:{release}"),
-        "server_digest": resolve(f"{registry}/{cfg['server_image']}:{release}"),
+        "runner_digest": args.runner_digest or resolve(f"{registry}/{cfg['runner_image']}:{release}"),
+        "server_digest": args.server_digest or resolve(f"{registry}/{cfg['server_image']}:{release}"),
     }
+    for key, digest in digests.items():
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+            fail(f"{key} is not a sha256 digest: {digest!r}")
     path = ROOT / "environments" / f"{args.environment}.toml"
     text = path.read_text()
     for key, digest in digests.items():
