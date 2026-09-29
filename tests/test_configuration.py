@@ -94,9 +94,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("[tasks.setup-github-app]", tasks)
 
     def test_production_deploys_are_manual_and_gated(self) -> None:
-        # ci/deploy.yml is a staging copy until it's moved into .github/workflows.
-        path = ROOT / ".github" / "workflows" / "deploy.yml"
-        workflow = (path if path.exists() else ROOT / "ci" / "deploy.yml").read_text()
+        workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
         triggers = workflow.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
         self.assertIn("workflow_dispatch:", triggers)
         self.assertNotIn("push:", triggers)
@@ -107,7 +105,9 @@ class ConfigurationTests(unittest.TestCase):
             self.assertRegex(action, r"@[0-9a-f]{40}$")
         # No stored credentials and no host access: OIDC to Tailscale and Kubernetes only.
         self.assertIn("id-token: write", workflow)
-        self.assertNotIn("secrets.", workflow)
+        # Only the two Tailscale identifiers, as secrets so public run logs mask them.
+        self.assertEqual(set(re.findall(r"secrets\.(\w+)", workflow)), {"TS_OAUTH_CLIENT_ID", "TS_AUDIENCE"})
+        self.assertNotIn("vars.", workflow)
         self.assertNotIn("bootstrap", re.findall(r"options: \[(.*)\]", workflow)[0])
         tasks = (ROOT / ".mise.toml").read_text()
         self.assertNotIn("--ask-become-pass", tasks)

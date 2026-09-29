@@ -144,10 +144,6 @@ Production is never deployed automatically. You can also run `diff`,
 
 ## Deploying from GitHub Actions
 
-> **Not active yet.** The workflow is staged at `ci/deploy.yml`. Enable it with
-> `git mv ci/deploy.yml .github/workflows/deploy.yml`, then commit and push
-> from an account that is allowed to change workflows.
-
 The `Deploy` workflow runs `mise run diff`, `deploy`, `status` or `smoke`
 against production. It only runs when started by hand from the Actions tab,
 only from `main`, and only in the `production` Environment. It stores no
@@ -172,8 +168,9 @@ Omnigent namespaces. It can't change the platform or touch the VM.
 
 3. **Create the `production` Environment** under Settings -> Environments.
    Add yourself as a required reviewer, limit deployment branches to `main`,
-   and add two Environment variables from step 2: `TS_OAUTH_CLIENT_ID` and
-   `TS_AUDIENCE`.
+   and add two Environment secrets from step 2: `TS_OAUTH_CLIENT_ID` and
+   `TS_AUDIENCE`. They aren't sensitive, but secrets are masked in public run
+   logs.
 
 A run you approve can still read and change everything in the two Omnigent
 namespaces, including the database and all secrets. See the
