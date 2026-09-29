@@ -130,11 +130,14 @@ mise run status              # health, TLS, storage, failed runners
 mise run credential-status   # which credentials are present
 ```
 
-Changes to `versions.yaml`, `ansible/` or `kubernetes/platform/` also need
-`mise run bootstrap` first. `mise run deploy` compares the cluster with your
-checkout and refuses to run until you have.
+Changes to `ansible/`, `kubernetes/platform/`, the k3s or cert-manager
+entries in `versions.yaml`, or the environment's hostname, Kubernetes API host
+or GitHub deploy settings also need `mise run bootstrap` first. `mise run
+deploy` compares the cluster with your checkout and refuses to run until you
+have. Other version bumps, such as the agent CLIs, only need a deploy.
 
-- **Upgrade versions** in `versions.yaml`, then bootstrap and deploy.
+- **Upgrade versions** in `versions.yaml`, then deploy (bootstrap first for
+  k3s or cert-manager).
 - **Change images** (`images/`): bump `image_release`, then run **Deploy**,
   which builds, locks and deploys them. From your machine:
   run the publish workflow, then `mise run lock-images`, commit and deploy.
