@@ -144,10 +144,6 @@ Production is never deployed automatically. You can also run `diff`,
 
 ## Deploying from GitHub Actions
 
-> **Not active yet.** The workflow is staged at `ci/deploy.yml`. Enable it with
-> `git mv ci/deploy.yml .github/workflows/deploy.yml`, then commit and push
-> from an account that is allowed to change workflows.
-
 The `Deploy` workflow runs `mise run diff`, `deploy`, `status` or `smoke`
 against production. It only runs when started by hand from the Actions tab,
 only from `main`, and only in the `production` Environment. It stores no

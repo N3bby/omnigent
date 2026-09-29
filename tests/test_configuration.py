@@ -94,9 +94,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("[tasks.setup-github-app]", tasks)
 
     def test_production_deploys_are_manual_and_gated(self) -> None:
-        # ci/deploy.yml is a staging copy until it's moved into .github/workflows.
-        path = ROOT / ".github" / "workflows" / "deploy.yml"
-        workflow = (path if path.exists() else ROOT / "ci" / "deploy.yml").read_text()
+        workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
         triggers = workflow.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
         self.assertIn("workflow_dispatch:", triggers)
         self.assertNotIn("push:", triggers)
