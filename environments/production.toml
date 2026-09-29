@@ -6,7 +6,7 @@ admin_email = "levi.vandenbempt.sjcm@gmail.com"
 # Where kubectl reaches the Kubernetes API. The firewall blocks port 6443 on
 # the public interface, so use a private name such as the VM's Tailscale
 # MagicDNS name. Defaults to hostname.
-# kubernetes_api_host = "netcup.your-tailnet.ts.net"
+kubernetes_api_host = "netcup.taild5bc1b.ts.net"
 
 # The GitHub repository (by numeric ID) and Environment whose Actions runs may
 # deploy. Remove both to turn off deploying from GitHub Actions.
