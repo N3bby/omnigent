@@ -56,8 +56,8 @@ deployed by digest.
    ```
 
 4. **Publish the images.** Run the `Publish immutable images` workflow from the
-   Actions tab of your fork. Make both new GHCR packages public, then pin their
-   digests:
+   Actions tab of your fork. Make both new GHCR packages public, then, with
+   the commit the workflow built checked out, pin their digests:
 
    ```bash
    mise run lock-images
@@ -138,9 +138,10 @@ have. Other version bumps, such as the agent CLIs, only need a deploy.
 
 - **Upgrade versions** in `versions.yaml`, then deploy (bootstrap first for
   k3s or cert-manager).
-- **Change images** (`images/`): bump `image_release`, then run **Deploy**,
-  which builds, locks and deploys them. From your machine:
-  run the publish workflow, then `mise run lock-images`, commit and deploy.
+- **Change images** (`images/`): push the change, then run **Deploy**, which
+  builds, locks and deploys them. From your machine: run the publish workflow
+  on your pushed commit, then, with that commit checked out,
+  `mise run lock-images`, commit and deploy.
 - **Roll back** by reverting the commit and deploying again.
 
 Production is never deployed automatically. You can also release from

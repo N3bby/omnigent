@@ -6,7 +6,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from config import ConfigError, ROOT, fail, load_environment, load_versions
+from config import ConfigError, ROOT, fail, load_environment
 
 
 def resolve(reference: str) -> str:
@@ -20,24 +20,33 @@ def resolve(reference: str) -> str:
     return value
 
 
+def head_tag() -> str:
+    """The tag the publish workflow pushes for the checked-out commit."""
+    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, check=False, capture_output=True, text=True)
+    commit = result.stdout.strip()
+    if result.returncode or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        fail(result.stderr.strip() or "could not read the checked-out commit")
+    return f"sha-{commit}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--environment", default="production")
-    # Digests a build just produced; otherwise they are resolved from the release tag.
+    # Digests a build just produced; otherwise they are resolved from the tag the
+    # publish workflow pushed for the checked-out commit.
     parser.add_argument("--runner-digest")
     parser.add_argument("--server-digest")
     args = parser.parse_args()
     try:
-        cfg, versions = load_environment(args.environment), load_versions()
+        cfg = load_environment(args.environment)
     except ConfigError as exc:
         fail(exc)
     registry = str(cfg["image_registry"]).rstrip("/")
     if "REPLACE_ME" in registry:
         fail("set image_registry before locking images")
-    release = versions["image_release"]
     digests = {
-        "runner_digest": args.runner_digest or resolve(f"{registry}/{cfg['runner_image']}:{release}"),
-        "server_digest": args.server_digest or resolve(f"{registry}/{cfg['server_image']}:{release}"),
+        "runner_digest": args.runner_digest or resolve(f"{registry}/{cfg['runner_image']}:{head_tag()}"),
+        "server_digest": args.server_digest or resolve(f"{registry}/{cfg['server_image']}:{head_tag()}"),
     }
     for key, digest in digests.items():
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):

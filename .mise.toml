@@ -42,7 +42,7 @@ description = "Run HTTPS and in-cluster health smoke tests"
 run = './scripts/smoke-test'
 
 [tasks.lock-images]
-description = "Resolve immutable GHCR digests for the configured release tags"
+description = "Lock the GHCR digests published for the checked-out commit"
 run = './scripts/lock-images --environment "${ENV:-production}"'
 
 [tasks.credential-status]

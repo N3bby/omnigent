@@ -36,7 +36,6 @@ runs:
         set -euo pipefail
         value() { sed -n "s/^$1: \"\(.*\)\"$/\1/p" versions.yaml; }
         {
-          echo "release=$(value image_release)"
           echo "host_digest=$(value omnigent_host_base_digest)"
           echo "server_digest=$(value omnigent_server_base_digest)"
           echo "hvac=$(value hvac)"
@@ -47,9 +46,7 @@ runs:
         context: images/runner
         platforms: linux/amd64
         push: true
-        tags: |
-          ${{ steps.image.outputs.runner }}:${{ steps.versions.outputs.release }}
-          ${{ steps.image.outputs.runner }}:sha-${{ github.sha }}
+        tags: ${{ steps.image.outputs.runner }}:sha-${{ github.sha }}
         build-args: |
           OMNIGENT_HOST_IMAGE=ghcr.io/omnigent-ai/omnigent-host@${{ steps.versions.outputs.host_digest }}
         provenance: mode=max
@@ -60,9 +57,7 @@ runs:
         context: images/server
         platforms: linux/amd64
         push: true
-        tags: |
-          ${{ steps.image.outputs.server }}:${{ steps.versions.outputs.release }}
-          ${{ steps.image.outputs.server }}:sha-${{ github.sha }}
+        tags: ${{ steps.image.outputs.server }}:sha-${{ github.sha }}
         build-args: |
           OMNIGENT_SERVER_IMAGE=ghcr.io/omnigent-ai/omnigent-server-kubernetes@${{ steps.versions.outputs.server_digest }}
           HVAC_VERSION=${{ steps.versions.outputs.hvac }}
