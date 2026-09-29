@@ -34,7 +34,7 @@ spec:
   containers:
     - name: codex
       image: RUNNER_IMAGE
-      command: [sh, -lc, 'mkdir -p "$CODEX_HOME"; printf "%s\n" "cli_auth_credentials_store = \"file\"" "forced_login_method = \"chatgpt\"" > "$CODEX_HOME/config.toml"; exec sleep infinity']
+      command: [sh, -lc, 'mkdir -p "$CODEX_HOME"; cp /opt/codex-home/config.toml "$CODEX_HOME/config.toml"; exec sleep infinity']
       env:
         - {name: HOME, value: /home/omnigent}
         - {name: CODEX_HOME, value: /mnt/codex-home}

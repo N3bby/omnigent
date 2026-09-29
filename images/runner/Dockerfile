@@ -23,6 +23,12 @@ RUN npm ci --omit=dev --no-audit --no-fund \
 COPY --chmod=0755 codex-wrapper.sh /usr/local/bin/codex
 COPY --chmod=0755 claude-wrapper.sh /usr/local/bin/claude
 
+# Each runner gets its own Codex home and shares only the login. Codex keeps
+# SQLite databases in its home, and on the shared volume Pods in different
+# user namespaces left files that the others couldn't open.
+COPY --chmod=0644 codex-config.toml /opt/codex-home/config.toml
+RUN ln -s /mnt/codex-home/auth.json /opt/codex-home/auth.json
+
 # --fuzz=0 fails the build when upstream code under a patch has moved.
 COPY patches/ /tmp/omnigent-patches/
 RUN set -eu; \
