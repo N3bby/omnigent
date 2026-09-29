@@ -37,7 +37,7 @@ reach as reachable by an attacker.
 | Boundary | What it does |
 | --- | --- |
 | User namespace | The agent is root inside its pod, but that maps to an unprivileged user on the host. See [the diagram](CUSTOM_FEATURES.md#install-packages-and-run-containers). |
-| Admission policy | Rejects runner pods that are privileged, mount host paths, share host namespaces or use host ports (`kubernetes/base/runner-userns.yaml`). |
+| Admission policy | Rejects runner pods that are privileged, mount host paths, share host namespaces or use host ports (`kubernetes/platform/runner-userns.yaml`). |
 | No Kubernetes access | The runner's service account has no permissions, and its token isn't mounted. |
 | Resource limits | CPU, memory, disk, home size, and the number of pods and jobs are all capped. |
 | Separate namespace | PostgreSQL and the server's secrets live in a different namespace. Runners only get the runner credentials. |
@@ -71,6 +71,29 @@ Vault restarts without anyone present.
 That protects against a leak of the database on its own. It doesn't protect
 against someone with root on the VM or admin access to the cluster, because
 they can reach both the encrypted tokens and the key.
+
+## Deploying from GitHub Actions
+
+Deploys come in two levels of access:
+
+- **`mise run bootstrap`** needs SSH and sudo on the VM, and runs from your
+  machine. It owns everything that could weaken the boundaries above: the
+  firewall, k3s, cert-manager, the namespaces and their Pod Security labels,
+  the admission policies, RBAC and quotas.
+- **`mise run deploy`** needs only the Kubernetes API. From GitHub Actions it
+  authenticates with a short-lived GitHub OIDC token. The API server accepts
+  the token only from this repository's `production` Environment on `main`,
+  and the token can only manage the application in the two Omnigent
+  namespaces (`kubernetes/platform/deployer-rbac.yaml`).
+
+So a compromised deploy run, or a compromised action inside it, can't change
+the firewall, k3s, admission policies or namespace labels, and can't start
+Pods outside those two namespaces. It can still run Pods in them, so it gets
+every Secret there: the database, Vault and its key, the GitHub App secret,
+and the agent logins. Treat approving a deploy run as handing out those.
+
+The kubeconfig `mise run bootstrap` saves on your machine is cluster-admin,
+which is equivalent to root on the VM.
 
 ## Before inviting people you don't fully trust
 

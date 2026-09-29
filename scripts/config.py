@@ -100,7 +100,23 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
         value = require_string(data, key)
         if require_digests and not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
             raise ConfigError(f"{key} is not locked; run ENV={name} mise run lock-images")
+    data.setdefault("kubernetes_api_host", hostname)
+    require_string(data, "kubernetes_api_host", r"(?=.{1,253}$)(?!-)[A-Za-z0-9.-]+(?<!-)")
+    if "deploy_github_repository_id" in data:
+        require_string(data, "deploy_github_repository_id", r"[1-9][0-9]*")
+        data.setdefault("deploy_github_environment", "production")
+        require_string(data, "deploy_github_environment", r"[A-Za-z0-9_.-]+")
     return data, versions
+
+
+def deploy_audience(cfg: dict[str, object]) -> str:
+    """The OIDC audience GitHub Actions requests and the API server accepts."""
+    return f"https://{cfg['hostname']}/kubernetes"
+
+
+def kubernetes_ca_path(name: str) -> Path:
+    """The cluster CA that `mise run bootstrap` records for CI to pin."""
+    return ROOT / "environments" / f"{name}.kubernetes-ca.crt"
 
 
 def digest_file(path: Path) -> str:

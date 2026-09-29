@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# kubectl for this deployment's cluster only, never the caller's current
+# context. `mise run bootstrap` writes the default kubeconfig; CI points
+# OMNIGENT_KUBECONFIG at one that uses its GitHub OIDC token.
+set -euo pipefail
+
+config="${OMNIGENT_KUBECONFIG:-${HOME}/.kube/omnigent-${ENV:-production}.yaml}"
+[[ -r "$config" ]] || {
+  echo "cannot read kubeconfig $config; run ENV=${ENV:-production} mise run bootstrap or set OMNIGENT_KUBECONFIG" >&2
+  exit 1
+}
+exec kubectl --kubeconfig "$config" "$@"

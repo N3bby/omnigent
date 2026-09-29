@@ -2,10 +2,16 @@ write-kubeconfig-mode: "0600"
 secrets-encryption: true
 tls-san:
   - "{{ omnigent_hostname }}"
+{% if omnigent_kubernetes_api_host != omnigent_hostname %}
+  - "{{ omnigent_kubernetes_api_host }}"
+{% endif %}
+{% if omnigent_deploy_github_repository_id %}
+kube-apiserver-arg:
+  - "authentication-config=/etc/rancher/k3s/authentication-config.yaml"
+{% endif %}
 flannel-backend: vxlan
 node-label:
   - "omnigent.dev/single-node=true"
 kubelet-arg:
   - "eviction-hard=memory.available<500Mi,nodefs.available<10%,imagefs.available<10%"
   - "eviction-minimum-reclaim=memory.available=250Mi,nodefs.available=5%,imagefs.available=5%"
-

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Fail unless the cluster runs the platform this checkout renders, so a change
+# that needs `mise run bootstrap` is never deployed half-way.
+set -euo pipefail
+
+environment="${1:?usage: check-platform ENVIRONMENT}"
+export ENV="$environment"
+scripts="$(dirname "${BASH_SOURCE[0]}")"
+expected="$(cat "$scripts/../.generated/$environment/platform-revision")"
+live="$("$scripts/kube" get configmap omnigent-platform -n omnigent -o 'jsonpath={.data.revision}' 2>/dev/null || true)"
+if [[ "$live" != "$expected" ]]; then
+  cat >&2 <<MESSAGE
+The platform on the cluster does not match this checkout.
+  cluster:  ${live:-not bootstrapped}
+  checkout: $expected
+Something in versions.yaml, ansible/ or kubernetes/platform changed. Run
+ENV=$environment mise run bootstrap from your machine first.
+MESSAGE
+  exit 1
+fi
+echo "platform is up to date (${expected:0:12})"

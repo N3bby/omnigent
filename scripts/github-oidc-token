@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# kubectl credential plugin for GitHub Actions: prints a fresh OIDC token for
+# the deploy audience. kubectl calls it again shortly before each token
+# expires, so long rollouts keep working. Needs `permissions: id-token: write`.
+set -euo pipefail
+
+audience="${1:?usage: github-oidc-token AUDIENCE}"
+: "${ACTIONS_ID_TOKEN_REQUEST_URL:?not running in a GitHub Actions job with id-token: write}"
+: "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?not running in a GitHub Actions job with id-token: write}"
+
+token="$(curl -fsS --retry 3 -G \
+  -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+  --data-urlencode "audience=${audience}" \
+  "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -er .value)"
+
+# Refresh a minute before the token's own expiry.
+payload="$(cut -d. -f2 <<<"$token" | tr '_-' '/+')"
+while (( ${#payload} % 4 )); do payload+="="; done
+expires="$(base64 -d <<<"$payload" | jq -er '.exp - 60 | todate')"
+
+jq -n --arg token "$token" --arg expires "$expires" '{
+  apiVersion: "client.authentication.k8s.io/v1",
+  kind: "ExecCredential",
+  status: {token: $token, expirationTimestamp: $expires}
+}'

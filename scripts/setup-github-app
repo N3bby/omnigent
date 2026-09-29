@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-KUBECTL=(k3s kubectl)
+KUBECTL=("$(dirname "${BASH_SOURCE[0]}")/kube")
 namespace=omnigent
 vault_pod=vault-0
 vault_addr=http://127.0.0.1:8200

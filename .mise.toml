@@ -2,6 +2,7 @@
 python = "3.13.15"
 uv = "0.12.18"
 ansible-core = "2.21.4"
+kubectl = "1.36.4"
 
 [tasks.check]
 description = "Validate configuration, manifests, scripts, and Ansible syntax"
@@ -11,27 +12,34 @@ run = './scripts/preflight --environment "${ENV:-production}" --inventory "${INV
 description = "Render the complete non-secret Kubernetes desired state"
 run = './scripts/render --environment "${ENV:-production}"'
 
+[tasks.bootstrap]
+description = "Provision the VM and the platform as root (needs SSH and sudo)"
+run = [
+  { task = "check" },
+  'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/bootstrap.yml -e "omnigent_environment=${ENV:-production}"',
+]
+
 [tasks.diff]
-description = "Show the server-side Kubernetes diff without changing the server"
+description = "Show the application diff without changing the cluster"
 run = [
   { task = "render" },
-  'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/diff.yml -e "omnigent_environment=${ENV:-production}"',
+  './scripts/diff "${ENV:-production}"',
 ]
 
 [tasks.deploy]
-description = "Provision or reconcile the VM and deploy Omnigent"
+description = "Deploy the application (needs only the Kubernetes API)"
 run = [
   { task = "check" },
-  'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/site.yml -e "omnigent_environment=${ENV:-production}"',
+  './scripts/deploy "${ENV:-production}"',
 ]
 
 [tasks.status]
 description = "Inspect health, capacity, TLS, storage, and runner failures"
-run = 'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/status.yml -e "omnigent_environment=${ENV:-production}"'
+run = './scripts/status'
 
 [tasks.smoke]
-description = "Run remote HTTPS and in-cluster health smoke tests"
-run = 'ansible-playbook -i "ansible/inventory/${ENV:-production}/hosts.yml" ansible/smoke.yml -e "omnigent_environment=${ENV:-production}"'
+description = "Run HTTPS and in-cluster health smoke tests"
+run = './scripts/smoke-test'
 
 [tasks.lock-images]
 description = "Resolve immutable GHCR digests for the configured release tags"
@@ -39,23 +47,23 @@ run = './scripts/lock-images --environment "${ENV:-production}"'
 
 [tasks.credential-status]
 description = "Check credential presence without printing values"
-run = './scripts/remote-helper "${ENV:-production}" credential-status'
+run = './scripts/credential-status'
 
 [tasks.setup-codex]
 description = "Run the interactive Codex device OAuth flow on the server"
-run = './scripts/remote-helper "${ENV:-production}" setup-codex'
+run = './scripts/setup-codex'
 
 [tasks.setup-claude]
 description = "Store or rotate the shared Claude subscription token"
-run = './scripts/remote-helper "${ENV:-production}" setup-claude'
+run = './scripts/setup-claude'
 
 [tasks.setup-git-token]
 description = "Store or rotate the optional private-Git HTTPS token"
-run = './scripts/remote-helper "${ENV:-production}" setup-git-token'
+run = './scripts/setup-git-token'
 
 [tasks.setup-github-app]
 description = "Initialize local credential encryption and configure the GitHub App"
-run = './scripts/remote-helper "${ENV:-production}" setup-github-app'
+run = './scripts/setup-github-app'
 
 [tasks.test]
 description = "Run repository validation and tests"

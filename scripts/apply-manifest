@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+KUBECTL=("$(dirname "${BASH_SOURCE[0]}")/kube")
+
 manifest="${1:?usage: apply-manifest MANIFEST}"
 [[ -r "$manifest" ]] || { echo "cannot read $manifest" >&2; exit 1; }
 
 set +e
-k3s kubectl diff \
+"${KUBECTL[@]}" diff \
   -f "$manifest" >/dev/null
 diff_status=$?
 set -e
@@ -22,25 +24,17 @@ else
 fi
 
 # Apply even after an empty diff so --prune can remove objects no longer present.
-k3s kubectl apply \
+# Only application kinds are listed: the platform (namespaces, policies, RBAC,
+# quotas) is labelled omnigent-platform and belongs to `mise run bootstrap`.
+"${KUBECTL[@]}" apply \
   --prune \
   -l app.kubernetes.io/managed-by=omnigent-deployment \
   --prune-allowlist=core/v1/ConfigMap \
-  --prune-allowlist=core/v1/LimitRange \
-  --prune-allowlist=core/v1/Namespace \
   --prune-allowlist=core/v1/PersistentVolumeClaim \
-  --prune-allowlist=core/v1/ResourceQuota \
   --prune-allowlist=core/v1/Service \
   --prune-allowlist=core/v1/ServiceAccount \
   --prune-allowlist=apps/v1/Deployment \
   --prune-allowlist=apps/v1/StatefulSet \
   --prune-allowlist=networking.k8s.io/v1/Ingress \
-  --prune-allowlist=rbac.authorization.k8s.io/v1/Role \
-  --prune-allowlist=rbac.authorization.k8s.io/v1/RoleBinding \
-  --prune-allowlist=cert-manager.io/v1/ClusterIssuer \
   --prune-allowlist=traefik.io/v1alpha1/Middleware \
-  --prune-allowlist=admissionregistration.k8s.io/v1/MutatingAdmissionPolicy \
-  --prune-allowlist=admissionregistration.k8s.io/v1/MutatingAdmissionPolicyBinding \
-  --prune-allowlist=admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy \
-  --prune-allowlist=admissionregistration.k8s.io/v1/ValidatingAdmissionPolicyBinding \
   -f "$manifest"

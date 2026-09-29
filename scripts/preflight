@@ -29,7 +29,7 @@ def main() -> None:
     if ansible:
         subprocess.run([
             ansible, "-i", args.inventory,
-            "ansible/site.yml", "--syntax-check", "-e", f"omnigent_environment={args.environment}",
+            "ansible/bootstrap.yml", "--syntax-check", "-e", f"omnigent_environment={args.environment}",
         ], cwd=ROOT, check=True)
     else:
         print("warning: ansible-playbook not installed; skipped syntax check", file=sys.stderr)
