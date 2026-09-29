@@ -116,11 +116,10 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertEqual(set(re.findall(r"secrets\.(\w+)", workflow)), {"TS_OAUTH_CLIENT_ID", "TS_AUDIENCE"})
                 self.assertNotIn("vars.", workflow)
                 self.assertNotIn("bootstrap", re.findall(r"options: \[(.*)\]", workflow)[0])
-            # A reusable image build feeds release deploys, so pin it too.
-            publish = (directory / "publish-images.yml")
-            if publish.exists() and "workflow_call:" in publish.read_text():
-                for action in re.findall(r"uses: (\S+)", publish.read_text()):
-                    self.assertRegex(action, r"@[0-9a-f]{40}$")
+        # The shared image build feeds release deploys, so pin it too.
+        build = (ROOT / ".github" / "actions" / "build-images" / "action.yml").read_text()
+        for action in re.findall(r"uses: (\S+)", build):
+            self.assertRegex(action, r"@[0-9a-f]{40}$")
         tasks = (ROOT / ".mise.toml").read_text()
         self.assertNotIn("--ask-become-pass", tasks)
         self.assertIn("become_ask_pass = True", (ROOT / "ansible.cfg").read_text())

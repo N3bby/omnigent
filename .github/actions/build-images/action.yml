@@ -1,0 +1,78 @@
+name: Build images
+description: >-
+  Build and push the runner and server images from the pinned inputs in
+  versions.yaml, and output their digests.
+inputs:
+  token:
+    description: Token that may push packages to GHCR
+    required: true
+outputs:
+  runner_digest:
+    description: Digest of the pushed runner image
+    value: ${{ steps.runner_build.outputs.digest }}
+  server_digest:
+    description: Digest of the pushed server image
+    value: ${{ steps.server_build.outputs.digest }}
+runs:
+  using: composite
+  steps:
+    # Pinned by SHA: these build what a release deploys.
+    - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+    - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+    - name: Normalize GHCR image name
+      id: image
+      shell: bash
+      run: |
+        echo "runner=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/omnigent-runner" >> "$GITHUB_OUTPUT"
+        echo "server=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/omnigent-server" >> "$GITHUB_OUTPUT"
+    - name: Read locked build versions
+      id: versions
+      shell: bash
+      run: |
+        set -euo pipefail
+        value() { sed -n "s/^$1: \"\(.*\)\"$/\1/p" versions.yaml; }
+        {
+          echo "release=$(value image_release)"
+          echo "host_digest=$(value omnigent_host_base_digest)"
+          echo "server_digest=$(value omnigent_server_base_digest)"
+          echo "hvac=$(value hvac)"
+        } >> "$GITHUB_OUTPUT"
+    - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      id: runner_build
+      with:
+        context: images/runner
+        platforms: linux/amd64
+        push: true
+        tags: |
+          ${{ steps.image.outputs.runner }}:${{ steps.versions.outputs.release }}
+          ${{ steps.image.outputs.runner }}:sha-${{ github.sha }}
+        build-args: |
+          OMNIGENT_HOST_IMAGE=ghcr.io/omnigent-ai/omnigent-host@${{ steps.versions.outputs.host_digest }}
+        provenance: mode=max
+        sbom: true
+    - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+      id: server_build
+      with:
+        context: images/server
+        platforms: linux/amd64
+        push: true
+        tags: |
+          ${{ steps.image.outputs.server }}:${{ steps.versions.outputs.release }}
+          ${{ steps.image.outputs.server }}:sha-${{ github.sha }}
+        build-args: |
+          OMNIGENT_SERVER_IMAGE=ghcr.io/omnigent-ai/omnigent-server-kubernetes@${{ steps.versions.outputs.server_digest }}
+          HVAC_VERSION=${{ steps.versions.outputs.hvac }}
+        provenance: mode=max
+        sbom: true
+    - name: Record digests
+      shell: bash
+      env:
+        RUNNER_DIGEST: ${{ steps.runner_build.outputs.digest }}
+        SERVER_DIGEST: ${{ steps.server_build.outputs.digest }}
+      run: |
+        echo "runner=$RUNNER_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+        echo "server=$SERVER_DIGEST" >> "$GITHUB_STEP_SUMMARY"
