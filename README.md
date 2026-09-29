@@ -163,11 +163,11 @@ Omnigent namespaces. It can't change the platform or touch the VM.
 
 2. **Set up Tailscale for CI.** In the Tailscale admin console:
 
-   - Add `tag:ci` to `tagOwners`, and allow `tag:ci` to reach the VM on
+   - Add `tag:omnigent-ci` to `tagOwners`, and allow `tag:omnigent-ci` to reach the VM on
      `tcp:6443` and nothing else.
    - Under Trust credentials, add an OpenID Connect credential with issuer
      `https://token.actions.githubusercontent.com`, the `auth_keys` write
-     scope and tag `tag:ci`. Restrict its subject to your repository's
+     scope and tag `tag:omnigent-ci`. Restrict its subject to your repository's
      `production` Environment.
 
 3. **Create the `production` Environment** under Settings -> Environments.
