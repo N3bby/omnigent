@@ -149,7 +149,7 @@
   <text class="title" x="428" y="868">Home volume, one per session</text>
   <text class="sub" x="428" y="888">/home/omnigent, kept until the session is deleted</text>
 
-  <text class="lbl" x="408" y="922">CPU and memory limits per pod · unrestricted network</text>
+  <text class="lbl" x="408" y="922">pods share the VM's spare CPU and memory · unrestricted network</text>
 
   <!-- Right column: people and services -->
   <text class="h" x="988" y="100">USERS &amp; SERVICES</text>
