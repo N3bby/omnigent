@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import py_compile
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -100,6 +101,43 @@ class ConfigurationTests(unittest.TestCase):
             runner_idle_shutdown_seconds=agent_idle + MIN_RUNNER_SUSPEND_WINDOW_SECONDS - 1,
         )
         with mock.patch("config.load_environment", return_value=too_short):
+            with self.assertRaises(ConfigError):
+                validate("ci")
+
+    def test_acme_challenge_selects_the_issuer_solver(self) -> None:
+        values, _ = validate("ci")
+        self.assertEqual(values["acme_challenge"], "http-01")
+        source = (ROOT / "environments" / "ci.toml").read_text()
+        for challenge, solver, absent in (
+            ("http-01", "      - http01:\n          ingress:\n", "dns01"),
+            ("cloudflare-dns-01", "      - dns01:\n          cloudflare:\n", "http01"),
+        ):
+            with self.subTest(challenge=challenge):
+                name = f"ci-{challenge}"
+                path = ROOT / "environments" / f"{name}.toml"
+                self.assertFalse(path.exists())
+                path.write_text(source + f'acme_challenge = "{challenge}"\n')
+                try:
+                    subprocess.run(
+                        [str(ROOT / "scripts" / "render"), "--environment", name, "--prepare-only"],
+                        check=True, capture_output=True,
+                    )
+                    generated = ROOT / ".generated" / name
+                    issuer = (generated / "platform" / "dynamic.yaml").read_text()
+                    variables = (generated / "deployment-vars.yml").read_text()
+                finally:
+                    path.unlink()
+                    shutil.rmtree(ROOT / ".generated" / name, ignore_errors=True)
+                self.assertIn(solver, issuer)
+                self.assertNotIn(absent, issuer)
+                self.assertIn(f'omnigent_acme_challenge: "{challenge}"\n', variables)
+        # The issuer reads the Secret that the setup task writes.
+        self.assertIn("name: cloudflare-api-token\n              key: api-token", issuer)
+        setup = (ROOT / "scripts" / "setup-cloudflare-token").read_text()
+        self.assertIn("create secret generic cloudflare-api-token -n cert-manager", setup)
+        self.assertIn("--from-file=api-token=/dev/stdin", setup)
+        invalid = dict(load_environment("ci"), acme_challenge="dns-01")
+        with mock.patch("config.load_environment", return_value=invalid):
             with self.assertRaises(ConfigError):
                 validate("ci")
 

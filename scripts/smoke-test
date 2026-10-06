@@ -14,8 +14,18 @@ hostname="$("${KUBECTL[@]}" get ingress omnigent-public -n omnigent -o jsonpath=
 "${KUBECTL[@]}" get endpoints omnigent -n omnigent -o json \
   | jq -e '.subsets[]?.addresses | length > 0' >/dev/null
 
-"${KUBECTL[@]}" wait certificate/omnigent-tls \
-  -n omnigent --for=condition=Ready --timeout=300s >/dev/null
+if ! "${KUBECTL[@]}" wait certificate/omnigent-tls \
+  -n omnigent --for=condition=Ready --timeout=300s >/dev/null; then
+  message="$("${KUBECTL[@]}" get certificate omnigent-tls -n omnigent \
+    -o 'jsonpath={.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null || true)"
+  cat >&2 <<MESSAGE
+The TLS certificate is not Ready: ${message:-no status yet}
+mise run status shows cert-manager's challenge and its reason. With
+acme_challenge = "cloudflare-dns-01", run mise run setup-cloudflare-token if
+mise run credential-status reports the token absent.
+MESSAGE
+  exit 1
+fi
 
 curl --fail --silent --show-error \
   --retry 20 --retry-delay 10 --retry-all-errors \

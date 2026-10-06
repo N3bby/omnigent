@@ -25,6 +25,10 @@ echo "SERVER AND DATABASE"
 echo
 echo "TLS"
 "${KUBECTL[@]}" get certificate,certificaterequest -n omnigent 2>/dev/null || true
+# Present only while cert-manager is proving control of the hostname.
+"${KUBECTL[@]}" get challenges -n omnigent \
+  -o custom-columns=NAME:.metadata.name,TYPE:.spec.type,STATE:.status.state,REASON:.status.reason \
+  2>/dev/null || true
 
 echo
 echo "RUNNERS (network unrestricted by policy; Ready=False SandboxExpired means idle and stopped)"

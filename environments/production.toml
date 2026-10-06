@@ -3,6 +3,13 @@ hostname = "omni.n3b.by"
 acme_email = "levi.vandenbempt.sjcm@gmail.com"
 admin_email = "levi.vandenbempt.sjcm@gmail.com"
 
+# How Let's Encrypt checks that you control hostname. "http-01" fetches a file
+# from the VM, so the VM must be reachable from the Internet on port 80.
+# "cloudflare-dns-01" looks up a DNS record that cert-manager creates through
+# the Cloudflare API, so the VM can be private, such as Tailscale-only; see
+# "Private deployment on your tailnet" in the README.
+acme_challenge = "http-01"
+
 # Where kubectl reaches the Kubernetes API. The firewall blocks port 6443 on
 # the public interface, so use a private name such as the VM's Tailscale
 # MagicDNS name. Defaults to hostname.

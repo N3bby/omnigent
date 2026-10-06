@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # its window must cover a few missed renewals. Upstream's default.
 MIN_RUNNER_SUSPEND_WINDOW_SECONDS = 300
 
+# How Let's Encrypt checks that we control the hostname. http-01 fetches a
+# token from the VM over the Internet; cloudflare-dns-01 looks up a TXT record
+# that cert-manager writes through the Cloudflare API, so the VM can be private.
+ACME_CHALLENGES = ("http-01", "cloudflare-dns-01")
+
 
 class ConfigError(ValueError):
     pass
@@ -78,6 +83,9 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
         raise ConfigError("hostname must be a real fully-qualified DNS name")
     for key in ("acme_email", "admin_email"):
         require_string(data, key, r"[^\s@]+@[^\s@]+\.[^\s@]+")
+    data.setdefault("acme_challenge", "http-01")
+    if data["acme_challenge"] not in ACME_CHALLENGES:
+        raise ConfigError(f"acme_challenge must be one of: {', '.join(ACME_CHALLENGES)}")
     registry = require_string(data, "image_registry", r"[a-z0-9.-]+/[A-Za-z0-9_.-]+")
     if "REPLACE_ME" in registry:
         raise ConfigError("set image_registry to the public GHCR namespace")
