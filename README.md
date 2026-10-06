@@ -137,9 +137,10 @@ mise run credential-status   # which credentials are present
 
 Changes to `ansible/`, `kubernetes/platform/`, the k3s, cert-manager or
 agent-sandbox entries in `versions.yaml`, or the environment's hostname,
-Kubernetes API host, ACME challenge or GitHub deploy settings also need `mise run bootstrap`
-first. `mise run deploy` compares the cluster with your checkout and refuses to run until you
-have. Other version bumps, such as the agent CLIs, only need a deploy.
+Kubernetes API host, ACME challenge or GitHub deploy settings also need
+`mise run bootstrap` first. `mise run deploy` compares the cluster with your
+checkout and refuses to run until you have. Other version bumps, such as the
+agent CLIs, only need a deploy.
 
 - **Upgrade versions** in `versions.yaml`, then deploy (bootstrap first for
   k3s, cert-manager or agent-sandbox).
@@ -257,7 +258,9 @@ keeps its own kubeconfig in `~/.kube/omnigent-production-alternative.yaml`.
 
    ```bash
    ENV=production-alternative mise run bootstrap
-   git add environments/production-alternative.toml environments/production-alternative.kubernetes-ca.crt ansible/inventory/production-alternative
+   git add environments/production-alternative.toml \
+     environments/production-alternative.kubernetes-ca.crt \
+     ansible/inventory/production-alternative
    git commit -m "Add the production-alternative deployment"
    ENV=production-alternative mise run setup-cloudflare-token
    ENV=production-alternative mise run deploy
@@ -271,9 +274,10 @@ keeps its own kubeconfig in `~/.kube/omnigent-production-alternative.yaml`.
    [Set up your own deployment](#set-up-your-own-deployment), adding
    `ENV=production-alternative` to every `mise run` command.
 
-To make an existing deployment private instead, follow steps 1 and 4 with its
-own environment, after setting `acme_challenge = "cloudflare-dns-01"` and the
-new hostname in its environment file. If GitHub Actions deploys it, also allow
+To make an existing deployment private instead, add its DNS record as in
+step 1 and set `acme_challenge = "cloudflare-dns-01"` and the new hostname in
+its environment file. Then run `mise run bootstrap`,
+`mise run setup-cloudflare-token` and `mise run deploy` for it. If GitHub Actions deploys it, also allow
 `tag:omnigent-ci` to reach `tag:omnigent` on `tcp:443`, because the deploy
 checks the HTTPS endpoint.
 
@@ -288,8 +292,10 @@ checks the HTTPS endpoint.
   `ENV=production-alternative mise run status` shows cert-manager's challenge
   and why it's stuck, and
   `ENV=production-alternative mise run credential-status` shows whether the
-  token is stored.
-  Storing the token again makes cert-manager retry straight away.
+  token is stored. Storing the token again makes cert-manager retry straight
+  away.
+- **Your Tailscale access rules restrict traffic.** Allow your devices to
+  reach the VM on `tcp:443`, and on `tcp:80` for the redirect to HTTPS.
 - **The hostname is public.** Every publicly trusted certificate is listed in
   public Certificate Transparency logs, so anyone can find the name. The
   service behind it stays unreachable from outside your tailnet.
