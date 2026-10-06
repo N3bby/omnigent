@@ -164,14 +164,19 @@ so Vault comes back by itself after a restart. The server image adds the
 
 ## Idle sessions stop and keep their files
 
-A session's runner Pod stops after about 30 minutes without agent activity,
-which frees its CPU and memory. Sending a message wakes it again, which takes
-about as long as starting a new session. The session keeps its home directory,
-`/home/omnigent`: your repositories, uncommitted changes, agent state and
-Podman images are where you left them. The home directory is only deleted
+An idle session winds down in two steps:
+
+1. After 30 minutes without agent activity, the agent exits. The Pod keeps
+   running, so everything in it is still there.
+2. After 4 hours without agent activity, the Pod stops, which frees the CPU
+   and memory it reserved. Sending a message wakes it again, which takes
+   about as long as starting a new session.
+
+The session keeps its home directory, `/home/omnigent`: your repositories,
+uncommitted changes, agent state and Podman images are where you left them. The home directory is only deleted
 when you delete the session.
 
-Anything outside the home directory starts fresh when a session wakes,
+Anything outside the home directory starts fresh when a stopped Pod wakes,
 including packages from `apt-get install`. Have agents install tools into the
 home directory, for example with `pip install --user` or `npm --prefix`, if
 they should survive.
@@ -181,10 +186,20 @@ Stopped sessions still use disk. `local-path` doesn't enforce the volume size,
 lists every session's volume, and shows stopped sessions as `Ready=False`,
 `SandboxExpired`.
 
-To change how long a session waits before it stops, set
-`runner_idle_shutdown_seconds` in `environments/production.toml` and deploy.
-The minimum is 660 seconds. Pods that are already running keep their old
-timing until they stop.
+Until it stops, an idle Pod still counts towards `runner_max_concurrency` and
+the VM's capacity, so with many sessions a new one may have to wait for an
+old one to stop or be deleted.
+
+To change the timing, set these in `environments/production.toml` and
+deploy:
+
+| Setting | What it sets | Default |
+| --- | --- | --- |
+| `runner_agent_idle_seconds` | Idle time before the agent exits | 1800 (30 minutes) |
+| `runner_idle_shutdown_seconds` | Idle time before the Pod stops | 14400 (4 hours) |
+
+The Pod has to stop at least 300 seconds after the agent exits. Pods that
+are already running keep their old timing until they stop.
 
 <details>
 <summary>How it works</summary>
@@ -195,9 +210,9 @@ timing until they stop.
   `agent_sandbox` provider manages them.
 - While a runner is connected, the server keeps pushing the Sandbox's
   `shutdownTime` forward. The runner exits once it has been idle for
-  `runner_idle_shutdown_seconds` minus ten minutes. Ten minutes later the
-  deadline passes and the controller deletes the Pod. The Sandbox and its
-  volume stay.
+  `runner_agent_idle_seconds` (Omnigent's `keep_warm_s`). The rest of
+  `runner_idle_shutdown_seconds` later, the deadline passes and the controller
+  deletes the Pod. The Sandbox and its volume stay.
 - `OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE` in `scripts/render` puts the home
   directory on a per-session `local-path` volume instead of an `emptyDir`.
 - Deleting the session deletes the Sandbox, and Kubernetes deletes its volume

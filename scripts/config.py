@@ -11,10 +11,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# How long a runner Pod lingers after its runner exits idle before the
-# agent-sandbox controller suspends it. Part of runner_idle_shutdown_seconds,
-# which stays the whole idle time; the runner gets the rest.
-RUNNER_SUSPEND_WINDOW_SECONDS = 600
+# The server renews an active runner Pod's deadline about once a minute, so
+# its window must cover a few missed renewals. Upstream's default.
+MIN_RUNNER_SUSPEND_WINDOW_SECONDS = 300
 
 
 class ConfigError(ValueError):
@@ -95,10 +94,14 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     for key in ("runner_pod_ready_timeout_seconds", "runner_max_concurrency"):
         if not isinstance(data.get(key), int) or int(data[key]) < 1:
             raise ConfigError(f"{key} must be a positive integer")
-    idle = data.get("runner_idle_shutdown_seconds")
-    if not isinstance(idle, int) or isinstance(idle, bool) or idle < RUNNER_SUSPEND_WINDOW_SECONDS + 60:
+    for key in ("runner_agent_idle_seconds", "runner_idle_shutdown_seconds"):
+        value = data.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 60:
+            raise ConfigError(f"{key} must be an integer of at least 60")
+    if runner_suspend_window_seconds(data) < MIN_RUNNER_SUSPEND_WINDOW_SECONDS:
         raise ConfigError(
-            f"runner_idle_shutdown_seconds must be an integer of at least {RUNNER_SUSPEND_WINDOW_SECONDS + 60}"
+            "runner_idle_shutdown_seconds must be at least "
+            f"{MIN_RUNNER_SUSPEND_WINDOW_SECONDS} more than runner_agent_idle_seconds"
         )
     for key in ("codex_bypass_approvals", "claude_bypass_permissions", "backups_enabled"):
         if not isinstance(data.get(key), bool):
@@ -118,6 +121,11 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
         data.setdefault("deploy_github_environment", "production")
         require_string(data, "deploy_github_environment", r"[A-Za-z0-9_.-]+")
     return data, versions
+
+
+def runner_suspend_window_seconds(cfg: dict[str, object]) -> int:
+    """How long a runner Pod stays up after its agent exits idle."""
+    return int(cfg["runner_idle_shutdown_seconds"]) - int(cfg["runner_agent_idle_seconds"])
 
 
 def deploy_audience(cfg: dict[str, object]) -> str:
