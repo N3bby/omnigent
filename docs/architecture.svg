@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 1280 692" width="1280" height="692" role="img" aria-labelledby="t d">
   <title id="t">Omnigent deployment overview</title>
-  <desc id="d">The Deploy workflow in GitHub Actions builds images for your fork, commits their digests, and deploys them over Tailscale through the Kubernetes API of a single Ubuntu VM running k3s. mise run bootstrap sets up the VM itself over SSH. Traefik serves HTTPS to the Omnigent server, which stores data in PostgreSQL and Vault and starts one runner pod per session. Runner pods call the model APIs and GitHub.</desc>
+  <desc id="d">The Deploy workflow in GitHub Actions builds images for your fork, commits their digests, and deploys them over Tailscale through the Kubernetes API of a single Ubuntu VM running k3s. mise run bootstrap sets up the VM itself over SSH. Traefik serves HTTPS to the Omnigent server, which stores data in PostgreSQL and Vault and starts one runner sandbox per session. The agent-sandbox controller runs each sandbox's pod, stops it when idle, and keeps the session's home volume until the session is deleted. Runner pods call the model APIs and GitHub.</desc>
   <style>
     .bg { fill: #f8fafc; }
     .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
@@ -82,9 +82,13 @@
   <rect class="vm" x="352" y="72" width="576" height="628" rx="14"/>
   <text class="h" x="372" y="100">YOUR UBUNTU VM · K3S</text>
 
-  <rect class="edge" x="384" y="120" width="512" height="56" rx="10"/>
-  <text class="title" x="404" y="144">Traefik + cert-manager</text>
-  <text class="sub" x="404" y="163">HTTPS with automatic Let's Encrypt certificates</text>
+  <rect class="edge" x="384" y="120" width="196" height="56" rx="10"/>
+  <text class="title" x="400" y="144">agent-sandbox</text>
+  <text class="sub" x="400" y="163">stops idle runner pods</text>
+
+  <rect class="edge" x="596" y="120" width="300" height="56" rx="10"/>
+  <text class="title" x="616" y="144">Traefik + cert-manager</text>
+  <text class="sub" x="616" y="163">automatic HTTPS (Let's Encrypt)</text>
 
   <rect class="ns" x="376" y="200" width="528" height="192" rx="10"/>
   <text class="nslbl" x="890" y="219" text-anchor="end">namespace omnigent</text>
@@ -104,7 +108,7 @@
   <path class="line" d="M648 296 H686" marker-end="url(#a)"/>
   <path class="line" d="M648 330 C668 330 668 346 686 346" marker-end="url(#a)"/>
 
-  <path class="line" d="M600 176 V272" marker-end="url(#a)"/>
+  <path class="line" d="M620 176 V272" marker-end="url(#a)"/>
 
   <rect class="ns" x="376" y="416" width="528" height="264" rx="10"/>
   <text class="nslbl" x="890" y="435" text-anchor="end">namespace omnigent-sandboxes</text>
@@ -118,10 +122,11 @@
   <text class="sub" x="428" y="562">Podman for containers, apt-get for packages</text>
   <text class="sub" x="428" y="582">uses the shared agent logins you set up</text>
 
-  <text class="lbl" x="408" y="648">CPU, memory and disk limits per pod · unrestricted network</text>
+  <text class="lbl" x="408" y="640">stops when idle · keeps its home disk until the session is deleted</text>
+  <text class="lbl" x="408" y="660">CPU and memory limits per pod · unrestricted network</text>
 
   <path class="line" d="M470 346 V470" marker-end="url(#a)"/>
-  <text class="lbl" x="478" y="409">starts pod</text>
+  <text class="lbl" x="478" y="409">starts sandbox</text>
   <path class="line" d="M580 472 V348" marker-end="url(#a)"/>
   <text class="lbl" x="588" y="409">connects back</text>
 

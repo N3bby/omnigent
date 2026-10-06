@@ -55,7 +55,7 @@
   <text class="sub" x="524" y="118">• runs as a high, unused UID such as 131072</text>
   <text class="sub" x="524" y="142">• can't read or change host files</text>
   <text class="sub" x="524" y="166">• its root powers only work inside the pod</text>
-  <text class="sub" x="524" y="190">• still bound by the pod's CPU, memory, disk</text>
+  <text class="sub" x="524" y="190">• still bound by the pod's CPU and memory</text>
 
   <rect class="guard" x="32" y="230" width="836" height="62" rx="10"/>
   <text class="bad" x="52" y="256">Rejected in the sandbox namespace</text>
