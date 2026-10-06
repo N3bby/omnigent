@@ -1,43 +1,50 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 420" width="760" height="420" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 385.8" width="760" height="385.8" role="img" aria-labelledby="t d">
   <title id="t">Usage limits in the composer</title>
-  <desc id="d">Illustration of the Omnigent composer. Next to the context ring it shows "5h 23% · 7d 81%". Clicking it opens a "Usage limits" popover with a bar and reset time for the 5-hour and weekly limits.</desc>
+  <desc id="d">The Omnigent composer. In the bar above the message box, next to the context ring, it shows "5h 23% · 7d 81%". Clicking it opens a "Usage limits" popover with a bar and reset time for the 5-hour and weekly limits.</desc>
+  <!-- Generated from the patched web UI's real Composer, rendered in a browser
+       and exported shape by shape, so it matches the actual layout. -->
   <style>
-    .bg { fill: #f8fafc; }
-    .panel { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
-    .pop { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; filter: drop-shadow(0 6px 12px rgba(15, 23, 42, .12)); }
-    .chip { fill: #f1f5f9; stroke: #e2e8f0; }
-    .hl { fill: #dbeafe; stroke: #2563eb; stroke-width: 1.5; }
-    .track { fill: #e2e8f0; }
-    .fill { fill: #64748b; }
-    .warnfill { fill: #d97706; }
-    .ring { fill: none; stroke: #e2e8f0; stroke-width: 3; }
-    .ringfill { fill: none; stroke: #64748b; stroke-width: 3; stroke-linecap: round; }
-    .send { fill: #0f172a; }
-    .sendicon { fill: none; stroke: #ffffff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .sans { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .tnum { font-variant-numeric: tabular-nums; }
+    .f0 { fill: rgba(255,255,255,1); }
+    .f1 { fill: rgba(242,242,242,1); }
+    .s2 { stroke: rgba(228,228,231,1); stroke-width: 1; }
+    .c3 { color: rgba(113,113,122,1); }
+    .f4 { fill: rgba(113,113,122,1); }
+    .f5 { fill: rgba(0,0,0,0.059); }
+    .f6 { fill: rgba(39,39,42,1); }
+    .f7 { fill: rgba(212,151,42,1); }
+    .f8 { fill: rgba(255,255,255,0.8); }
+    .s9 { stroke: rgba(29,0,10,0.102); stroke-width: 1; }
+    .f10 { fill: rgba(46,166,92,1); }
+    .f11 { fill: rgba(255,255,255,1); }
+    .s12 { filter: drop-shadow(0px 8px 14px rgba(58,41,8,0.122)); }
+    .s13 { stroke: rgba(39,39,39,0.102); stroke-width: 1; }
+    .f14 { fill: rgba(17,23,28,1); }
+    .f15 { fill: rgba(38,38,42,0.6); }
     .line { fill: none; stroke: #2563eb; stroke-width: 1.5; }
     .head { fill: #2563eb; }
-    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #0f172a; }
-    .muted { fill: #64748b; }
-    .warn { fill: #b45309; }
-    .note { font-size: 13px; fill: #1d4ed8; }
-    .num { font-variant-numeric: tabular-nums; }
+    .note { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 13px; fill: #1d4ed8; }
     @media (prefers-color-scheme: dark) {
-      .bg { fill: #0f172a; }
-      .panel, .pop { fill: #1e293b; stroke: #475569; }
-      .chip { fill: #334155; stroke: #475569; }
-      .hl { fill: #1e3a8a; stroke: #60a5fa; }
-      .track, .ring { fill: none; stroke: #475569; }
-      .track { fill: #334155; stroke: none; }
-      .fill { fill: #94a3b8; }
-      .warnfill { fill: #f59e0b; }
-      .ringfill { stroke: #94a3b8; }
-      .send { fill: #e2e8f0; }
-      .sendicon { stroke: #0f172a; }
+      .f0 { fill: rgba(14,16,19,1); }
+      .f1 { fill: rgba(42,50,56,1); }
+      .s2 { stroke: rgba(39,41,43,1); stroke-width: 1; }
+      .c3 { color: rgba(146,164,179,1); }
+      .f4 { fill: rgba(146,164,179,1); }
+      .f5 { fill: rgba(54,65,73,1); }
+      .f6 { fill: rgba(242,244,245,1); }
+      .f7 { fill: rgba(212,151,42,1); }
+      .f8 { fill: rgba(255,255,255,0.051); }
+      .s9 { stroke: rgba(255,255,255,0.039); stroke-width: 1; }
+      .f10 { fill: rgba(46,166,92,1); }
+      .f11 { fill: rgba(26,32,41,0.8); }
+      .s12 { filter: drop-shadow(0px 8px 14px rgba(0,0,0,0.122)); }
+      .s13 { stroke: rgba(255,255,255,0.078); stroke-width: 1; }
+      .f14 { fill: rgba(242,244,245,1); }
+      .f15 { fill: rgba(242,243,245,0.6); }
       .line { stroke: #60a5fa; }
       .head { fill: #60a5fa; }
-      text { fill: #e2e8f0; }
-      .muted { fill: #94a3b8; }
-      .warn { fill: #fbbf24; }
       .note { fill: #93c5fd; }
     }
   </style>
@@ -47,50 +54,59 @@
     </marker>
   </defs>
 
-  <rect class="bg" width="760" height="420" rx="16"/>
-
-  <!-- Popover -->
-  <rect class="pop" x="436" y="40" width="288" height="168" rx="10"/>
-  <text x="452" y="58" font-size="12" font-weight="600" class="muted">Usage limits</text>
-
-  <text x="452" y="86" font-size="14">5-hour limit</text>
-  <text x="708" y="86" font-size="14" text-anchor="end" class="muted num">23% used</text>
-  <rect class="track" x="452" y="94" width="256" height="6" rx="3"/>
-  <rect class="fill" x="452" y="94" width="59" height="6" rx="3"/>
-  <text x="452" y="118" font-size="12" class="muted num">Resets in 3h 12m · Sat 4:40 PM</text>
-
-  <text x="452" y="152" font-size="14">Weekly limit</text>
-  <text x="708" y="152" font-size="14" text-anchor="end" class="warn num">81% used</text>
-  <rect class="track" x="452" y="160" width="256" height="6" rx="3"/>
-  <rect class="warnfill" x="452" y="160" width="207" height="6" rx="3"/>
-  <text x="452" y="184" font-size="12" class="muted num">Resets in 2d 5h · Mon 9:00 AM</text>
-
-  <!-- Composer -->
-  <rect class="panel" x="36" y="252" width="688" height="84" rx="14"/>
-  <text x="56" y="282" font-size="14" class="muted">Ask the agent to do something…</text>
-
-  <rect class="chip" x="52" y="300" width="84" height="24" rx="12"/>
-  <text x="94" y="316" font-size="12" text-anchor="middle" class="muted">Model ▾</text>
-  <rect class="chip" x="144" y="300" width="96" height="24" rx="12"/>
-  <text x="192" y="316" font-size="12" text-anchor="middle" class="muted">my-repo · main</text>
-
-  <rect class="hl" x="524" y="299" width="118" height="26" rx="6"/>
-  <text x="583" y="316" font-size="12.5" text-anchor="middle" class="num"><tspan class="muted">5h</tspan> 23% <tspan class="muted">·</tspan> <tspan class="muted">7d</tspan> <tspan class="warn">81%</tspan></text>
-
-  <circle class="ring" cx="662" cy="312" r="8"/>
-  <path class="ringfill" d="M662 304 A8 8 0 0 1 669.6 314.5"/>
-  <circle class="send" cx="698" cy="312" r="14"/>
-  <path class="sendicon" d="M698 318 V306 M693 311 L698 306 L703 311"/>
+  <rect class="f0" x="0" y="0" width="760" height="385.8" rx="16"/>
+  <path class="f1" d="M72.5 244 V221.4 A13.9 13.9 0 0 1 86.4 207.5 H673.6 A13.9 13.9 0 0 1 687.5 221.4 V244 Z"/>
+  <path class="s2" fill="none" d="M72.5 244 V221.4 A13.9 13.9 0 0 1 86.4 207.5 H673.6 A13.9 13.9 0 0 1 687.5 221.4 V244"/>
+  <g class="c3"><svg x="85" y="219" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg></g>
+  <text class="f4 sans" x="103" y="230" font-size="11.7" textLength="36.89" lengthAdjust="spacingAndGlyphs">my-app</text>
+  <rect class="f5" x="558.17" y="214" width="103.83" height="24" rx="4"/>
+  <text class="f6 sans tnum" x="565.17" y="229.64" font-size="11.7" textLength="13.31" lengthAdjust="spacingAndGlyphs" opacity="0.7">5h</text>
+  <text class="f6 sans tnum" x="582.48" y="229.64" font-size="11.7" textLength="22.2" lengthAdjust="spacingAndGlyphs">23%</text>
+  <text class="f6 sans tnum" x="608.69" y="229.64" font-size="11.7" textLength="2.8" lengthAdjust="spacingAndGlyphs" opacity="0.5">·</text>
+  <text class="f6 sans tnum" x="615.48" y="229.64" font-size="11.7" textLength="13.31" lengthAdjust="spacingAndGlyphs" opacity="0.7">7d</text>
+  <text class="f7 sans tnum" x="632.8" y="229.64" font-size="11.7" textLength="22.2" lengthAdjust="spacingAndGlyphs">81%</text>
+  <g class="c3"><svg x="666" y="219.5" width="13" height="13" viewBox="1.5 1.5 13 13" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="2" opacity="0.2"></circle><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="10.021680564951438 34.55751918948772" transform="rotate(-90 8 8)"></circle></svg></g>
+  <rect class="f8 s9" x="60.5" y="243.5" width="639" height="105.8" rx="13.9"/>
+  <text class="f4 sans" x="73" y="270.3" font-size="13">Send a message…</text>
+  <g class="c3"><svg x="75" y="318.8" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-size="16" data-testid="composer-attach-icon"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg></g>
+  <rect class="f10" x="109" y="322.8" width="8" height="8" rx="4"/>
+  <g class="c3"><svg x="121" y="318.8" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-testid="composer-host-icon"><path d="M11 13a3 3 0 1 1 2.83-4H14a2 2 0 0 1 0 4z"></path><path d="M12 17v4"></path><path d="M8 21h8"></path><rect x="2" y="3" width="20" height="14" rx="2"></rect></svg></g>
+  <g class="c3"><svg x="520.47" y="318.3" width="16" height="16" viewBox='0 0 24 24'><path clip-rule='evenodd' d='M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z' fill='#D97757' fill-rule='evenodd'></path></svg></g>
+  <text class="f6 sans" x="540.47" y="330.8" font-size="13" font-weight="500" textLength="29.34" lengthAdjust="spacingAndGlyphs">Opus</text>
+  <text class="f4 sans" x="573.81" y="330.8" font-size="13" textLength="25.19" lengthAdjust="spacingAndGlyphs">High</text>
+  <g class="c3" opacity="0.6"><svg x="603" y="318.8" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></g>
+  <g class="c3"><svg x="637" y="318.8" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-size="16"><path d="M12 19v3"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><rect x="9" y="2" width="6" height="13" rx="3"></rect></svg></g>
+  <rect class="f5" x="663" y="312.8" width="28" height="28" rx="8"/>
+  <g class="c3"><svg x="669" y="318.8" width="16" height="16" viewBox="4 4 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></svg></g>
+  <rect class="f11 s13 s12" x="374.5" y="36.5" width="287" height="172.59" rx="7.5"/>
+  <text class="f4 sans" x="386" y="61" font-size="11.7" font-weight="500" textLength="63.27" lengthAdjust="spacingAndGlyphs">Usage limits</text>
+  <text class="f14 sans" x="386" y="97.72" font-size="11.7" textLength="58.36" lengthAdjust="spacingAndGlyphs">5-hour limit</text>
+  <text class="f4 sans tnum" x="599.31" y="97.72" font-size="11.7" textLength="22.2" lengthAdjust="spacingAndGlyphs">23%</text>
+  <text class="f4 sans tnum" x="625.02" y="97.72" font-size="11.7" textLength="24.98" lengthAdjust="spacingAndGlyphs">used</text>
+  <rect class="f5" x="386" y="107.44" width="264" height="6" rx="3"/>
+  <rect class="f15" x="386" y="107.44" width="60.72" height="6" rx="3"/>
+  <text class="f4 sans tnum" x="386" y="130.44" font-size="11.7" textLength="48.33" lengthAdjust="spacingAndGlyphs">Resets in</text>
+  <text class="f4 sans tnum" x="437.83" y="130.44" font-size="11.7" textLength="40.41" lengthAdjust="spacingAndGlyphs">3h 12m</text>
+  <text class="f4 sans tnum" x="481.73" y="130.44" font-size="11.7" textLength="2.81" lengthAdjust="spacingAndGlyphs">·</text>
+  <text class="f4 sans tnum" x="488.06" y="130.44" font-size="11.7" textLength="73.11" lengthAdjust="spacingAndGlyphs">Tue 11:46 PM</text>
+  <text class="f14 sans" x="386" y="159.16" font-size="11.7" textLength="60.94" lengthAdjust="spacingAndGlyphs">Weekly limit</text>
+  <text class="f7 sans tnum" x="599.31" y="159.16" font-size="11.7" textLength="22.2" lengthAdjust="spacingAndGlyphs">81%</text>
+  <text class="f7 sans tnum" x="625.02" y="159.16" font-size="11.7" textLength="24.98" lengthAdjust="spacingAndGlyphs">used</text>
+  <rect class="f5" x="386" y="168.88" width="264" height="6" rx="3"/>
+  <rect class="f7" x="386" y="168.88" width="213.83" height="6" rx="3"/>
+  <text class="f4 sans tnum" x="386" y="191.88" font-size="11.7" textLength="48.33" lengthAdjust="spacingAndGlyphs">Resets in</text>
+  <text class="f4 sans tnum" x="437.83" y="191.88" font-size="11.7" textLength="30.13" lengthAdjust="spacingAndGlyphs">2d 5h</text>
+  <text class="f4 sans tnum" x="471.45" y="191.88" font-size="11.7" textLength="2.81" lengthAdjust="spacingAndGlyphs">·</text>
+  <text class="f4 sans tnum" x="477.78" y="191.88" font-size="11.7" textLength="59.8" lengthAdjust="spacingAndGlyphs">Fri 1:34 AM</text>
 
   <!-- Callouts -->
-  <text class="note" x="36" y="112">Click or tap the numbers to see</text>
-  <text class="note" x="36" y="130">how much is used and when each</text>
-  <text class="note" x="36" y="148">limit resets.</text>
-  <text class="note" x="36" y="184">Numbers turn amber at 75%</text>
-  <text class="note" x="36" y="202">and red at 90%.</text>
-  <path class="line" d="M262 124 C340 124 380 124 432 124" marker-end="url(#a)"/>
-
-  <path class="line" d="M583 356 V329" marker-end="url(#a)"/>
-  <text class="note" x="583" y="378" text-anchor="middle">Usage for this session's Claude or Codex login,</text>
-  <text class="note" x="583" y="396" text-anchor="middle">next to the context ring</text>
+  <text class="note" x="36" y="56">Click or tap the numbers to see</text>
+  <text class="note" x="36" y="74">how much is used and when each</text>
+  <text class="note" x="36" y="92">limit resets.</text>
+  <path class="line" d="M262 68 H368" marker-end="url(#a)"/>
+  <text class="note" x="36" y="120">Numbers turn amber at 75%</text>
+  <text class="note" x="36" y="138">and red at 90%.</text>
+  <text class="note" x="36" y="166">Usage for this session's Claude or</text>
+  <text class="note" x="36" y="184">Codex login, next to the context ring</text>
+  <path class="line" d="M240 192 C240 218 270 226 310 226 H553.17" marker-end="url(#a)"/>
 </svg>

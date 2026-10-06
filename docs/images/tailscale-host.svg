@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 302.8" width="760" height="302.8" role="img" aria-labelledby="t d">
+  <title id="t">Tailscale name in the composer</title>
+  <desc id="d">The Omnigent composer. The bar above the message box shows the working directory "my-app", then the Tailscale mark, the session's tailnet name "omnigent-e1dcab9b" and a copy button, and on the right the usage limits and context ring.</desc>
+  <!-- Generated from the patched web UI's real Composer, rendered in a browser
+       and exported shape by shape, so it matches the actual layout. -->
+  <style>
+    .sans { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .mono { font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+    .tnum { font-variant-numeric: tabular-nums; }
+    .f0 { fill: rgba(255,255,255,1); }
+    .f1 { fill: rgba(242,242,242,1); }
+    .s2 { stroke: rgba(228,228,231,1); stroke-width: 1; }
+    .c3 { color: rgba(113,113,122,1); }
+    .f4 { fill: rgba(113,113,122,1); }
+    .f5 { fill: rgba(212,151,42,1); }
+    .f6 { fill: rgba(255,255,255,0.8); }
+    .s7 { stroke: rgba(29,0,10,0.102); stroke-width: 1; }
+    .f8 { fill: rgba(46,166,92,1); }
+    .f9 { fill: rgba(39,39,42,1); }
+    .f10 { fill: rgba(0,0,0,0.059); }
+    .line { fill: none; stroke: #2563eb; stroke-width: 1.5; }
+    .head { fill: #2563eb; }
+    .note { font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 13px; fill: #1d4ed8; }
+    @media (prefers-color-scheme: dark) {
+      .f0 { fill: rgba(14,16,19,1); }
+      .f1 { fill: rgba(42,50,56,1); }
+      .s2 { stroke: rgba(39,41,43,1); stroke-width: 1; }
+      .c3 { color: rgba(146,164,179,1); }
+      .f4 { fill: rgba(146,164,179,1); }
+      .f5 { fill: rgba(212,151,42,1); }
+      .f6 { fill: rgba(255,255,255,0.051); }
+      .s7 { stroke: rgba(255,255,255,0.039); stroke-width: 1; }
+      .f8 { fill: rgba(46,166,92,1); }
+      .f9 { fill: rgba(242,244,245,1); }
+      .f10 { fill: rgba(54,65,73,1); }
+      .line { stroke: #60a5fa; }
+      .head { fill: #60a5fa; }
+      .note { fill: #93c5fd; }
+    }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="head" d="M0 0 L10 5 L0 10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="f0" x="0" y="0" width="760" height="302.8" rx="16"/>
+  <path class="f1" d="M72.5 161 V138.4 A13.9 13.9 0 0 1 86.4 124.5 H673.6 A13.9 13.9 0 0 1 687.5 138.4 V161 Z"/>
+  <path class="s2" fill="none" d="M72.5 161 V138.4 A13.9 13.9 0 0 1 86.4 124.5 H673.6 A13.9 13.9 0 0 1 687.5 138.4 V161"/>
+  <g class="c3"><svg x="85" y="136" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg></g>
+  <text class="f4 sans" x="103" y="147" font-size="11.7" textLength="36.89" lengthAdjust="spacingAndGlyphs">my-app</text>
+  <g class="c3"><svg x="157.89" y="136" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="3" cy="3" r="3" opacity="0.3"></circle><circle cx="12" cy="3" r="3" opacity="0.3"></circle><circle cx="21" cy="3" r="3" opacity="0.3"></circle><circle cx="3" cy="12" r="3" opacity="1"></circle><circle cx="12" cy="12" r="3" opacity="1"></circle><circle cx="21" cy="12" r="3" opacity="1"></circle><circle cx="3" cy="21" r="3" opacity="0.3"></circle><circle cx="12" cy="21" r="3" opacity="1"></circle><circle cx="21" cy="21" r="3" opacity="0.3"></circle></svg></g>
+  <text class="f4 mono" x="175.89" y="147" font-size="11.7" textLength="119" lengthAdjust="spacingAndGlyphs">omnigent-e1dcab9b</text>
+  <g class="c3"><svg x="302.89" y="137" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg></g>
+  <text class="f4 sans tnum" x="565.17" y="146.64" font-size="11.7" textLength="13.31" lengthAdjust="spacingAndGlyphs" opacity="0.7">5h</text>
+  <text class="f4 sans tnum" x="582.48" y="146.64" font-size="11.7" textLength="22.2" lengthAdjust="spacingAndGlyphs">23%</text>
+  <text class="f4 sans tnum" x="608.69" y="146.64" font-size="11.7" textLength="2.8" lengthAdjust="spacingAndGlyphs" opacity="0.5">·</text>
+  <text class="f4 sans tnum" x="615.48" y="146.64" font-size="11.7" textLength="13.31" lengthAdjust="spacingAndGlyphs" opacity="0.7">7d</text>
+  <text class="f5 sans tnum" x="632.8" y="146.64" font-size="11.7" textLength="22.2" lengthAdjust="spacingAndGlyphs">81%</text>
+  <g class="c3"><svg x="666" y="136.5" width="13" height="13" viewBox="1.5 1.5 13 13" fill="none"><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="2" opacity="0.2"></circle><circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="10.021680564951438 34.55751918948772" transform="rotate(-90 8 8)"></circle></svg></g>
+  <rect class="f6 s7" x="60.5" y="160.5" width="639" height="105.8" rx="13.9"/>
+  <text class="f4 sans" x="73" y="187.3" font-size="13">Send a message…</text>
+  <g class="c3"><svg x="75" y="235.8" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-size="16" data-testid="composer-attach-icon"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg></g>
+  <rect class="f8" x="109" y="239.8" width="8" height="8" rx="4"/>
+  <g class="c3"><svg x="121" y="235.8" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-testid="composer-host-icon"><path d="M11 13a3 3 0 1 1 2.83-4H14a2 2 0 0 1 0 4z"></path><path d="M12 17v4"></path><path d="M8 21h8"></path><rect x="2" y="3" width="20" height="14" rx="2"></rect></svg></g>
+  <g class="c3"><svg x="520.47" y="235.3" width="16" height="16" viewBox='0 0 24 24'><path clip-rule='evenodd' d='M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z' fill='#D97757' fill-rule='evenodd'></path></svg></g>
+  <text class="f9 sans" x="540.47" y="247.8" font-size="13" font-weight="500" textLength="29.34" lengthAdjust="spacingAndGlyphs">Opus</text>
+  <text class="f4 sans" x="573.81" y="247.8" font-size="13" textLength="25.19" lengthAdjust="spacingAndGlyphs">High</text>
+  <g class="c3" opacity="0.6"><svg x="603" y="235.8" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></g>
+  <g class="c3"><svg x="637" y="235.8" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-icon-size="16"><path d="M12 19v3"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><rect x="9" y="2" width="6" height="13" rx="3"></rect></svg></g>
+  <rect class="f10" x="663" y="229.8" width="28" height="28" rx="8"/>
+  <g class="c3"><svg x="669" y="235.8" width="16" height="16" viewBox="4 4 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"></path><path d="M12 19V5"></path></svg></g>
+
+  <!-- Callouts -->
+  <text class="note" x="36" y="40">The runner Pod's name on your tailnet.</text>
+  <text class="note" x="36" y="58">From your own devices, ssh to it or</text>
+  <text class="note" x="36" y="76">open its dev servers.</text>
+  <path class="line" d="M190.39 92 C190.39 106 234.39 100 234.39 128" marker-end="url(#a)"/>
+  <text class="note" x="372" y="40">Copies the full name,</text>
+  <text class="note" x="372" y="58">omnigent-e1dcab9b.taild5bc1b.ts.net</text>
+  <path class="line" d="M366 58 C328.89 58 308.89 70 308.89 130" marker-end="url(#a)"/>
+</svg>

@@ -232,6 +232,8 @@ omnigent-e1dcab9b                      what the composer shows
 omnigent-e1dcab9b.taild5bc1b.ts.net    what the copy button copies
 ```
 
+![Illustration of the Tailscale name in the composer](images/tailscale-host.svg)
+
 The `e1dcab9b` comes from the session's host ID, so the name stays the same
 for as long as the session exists, including after an
 [idle Pod stops and wakes](#idle-sessions-stop-and-keep-their-files). From a
