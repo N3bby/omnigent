@@ -72,7 +72,7 @@
   <text class="title" x="48" y="360">GHCR</text>
   <text class="sub" x="48" y="380">public images, pinned by digest</text>
 
-  <rect class="card" x="32" y="470" width="260" height="64" rx="10"/>
+  <rect class="ext" x="32" y="470" width="260" height="64" rx="10"/>
   <text class="title mono" x="48" y="496">mise run bootstrap</text>
   <text class="sub" x="48" y="516">from your clone: k3s, platform</text>
 
@@ -92,6 +92,27 @@
   <path class="line" d="M292 260 H350" marker-end="url(#a)"/>
   <text class="lbl" x="321" y="252" text-anchor="middle">k8s API</text>
   <text class="lbl" x="321" y="276" text-anchor="middle">Tailscale</text>
+
+  <!-- Legend -->
+  <text class="h" x="32" y="590">LEGEND</text>
+  <rect class="accent" x="32" y="606" width="36" height="22" rx="6"/>
+  <text class="sub" x="82" y="621">Omnigent server and runner pods</text>
+  <rect class="edge" x="32" y="640" width="36" height="22" rx="6"/>
+  <text class="sub" x="82" y="655">Cluster add-ons</text>
+  <rect class="store" x="32" y="674" width="36" height="22" rx="6"/>
+  <text class="sub" x="82" y="689">Stored data</text>
+  <rect class="card" x="32" y="708" width="36" height="22" rx="6"/>
+  <text class="sub" x="82" y="723">Kubernetes object</text>
+  <rect class="ext" x="32" y="742" width="36" height="22" rx="6"/>
+  <text class="sub" x="82" y="757">Outside your VM</text>
+  <rect class="ns" x="32" y="776" width="36" height="22" rx="6"/>
+  <text class="sub" x="82" y="791">Kubernetes namespace</text>
+  <rect class="card" x="40" y="818" width="28" height="16" rx="4"/><rect class="card" x="36" y="814" width="28" height="16" rx="4"/><rect class="card" x="32" y="810" width="28" height="16" rx="4"/>
+  <text class="sub" x="82" y="825">One per session</text>
+  <path class="line" d="M32 855 H66" marker-end="url(#a)"/>
+  <text class="sub" x="82" y="859">Request or data, in its direction</text>
+  <use href="#ts" x="41" y="880" width="18" height="18"/>
+  <text class="sub" x="82" y="893">Reached over your tailnet</text>
 
   <!-- Middle: the VM -->
   <rect class="vm" x="352" y="72" width="576" height="900" rx="14"/>
