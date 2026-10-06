@@ -76,11 +76,11 @@ off until you store a key. Once it's on, every runner Pod is a node on your
 tailnet, and the agent is root in it, so treat the node as untrusted:
 
 - **What it can reach is up to your tailnet policy.** Grant your devices
-  access to `tag:omnigent`, and grant `tag:omnigent` nothing. With
-  Tailscale's default allow-all policy, a compromised runner could connect
-  to every device on your tailnet, including your own machine and the VM's
-  Kubernetes API (port 6443), which the firewall only allows from private
-  addresses.
+  access to `tag:omnigent-runner`, and grant `tag:omnigent-runner` nothing.
+  With Tailscale's default allow-all policy, a compromised runner could
+  connect to every device on your tailnet, including your own machine and
+  the VM's Kubernetes API (port 6443), which the firewall only allows from
+  private addresses.
 - **It can read the Tailscale key.** The key is in every runner's
   environment. With an OAuth client, a runner can create more ephemeral
   nodes, but only with the tags you gave the client. Give the client a tag

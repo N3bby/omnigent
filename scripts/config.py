@@ -128,7 +128,7 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     # a key; this is the tailnet's MagicDNS suffix the composer shows.
     if "tailscale_tailnet" in data:
         require_string(data, "tailscale_tailnet", r"(?=.{1,200}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+")
-    data.setdefault("tailscale_tags", "tag:omnigent")
+    data.setdefault("tailscale_tags", "tag:omnigent-runner")
     require_string(data, "tailscale_tags", r"tag:[A-Za-z0-9-]+(?:,tag:[A-Za-z0-9-]+)*")
     if "deploy_github_repository_id" in data:
         require_string(data, "deploy_github_repository_id", r"[1-9][0-9]*")

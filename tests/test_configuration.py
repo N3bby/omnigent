@@ -151,7 +151,7 @@ class ConfigurationTests(unittest.TestCase):
         generated = ROOT / ".generated" / "ci"
         env = (generated / "omnigent-config.env").read_text()
         self.assertIn("OMNIGENT_TAILSCALE_TAILNET=tailnet.invalid\n", env)
-        self.assertIn("OMNIGENT_TAILSCALE_TAGS=tag:omnigent\n", env)
+        self.assertIn("OMNIGENT_TAILSCALE_TAGS=tag:omnigent-runner\n", env)
         sandbox = (generated / "sandbox-config.yaml").read_text()
         self.assertIn("      - OMNIGENT_TAILSCALE_TAGS\n", sandbox)
         # The Pod and the server derive the same name from the host id.

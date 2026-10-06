@@ -250,25 +250,26 @@ To set it up:
 
 1. In your [tailnet policy](https://login.tailscale.com/admin/acls), add a tag
    for runners, let your own devices reach it, and give runners no access of
-   their own. For example:
+   their own. Keep it separate from the VM's `tag:omnigent`, so access you
+   give one doesn't also apply to the other. For example:
 
    ```json
-   "tagOwners": {"tag:omnigent": ["autogroup:admin"]},
+   "tagOwners": {"tag:omnigent-runner": ["autogroup:admin"]},
    "grants": [
-     {"src": ["autogroup:member"], "dst": ["tag:omnigent"], "ip": ["*"]}
+     {"src": ["autogroup:member"], "dst": ["tag:omnigent-runner"], "ip": ["*"]}
    ],
    "ssh": [
-     {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:omnigent"], "users": ["root"]}
+     {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:omnigent-runner"], "users": ["root"]}
    ]
    ```
 
    Check that no other rule, such as the default allow-all one, lets
-   `tag:omnigent` reach your other devices. See the
+   `tag:omnigent-runner` reach your other devices. See the
    [threat model](THREAT_MODEL.md#runners-on-your-tailnet) for why.
 2. Create an [OAuth client](https://login.tailscale.com/admin/settings/oauth)
-   with the **Auth Keys: Write** scope and only the `tag:omnigent` tag. It can
-   only create keys for that tag. A reusable, ephemeral, pre-approved auth key
-   with the tag also works, but expires within 90 days.
+   with the **Auth Keys: Write** scope and only the `tag:omnigent-runner` tag.
+   It can only create keys for that tag. A reusable, ephemeral, pre-approved
+   auth key with the tag also works, but expires within 90 days.
 3. Run `mise run setup-tailscale` and paste the client secret or key.
 4. Set `tailscale_tailnet` in `environments/production.toml` to your tailnet's
    MagicDNS suffix, from the

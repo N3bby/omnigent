@@ -4,8 +4,8 @@ set -euo pipefail
 KUBECTL=("$(dirname "${BASH_SOURCE[0]}")/kube")
 
 cat <<'INFO'
-Runner Pods join your tailnet as ephemeral nodes tagged tag:omnigent (or the
-tailscale_tags setting). Create an OAuth client at
+Runner Pods join your tailnet as ephemeral nodes tagged tag:omnigent-runner
+(or the tailscale_tags setting). Create an OAuth client at
 https://login.tailscale.com/admin/settings/oauth with the "Auth Keys: Write"
 scope and only that tag. A reusable, ephemeral, pre-approved auth key with the
 tag works too, but expires within 90 days.
