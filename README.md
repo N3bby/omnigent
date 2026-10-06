@@ -14,6 +14,9 @@ What you get:
   Codex usage limits in the Omnigent UI, Podman inside runners, and reaching
   each session over Tailscale. See
   [custom features](docs/CUSTOM_FEATURES.md).
+- **Open in Gateway** in the desktop composer opens a session's repository in
+  IntelliJ using the preinstalled runner backend. See
+  [Gateway setup and testing](docs/CUSTOM_FEATURES.md#open-a-session-in-jetbrains-gateway).
 
 Images are built by GitHub Actions, published to your GHCR namespace, and
 deployed by digest.

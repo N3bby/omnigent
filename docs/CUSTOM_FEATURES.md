@@ -238,7 +238,9 @@ SSH as `root` and opens the session's repository, such as
 The runner image includes the IntelliJ backend at `/opt/jetbrains/intellij`.
 Its build, installer URL, SHA-256 digest, and installation path are pinned in
 `versions.yaml`. The backend adds about 4.5 GiB to the unpacked runner image;
-each Kubernetes node downloads the image before its first runner starts.
+each Kubernetes node downloads the image before its first runner starts and
+reuses cached layers for later runners. Installing the backend does not start
+an IDE process or reserve additional CPU or RAM.
 Gateway starts the backend for the selected repository on connection and
 downloads the matching local client on Linux or macOS.
 
@@ -247,10 +249,40 @@ automatic-deployment links require an `ssh` connection ID saved on the local
 computer, which cannot be shared between users or between Linux and macOS.
 The first connection can still ask for SSH authentication or project trust.
 
-Wake a stopped session before connecting. Rebuild and deploy both the server
-and runner images for this feature. Existing runners need to stop and wake on
-the new runner image before the fixed backend path is available. IDE activity
-does not count as agent activity in the runner's idle timer.
+To deploy and test the connection:
+
+1. Run the GitHub Actions **Deploy** workflow on `main`, selecting the
+   environment you use. It builds, locks, and deploys both the server and
+   runner images. A local `mise run deploy` alone uses the already-pinned
+   images; for local deployment, follow the README's
+   [image publishing steps](../README.md#making-changes).
+2. After the deployment succeeds, refresh the web app and create a new
+   session. Existing running sessions keep their old runner image.
+3. Wait for the runner's Tailscale name to appear, then click **Open in
+   Gateway**. Confirm that IntelliJ opens the session's repository and that
+   edits made by an agent appear in the IDE.
+
+The first runner on a node can take longer to start while the larger image is
+downloaded and unpacked. Linux connections have been tested; the same link
+format is intended for macOS, which still needs a client-side verification.
+
+For capacity planning, allow roughly 2–4 GiB RAM for the backend with a
+typical project open, or 4–8+ GiB for a large project with a larger heap.
+These are estimates, not measurements of your project, and exclude agents,
+build processes, and the application itself. The bundled default maximum
+Java heap is 2 GiB; total process memory can exceed it because of
+[native allocations and other JVM overhead](https://intellij-support.jetbrains.com/hc/en-us/articles/360018776919-IntelliJ-IDE-uses-more-memory-than-maximum-heap-size-Xmx).
+Runner CPU and memory limits are intentionally above host capacity; requests
+guide scheduling rather than capping usage. Monitor actual usage before
+adjusting reservations or `runner_max_concurrency`.
+
+Wake a stopped session before connecting. Closing the local client can leave
+the backend running until it stops or the runner shuts down. IDE activity
+does not count as agent activity in the runner's idle timer, so a runner can
+stop after four hours without agent activity even while you are using the
+IDE. Backend settings and caches under `/root` are not on the persistent
+session volume and are lost when the runner Pod is recreated; repository
+files under `/home/omnigent` remain.
 
 ## Reach a session over Tailscale
 
