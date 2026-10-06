@@ -1,0 +1,78 @@
+# Non-secret production configuration. Commit this file.
+hostname = "omni-home.n3b.by"
+acme_email = "levi.vandenbempt.sjcm@gmail.com"
+admin_email = "levi.vandenbempt.sjcm@gmail.com"
+
+# How Let's Encrypt checks that you control hostname. "http-01" fetches a file
+# from the VM, so the VM must be reachable from the Internet on port 80.
+# "cloudflare-dns-01" looks up a DNS record that cert-manager creates through
+# the Cloudflare API, so the VM can be private, such as Tailscale-only; see
+# "Private deployment on your tailnet" in the README.
+acme_challenge = "cloudflare-dns-01"
+
+# Where kubectl reaches the Kubernetes API. The firewall blocks port 6443 on
+# the public interface, so use a private name such as the VM's Tailscale
+# MagicDNS name. Defaults to hostname.
+kubernetes_api_host = "home-omnigent.taild5bc1b.ts.net"
+
+# Runner Pods join this tailnet as omnigent-<id>, and the composer shows each
+# session's name with a copy button. Pods join only once `mise run
+# setup-tailscale` stores a key. Remove it to hide the names.
+tailscale_tailnet = "taild5bc1b.ts.net"
+
+# The GitHub repository (by numeric ID) and Environment whose Actions runs may
+# deploy. Remove both to turn off deploying from GitHub Actions.
+# deploy_github_repository_id = "1386328125"
+# deploy_github_environment = "production"
+
+# Change this to the public GHCR namespace used by this repository.
+image_registry = "ghcr.io/n3bby"
+runner_image = "omnigent-runner"
+server_image = "omnigent-server"
+
+# Custom image digests are intentionally mandatory. `mise run lock-images`
+# resolves the images CI published for the checked-out commit. Upstream build inputs
+# and the PostgreSQL/Vault digests live in versions.yaml.
+runner_digest = "sha256:d37bacf495dd6f8e5f476f918933e6c05e383c6eab1e507187bba49c5ed8c924"
+server_digest = "sha256:b35f67aa66669752880ba2fc9c1413575471740d3dd6e4b15fbfe7c7bfa193f1"
+
+server_cpu_request = "500m"
+# Memory reserved for the server. The server, PostgreSQL and Vault have no
+# memory limit; staying within their reservation is what makes the kubelet
+# evict runners before them when the VM runs short. Peak usage measured on
+# 2026-10-06 with the production images and config, under simulated traffic
+# (300 sessions with comments, 16 concurrent users, 20 open session streams,
+# 5,000 Vault encrypt/decrypt calls): server ~280 MiB, PostgreSQL ~85 MiB,
+# Vault ~170 MiB. No live agent sessions ran, so the server figure is the
+# least certain. PostgreSQL and Vault reserve 256Mi in kubernetes/base/.
+# Recheck with `./scripts/kube top pods -n omnigent` after a busy day.
+server_memory_request = "512Mi"
+
+postgres_storage = "10Gi"
+artifact_storage = "10Gi"
+codex_storage = "1Gi"
+
+runner_cpu_request = "500m"
+runner_memory_request = "1Gi"
+runner_ephemeral_request = "2Gi"
+# The pinned Omnigent server always sets runner CPU/memory limits. Keep them
+# far above node capacity so runners can use whatever the node has free.
+runner_cpu_limit = "1000"
+runner_memory_limit = "1024Gi"
+runner_ephemeral_limit = "8Gi"
+# Each session keeps its home directory on a volume of this size until the
+# session is deleted. local-path does not enforce the size.
+runner_home_limit = "8Gi"
+runner_pod_ready_timeout_seconds = 300
+runner_max_concurrency = 10
+# An idle session's agent exits after runner_agent_idle_seconds. Its Pod
+# stops runner_idle_shutdown_seconds after the last agent activity, and starts
+# again with its home directory on the next message.
+runner_agent_idle_seconds = 1800
+runner_idle_shutdown_seconds = 14400
+
+# Deliberate policy choices.
+codex_bypass_approvals = true
+claude_bypass_permissions = true
+backups_enabled = false
+runner_network_policy = "unrestricted"
