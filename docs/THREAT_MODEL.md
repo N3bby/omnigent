@@ -77,6 +77,19 @@ That protects against a leak of the database on its own. It doesn't protect
 against someone with root on the VM or admin access to the cluster, because
 they can reach both the encrypted tokens and the key.
 
+## The Cloudflare DNS token
+
+With `acme_challenge = "cloudflare-dns-01"`, cert-manager holds a Cloudflare
+API token in the `cert-manager` namespace, so it can prove control of the
+hostname through DNS. Runners and the GitHub Actions deploy identity can't
+read that namespace. Root on the VM or cluster admin can.
+
+Whoever gets the token can change every DNS record in the zones it covers.
+They could point your hostnames, or any other name in the domain, at their own
+servers, and get valid certificates for them. Limit the token to the one zone
+and to the DNS edit and zone read permissions, and rotate it with
+`mise run setup-cloudflare-token` if it might have leaked.
+
 ## Deploying from GitHub Actions
 
 Deploys come in two levels of access:
