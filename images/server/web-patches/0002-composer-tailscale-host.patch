@@ -9,7 +9,7 @@ Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/web/src/components/composer/ComposerTailscaleHost.tsx b/web/src/components/composer/ComposerTailscaleHost.tsx
 new file mode 100644
-index 0000000..21bf8ae
+index 0000000..81313e8
 --- /dev/null
 +++ b/web/src/components/composer/ComposerTailscaleHost.tsx
 @@ -0,0 +1,109 @@
@@ -90,7 +90,7 @@ index 0000000..21bf8ae
 +    <span
 +      data-testid="composer-tailscale-host"
 +      className={cn(
-+        "relative inline-flex h-6 min-w-0 shrink items-center gap-1 pl-0.5 text-xs leading-4 font-normal text-muted-foreground md:pl-1",
++        "relative ml-1.5 inline-flex h-6 min-w-0 shrink items-center gap-1 pl-0.5 text-xs leading-4 font-normal text-muted-foreground md:ml-0 md:pl-1",
 +        className,
 +      )}
 +      title={`Tailscale: ${host}`}
