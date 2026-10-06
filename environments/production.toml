@@ -15,6 +15,11 @@ acme_challenge = "http-01"
 # MagicDNS name. Defaults to hostname.
 kubernetes_api_host = "netcup.taild5bc1b.ts.net"
 
+# Runner Pods join this tailnet as omnigent-<id>, and the composer shows each
+# session's name with a copy button. Pods join only once `mise run
+# setup-tailscale` stores a key. Remove it to hide the names.
+tailscale_tailnet = "taild5bc1b.ts.net"
+
 # The GitHub repository (by numeric ID) and Environment whose Actions runs may
 # deploy. Remove both to turn off deploying from GitHub Actions.
 deploy_github_repository_id = "1386328125"

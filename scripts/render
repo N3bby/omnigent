@@ -104,6 +104,10 @@ def main() -> None:
             f"OMNIGENT_AGENT_SANDBOX_SHUTDOWN_WINDOW_S={runner_suspend_window_seconds(cfg)}",
             f"OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE={cfg['runner_home_limit']}",
             "OMNIGENT_AGENT_SANDBOX_STORAGE_CLASS=local-path",
+            # Runner Pods join the tailnet with these tags, and the composer
+            # shows each session's name in this tailnet. Empty turns it off.
+            f"OMNIGENT_TAILSCALE_TAILNET={cfg.get('tailscale_tailnet', '')}",
+            f"OMNIGENT_TAILSCALE_TAGS={cfg['tailscale_tags']}",
             "",
         ])
     )
@@ -147,6 +151,7 @@ def main() -> None:
             "      - CODEX_HOME",
             "      - OMNIGENT_CODEX_BYPASS_APPROVALS",
             "      - OMNIGENT_CLAUDE_BYPASS_PERMISSIONS",
+            "      - OMNIGENT_TAILSCALE_TAGS",
             "    resources:",
             "      requests:",
             f"        cpu: {yaml_string(str(cfg['runner_cpu_request']))}",

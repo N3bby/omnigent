@@ -12,6 +12,7 @@ does, what you'll notice, and how to turn it off where that's possible.
 | [No permission prompts](#agents-dont-stop-to-ask) | Agents work without waiting for approval | Yes, one setting per agent |
 | [GitHub repository picker](#pick-repositories-from-github) | Choose repositories from a list | Optional setup step |
 | [Idle sessions stop](#idle-sessions-stop-and-keep-their-files) | Idle runner Pods free their CPU and memory, and keep their files | You can change the timing |
+| [Runners on your tailnet](#reach-a-session-over-tailscale) | SSH into a session's Pod, or open its dev servers, from your own devices | Optional setup step |
 
 ## See your usage limits
 
@@ -217,6 +218,99 @@ are already running keep their old timing until they stop.
   directory on a per-session `local-path` volume instead of an `emptyDir`.
 - Deleting the session deletes the Sandbox, and Kubernetes deletes its volume
   with it.
+
+</details>
+
+## Reach a session over Tailscale
+
+Each session's runner Pod can join your tailnet as an ephemeral node. The
+composer shows its name next to the working directory, with a button that
+copies the full name:
+
+```
+omnigent-e1dcab9b                      what the composer shows
+omnigent-e1dcab9b.taild5bc1b.ts.net    what the copy button copies
+```
+
+The `e1dcab9b` comes from the session's host ID, so the name stays the same
+for as long as the session exists, including after an
+[idle Pod stops and wakes](#idle-sessions-stop-and-keep-their-files). From a
+device on your tailnet:
+
+```bash
+ssh root@omnigent-e1dcab9b               # a shell in the Pod, by Tailscale SSH
+curl http://omnigent-e1dcab9b:3000       # a dev server the agent started
+```
+
+Any port a process in the Pod listens on is reachable, whether it listens on
+`localhost` or on all addresses. The short name needs MagicDNS on your device;
+the full name works either way.
+
+To set it up:
+
+1. In your [tailnet policy](https://login.tailscale.com/admin/acls), add a tag
+   for runners, let your own devices reach it, and give runners no access of
+   their own. For example:
+
+   ```json
+   "tagOwners": {"tag:omnigent": ["autogroup:admin"]},
+   "grants": [
+     {"src": ["autogroup:member"], "dst": ["tag:omnigent"], "ip": ["*"]}
+   ],
+   "ssh": [
+     {"action": "accept", "src": ["autogroup:member"], "dst": ["tag:omnigent"], "users": ["root"]}
+   ]
+   ```
+
+   Check that no other rule, such as the default allow-all one, lets
+   `tag:omnigent` reach your other devices. See the
+   [threat model](THREAT_MODEL.md#runners-on-your-tailnet) for why.
+2. Create an [OAuth client](https://login.tailscale.com/admin/settings/oauth)
+   with the **Auth Keys: Write** scope and only the `tag:omnigent` tag. It can
+   only create keys for that tag. A reusable, ephemeral, pre-approved auth key
+   with the tag also works, but expires within 90 days.
+3. Run `mise run setup-tailscale` and paste the client secret or key.
+4. Set `tailscale_tailnet` in `environments/production.toml` to your tailnet's
+   MagicDNS suffix, from the
+   [DNS page](https://login.tailscale.com/admin/dns), and deploy.
+
+New sessions join straight away. Existing sessions join, and show their name,
+the next time their Pod wakes. To use a different tag, set `tailscale_tags`
+(comma-separated) and create the OAuth client with that tag.
+
+Tailscale removes an ephemeral node soon after it goes offline, so stopped
+and deleted sessions don't pile up in your machine list. A woken Pod joins
+again under the same name.
+
+<details>
+<summary>How it works</summary>
+
+- **Runner image:** installs the pinned `tailscale` and `tailscaled` binaries
+  (`tailscale` and `tailscale_sha256` in `versions.yaml`).
+  `images/runner/tailscale/tailscale-service.sh` starts when the Pod starts,
+  like the Podman service. It joins as `omnigent-<first 8 characters of
+  OMNIGENT_HOST_ID>`, with `--ssh` and the tags in `OMNIGENT_TAILSCALE_TAGS`.
+  The Pod has no TUN device, so `tailscaled` uses userspace networking.
+- **Key:** `TAILSCALE_AUTHKEY` in the `omnigent-creds` Secret. An OAuth client
+  secret gets `?ephemeral=true&preauthorized=true`, so each Pod mints its own
+  ephemeral, pre-approved key.
+- **Same name after a wake:** the node's state is kept in
+  `~/.local/state/omnigent-tailscale` on the session's home volume, so a
+  woken Pod rejoins as the same node, with the same SSH host keys. If
+  Omnigent has to rebuild a lost sandbox from scratch while the old node is
+  still listed, Tailscale names the new node `omnigent-e1dcab9b-1`. The Pod
+  logs that to `/run/omnigent-tailscale.log`, and the name in the composer
+  won't reach it until the old node is gone.
+- **Server** (`images/server/patches/0003-tailscale-host.patch`): when it
+  launches or wakes a session's Pod, it stores the same name, with
+  `OMNIGENT_TAILSCALE_TAILNET` appended, in the `omnigent.tailscale_host`
+  session label, and sends it to open browsers.
+- **Web UI** (`images/server/web-patches/0002-composer-tailscale-host.patch`):
+  adds the `ComposerTailscaleHost` chip.
+
+The server works the name out instead of asking the Pod, so the composer
+shows it even if the Pod couldn't join. Check `/run/omnigent-tailscale.log`
+in the Pod, or `mise run credential-status` for the key.
 
 </details>
 

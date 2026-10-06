@@ -65,6 +65,10 @@ run = './scripts/setup-git-token'
 description = "Store or rotate the Cloudflare token for DNS-01 certificates"
 run = './scripts/setup-cloudflare-token'
 
+[tasks.setup-tailscale]
+description = "Store or rotate the Tailscale key runner Pods join the tailnet with"
+run = './scripts/setup-tailscale'
+
 [tasks.setup-github-app]
 description = "Initialize local credential encryption and configure the GitHub App"
 run = './scripts/setup-github-app'
