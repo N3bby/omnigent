@@ -2,10 +2,10 @@ Open the session repository in JetBrains Gateway from the composer.
 
 Adds one muted Gateway icon-and-label link beside the Tailscale name on
 desktop, hidden below the md breakpoint. The connection uses the runner's full
-tailnet address, the session workspace, and the IntelliJ build injected by the
-web image build. Gateway reuses or installs the selected IDE rather than
-assuming a session-specific IDE path.
-Applies after 0002-composer-tailscale-host.patch.
+tailnet address, the session workspace, and the preinstalled backend path.
+Host-based links use deploy=false: Gateway's deploy flow requires a saved
+SSH configuration ID local to each client. Applies after
+0002-composer-tailscale-host.patch.
 Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/web/src/components/composer/ComposerGatewayLink.tsx b/web/src/components/composer/ComposerGatewayLink.tsx
@@ -66,27 +66,77 @@ index 0000000..7e3cb5a
 +    </a>
 +  );
 +}
+diff --git a/web/src/lib/gateway.test.ts b/web/src/lib/gateway.test.ts
+new file mode 100644
+index 0000000..3520c14
+--- /dev/null
++++ b/web/src/lib/gateway.test.ts
+@@ -0,0 +1,44 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { gatewayLink } from "./gateway";
++
++const host = "omnigent-388e67fd.taild5bc1b.ts.net";
++const idePath = "/opt/jetbrains/intellij";
++
++describe("gatewayLink", () => {
++  beforeEach(() => vi.stubEnv("VITE_OMNIGENT_GATEWAY_IDEA_PATH", idePath));
++  afterEach(() => vi.unstubAllEnvs());
++
++  it("connects with host details without requiring a client-local SSH configuration ID", () => {
++    const url = new URL(gatewayLink(host, "/home/omnigent/workspace/project")!);
++    expect(url.protocol).toBe("jetbrains-gateway:");
++    expect(Object.fromEntries(new URLSearchParams(url.hash.slice(1)))).toEqual({
++      type: "ssh",
++      host,
++      port: "22",
++      user: "root",
++      projectPath: "/home/omnigent/workspace/project",
++      idePath,
++      deploy: "false",
++    });
++  });
++
++  it("preserves project paths containing spaces and URL delimiters", () => {
++    const path = "/home/omnigent/workspace/a + café & #100%";
++    const url = new URL(gatewayLink(host, path)!);
++    expect(new URLSearchParams(url.hash.slice(1)).get("projectPath")).toBe(path);
++    expect(url.hash).not.toContain("+");
++  });
++
++  it.each(["", "relative/path", "/opt/idea\n"])(
++    "hides the control when the backend path is invalid: %s",
++    (path) => {
++      vi.stubEnv("VITE_OMNIGENT_GATEWAY_IDEA_PATH", path);
++      expect(gatewayLink(host, "/home/omnigent/workspace/project")).toBeNull();
++    },
++  );
++
++  it.each([null, "relative/path", "/home/omnigent/workspace/project\n"])(
++    "does not create a connection for an invalid workspace: %s",
++    (path) => expect(gatewayLink(host, path)).toBeNull(),
++  );
++});
 diff --git a/web/src/lib/gateway.ts b/web/src/lib/gateway.ts
 new file mode 100644
-index 0000000..4ad5a89
+index 0000000..3f9e6a0
 --- /dev/null
 +++ b/web/src/lib/gateway.ts
 @@ -0,0 +1,31 @@
 +import { parseTailscaleHost } from "./tailscale";
 +
-+/** Gateway needs a specific IDE build to install or reuse it without a wizard. */
++/** Host-based links require an installed backend, not Gateway's deploy flow. */
 +export function gatewayLink(host: string | null, projectPath: string | null): string | null {
 +  const tailscaleHost = parseTailscaleHost(host);
-+  const buildNumber = import.meta.env.VITE_OMNIGENT_GATEWAY_IDEA_BUILD;
-+  const hasControlCharacters = Array.from(projectPath ?? "").some((char) => {
++  const idePath = import.meta.env.VITE_OMNIGENT_GATEWAY_IDEA_PATH;
++  const hasControlCharacters = Array.from(`${projectPath ?? ""}${idePath ?? ""}`).some((char) => {
 +    const code = char.charCodeAt(0);
 +    return code < 32 || code === 127;
 +  });
 +  if (
 +    !tailscaleHost ||
 +    !projectPath?.startsWith("/") ||
-+    hasControlCharacters ||
-+    !/^\d+(?:\.\d+)+$/.test(buildNumber ?? "")
++    !idePath?.startsWith("/") ||
++    hasControlCharacters
 +  ) {
 +    return null;
 +  }
@@ -97,9 +147,9 @@ index 0000000..4ad5a89
 +    port: "22",
 +    user: "root",
 +    projectPath,
-+    productCode: "IU",
-+    buildNumber,
-+    deploy: "true",
++    idePath,
++    // Deploy mode requires a saved SSH configuration ID on each client.
++    deploy: "false",
 +  });
 +  return `jetbrains-gateway://connect#${params.toString().replaceAll("+", "%20")}`;
 +}

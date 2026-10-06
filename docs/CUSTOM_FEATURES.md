@@ -234,13 +234,22 @@ control and allow your browser to open Gateway. The connection uses Tailscale
 SSH as `root` and opens the session's repository, such as
 `/home/omnigent/workspace/my-project`.
 
-The IntelliJ build is pinned by `jetbrains_idea_build` in `versions.yaml` and
-`JETBRAINS_IDEA_BUILD` in `images/server/Dockerfile`. Gateway installs that
-build on the runner if needed and downloads the matching local client.
+The runner image includes the IntelliJ backend at `/opt/jetbrains/intellij`.
+Its build, installer URL, SHA-256 digest, and installation path are pinned in
+`versions.yaml`. The backend adds about 4.5 GiB to the unpacked runner image;
+each Kubernetes node downloads the image before its first runner starts.
+Gateway starts the backend for the selected repository on connection and
+downloads the matching local client on Linux or macOS.
+
+The link uses `deploy=false` and the installed backend path. Gateway's
+automatic-deployment links require an `ssh` connection ID saved on the local
+computer, which cannot be shared between users or between Linux and macOS.
 The first connection can still ask for SSH authentication or project trust.
 
-Wake a stopped session before connecting. Backend preinstallation and IDE
-activity in the idle timer are separate from this control.
+Wake a stopped session before connecting. Rebuild and deploy both the server
+and runner images for this feature. Existing runners need to stop and wake on
+the new runner image before the fixed backend path is available. IDE activity
+does not count as agent activity in the runner's idle timer.
 
 ## Reach a session over Tailscale
 

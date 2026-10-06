@@ -19,8 +19,11 @@ hvac: "2.4.0"
 web_builder: "22.23.3-slim"
 web_builder_digest: "sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c"
 pnpm: "11.15.1"
-# IntelliJ build used by the composer's Gateway link; Gateway installs it over SSH.
+# Preinstalled IntelliJ backend used by the composer's host-based Gateway link.
 jetbrains_idea_build: "263.6259.32"
+jetbrains_idea_download_url: "https://download.jetbrains.com/idea/idea-263.6259.32.tar.gz"
+jetbrains_idea_sha256: "bdabdb667dc6a1dd029368276ded56bf54c254bb65b65ae8699824731ef25bea"
+jetbrains_idea_path: "/opt/jetbrains/intellij"
 claude_code: "2.1.285"
 codex_cli: "0.159.1"
 # Joins runner Pods to your tailnet, from pkgs.tailscale.com/stable (amd64).

@@ -1,14 +1,29 @@
 ARG OMNIGENT_HOST_IMAGE=ghcr.io/omnigent-ai/omnigent-host@sha256:f3dee09609ccecbebd6841c30b33f0160eaf3d2758d535b2e3993c1a3df5664a
 FROM ${OMNIGENT_HOST_IMAGE}
 
+ARG JETBRAINS_IDEA_BUILD=263.6259.32
+ARG JETBRAINS_IDEA_DOWNLOAD_URL=https://download.jetbrains.com/idea/idea-263.6259.32.tar.gz
+ARG JETBRAINS_IDEA_SHA256=bdabdb667dc6a1dd029368276ded56bf54c254bb65b65ae8699824731ef25bea
+ARG JETBRAINS_IDEA_PATH=/opt/jetbrains/intellij
+
 USER root
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         podman podman-docker crun aardvark-dns catatonit docker-compose curl \
+        libfontconfig1 libfreetype6 libxrender1 libxtst6 libxi6 \
     && rm -rf /var/lib/apt/lists/* \
     && touch /etc/containers/nodocker \
     && podman --version \
     && docker-compose version
+# Host-based Gateway links can connect without a client-local SSH config only
+# when the IDE is already installed. Its writable state stays in the user's home.
+RUN curl -fsSLo /tmp/idea.tar.gz "${JETBRAINS_IDEA_DOWNLOAD_URL}" \
+    && echo "${JETBRAINS_IDEA_SHA256}  /tmp/idea.tar.gz" | sha256sum -c - \
+    && mkdir -p "${JETBRAINS_IDEA_PATH}" \
+    && tar -xzf /tmp/idea.tar.gz -C "${JETBRAINS_IDEA_PATH}" --strip-components=1 \
+    && rm /tmp/idea.tar.gz \
+    && test -x "${JETBRAINS_IDEA_PATH}/bin/remote-dev-server.sh" \
+    && python -c 'import json, pathlib, sys; p = pathlib.Path(sys.argv[1]); info = json.loads((p / "product-info.json").read_text()); assert info["buildNumber"] == sys.argv[2], info; assert info["productCode"] == "IU", info' "${JETBRAINS_IDEA_PATH}" "${JETBRAINS_IDEA_BUILD}"
 RUN install -d -m 1777 /etc/claude-code
 ARG TAILSCALE_VERSION=1.102.5
 ARG TAILSCALE_SHA256=65e6d7f19ad7e1c87d20c2a21e92f38a96795cb897af54b04536590e1c148d12

@@ -73,13 +73,23 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
         "agent_sandbox_manifest_sha256", "postgres",
         "postgres_digest", "vault", "vault_digest", "hvac", "web_builder",
         "web_builder_digest", "pnpm", "claude_code", "codex_cli", "tailscale",
-        "tailscale_sha256", "jetbrains_idea_build",
+        "tailscale_sha256", "jetbrains_idea_build", "jetbrains_idea_download_url",
+        "jetbrains_idea_sha256", "jetbrains_idea_path",
     }
     missing_versions = sorted(required_versions - versions.keys())
     if missing_versions:
         raise ConfigError(f"versions.yaml is missing: {', '.join(missing_versions)}")
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", versions["jetbrains_idea_build"]):
         raise ConfigError("jetbrains_idea_build must be a numeric JetBrains build number")
+    if not re.fullmatch(
+        r"https://download\.jetbrains\.com/idea/[A-Za-z0-9._-]+\.tar\.gz",
+        versions["jetbrains_idea_download_url"],
+    ):
+        raise ConfigError("jetbrains_idea_download_url must be an official IntelliJ Linux archive")
+    if not re.fullmatch(r"[0-9a-f]{64}", versions["jetbrains_idea_sha256"]):
+        raise ConfigError("jetbrains_idea_sha256 must be a pinned SHA-256 digest")
+    if not re.fullmatch(r"/opt/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+", versions["jetbrains_idea_path"]):
+        raise ConfigError("jetbrains_idea_path must be an installation directory under /opt")
 
     hostname = require_string(data, "hostname", r"(?=.{4,253}$)(?!-)[A-Za-z0-9.-]+(?<!-)")
     if "." not in hostname or hostname.endswith(".example.com"):

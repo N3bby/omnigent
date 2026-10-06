@@ -50,7 +50,9 @@ class ConfigurationTests(unittest.TestCase):
             f"node:{versions['web_builder']}@{versions['web_builder_digest']}", server_dockerfile
         )
         self.assertIn(f"PNPM_VERSION={versions['pnpm']}", server_dockerfile)
-        self.assertIn(f"JETBRAINS_IDEA_BUILD={versions['jetbrains_idea_build']}\n", server_dockerfile)
+        for key in ("build", "download_url", "sha256", "path"):
+            self.assertIn(f"JETBRAINS_IDEA_{key.upper()}={versions['jetbrains_idea_' + key]}\n", dockerfile)
+        self.assertIn(f"JETBRAINS_IDEA_PATH={versions['jetbrains_idea_path']}\n", server_dockerfile)
         self.assertIn(f"OMNIGENT_COMMIT={versions['omnigent_commit']}", server_dockerfile)
         self.assertIn(f"TAILSCALE_VERSION={versions['tailscale']}\n", dockerfile)
         self.assertIn(f"TAILSCALE_SHA256={versions['tailscale_sha256']}\n", dockerfile)
