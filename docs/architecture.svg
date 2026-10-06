@@ -19,6 +19,8 @@
     .lbl { font-size: 11.5px; fill: #475569; }
     .nslbl { font-size: 11.5px; fill: #64748b; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .tsdot { fill: #0f172a; }
+    .faded { opacity: .25; }
     @media (prefers-color-scheme: dark) {
       .bg { fill: #0f172a; }
       .card, .ext { fill: #1e293b; stroke: #475569; }
@@ -32,9 +34,22 @@
       text { fill: #e2e8f0; }
       .h, .sub, .lbl { fill: #94a3b8; }
       .nslbl { fill: #94a3b8; }
+      .tsdot { fill: #e2e8f0; }
     }
   </style>
   <defs>
+    <!-- The Tailscale logo -->
+    <symbol id="ts" viewBox="0 0 24 24">
+      <circle class="tsdot faded" cx="3" cy="3" r="3"/>
+      <circle class="tsdot faded" cx="12" cy="3" r="3"/>
+      <circle class="tsdot faded" cx="21" cy="3" r="3"/>
+      <circle class="tsdot" cx="3" cy="12" r="3"/>
+      <circle class="tsdot" cx="12" cy="12" r="3"/>
+      <circle class="tsdot" cx="21" cy="12" r="3"/>
+      <circle class="tsdot faded" cx="3" cy="21" r="3"/>
+      <circle class="tsdot" cx="12" cy="21" r="3"/>
+      <circle class="tsdot faded" cx="21" cy="21" r="3"/>
+    </symbol>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path class="head" d="M0 0 L10 5 L0 10 z"/>
     </marker>
@@ -139,7 +154,8 @@
   <text class="sub" x="428" y="758">root inside the pod only: maps to an unprivileged host user</text>
   <text class="sub" x="428" y="778">Podman for containers, apt-get for packages</text>
   <text class="sub" x="428" y="798">uses the shared agent logins you set up</text>
-  <text class="sub" x="428" y="818">optionally joins your tailnet as <tspan class="mono">omnigent-&lt;id&gt;</tspan></text>
+  <use href="#ts" x="428" y="807" width="13" height="13"/>
+  <text class="sub" x="447" y="818">joins your tailnet as <tspan class="mono">omnigent-&lt;id&gt;</tspan>, if set up</text>
 
   <path class="line" d="M432 686 V348" marker-end="url(#a)"/>
   <text class="lbl" x="440" y="520">connects back</text>
@@ -166,8 +182,9 @@
   <text class="sub" x="1004" y="682">model APIs</text>
 
   <rect class="ext" x="988" y="728" width="260" height="64" rx="10"/>
-  <text class="title" x="1004" y="754">Your devices</text>
-  <text class="sub" x="1004" y="774">SSH and dev servers, by name</text>
+  <use href="#ts" x="1004" y="740" width="18" height="18"/>
+  <text class="title" x="1030" y="755">Your devices on Tailscale</text>
+  <text class="sub mono" x="1004" y="777">ssh root@omnigent-&lt;id&gt;</text>
 
   <rect class="ext" x="988" y="820" width="260" height="64" rx="10"/>
   <text class="title" x="1004" y="846">GitHub</text>
@@ -175,6 +192,6 @@
 
   <path class="line" d="M878 700 H986" marker-end="url(#a)"/>
   <path class="line" d="M986 760 H874" marker-end="url(#a)"/>
-  <text class="lbl" x="957" y="752" text-anchor="middle">tailnet</text>
+  <text class="lbl" x="957" y="752" text-anchor="middle">Tailscale</text>
   <path class="line" d="M878 820 H986" marker-end="url(#a)"/>
 </svg>
