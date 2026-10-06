@@ -5,6 +5,7 @@ kind: Kustomization
 # change any of it.
 resources:
   - namespaces.yaml
+  - priority-class.yaml
   - runner-userns.yaml
   - resource-policy.yaml
   - runner-rbac.yaml

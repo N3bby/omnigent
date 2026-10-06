@@ -39,6 +39,7 @@ spec:
       annotations:
         omnigent.dev/secret-checksum: pending
     spec:
+      priorityClassName: omnigent-core
       automountServiceAccountToken: false
       securityContext:
         seccompProfile:
@@ -66,10 +67,9 @@ spec:
           resources:
             requests:
               cpu: 250m
-              memory: 512Mi
-            limits:
-              cpu: "1"
-              memory: 1Gi
+              # Measured peak ~85 MiB (2026-10-06); see server_memory_request
+              # in environments/production.toml.
+              memory: 256Mi
           readinessProbe:
             exec:
               command: [pg_isready, -U, omnigent]

@@ -3,6 +3,13 @@ hostname = "omni.n3b.by"
 acme_email = "levi.vandenbempt.sjcm@gmail.com"
 admin_email = "levi.vandenbempt.sjcm@gmail.com"
 
+# How Let's Encrypt checks that you control hostname. "http-01" fetches a file
+# from the VM, so the VM must be reachable from the Internet on port 80.
+# "cloudflare-dns-01" looks up a DNS record that cert-manager creates through
+# the Cloudflare API, so the VM can be private, such as Tailscale-only; see
+# "Private deployment on your tailnet" in the README.
+acme_challenge = "http-01"
+
 # Where kubectl reaches the Kubernetes API. The firewall blocks port 6443 on
 # the public interface, so use a private name such as the VM's Tailscale
 # MagicDNS name. Defaults to hostname.
@@ -30,9 +37,16 @@ runner_digest = "sha256:828921a6d18c2be075257dd13805fea1c52196cb207d06cac7daf7d1
 server_digest = "sha256:c50071686d6465a7460b79957faeea6bfe408b1f2f633111156df06eefc831b0"
 
 server_cpu_request = "500m"
-server_memory_request = "1Gi"
-server_cpu_limit = "2"
-server_memory_limit = "2Gi"
+# Memory reserved for the server. The server, PostgreSQL and Vault have no
+# memory limit; staying within their reservation is what makes the kubelet
+# evict runners before them when the VM runs short. Peak usage measured on
+# 2026-10-06 with the production images and config, under simulated traffic
+# (300 sessions with comments, 16 concurrent users, 20 open session streams,
+# 5,000 Vault encrypt/decrypt calls): server ~280 MiB, PostgreSQL ~85 MiB,
+# Vault ~170 MiB. No live agent sessions ran, so the server figure is the
+# least certain. PostgreSQL and Vault reserve 256Mi in kubernetes/base/.
+# Recheck with `./scripts/kube top pods -n omnigent` after a busy day.
+server_memory_request = "512Mi"
 
 postgres_storage = "10Gi"
 artifact_storage = "10Gi"
@@ -41,8 +55,10 @@ codex_storage = "1Gi"
 runner_cpu_request = "500m"
 runner_memory_request = "1Gi"
 runner_ephemeral_request = "2Gi"
-runner_cpu_limit = "2"
-runner_memory_limit = "4Gi"
+# The pinned Omnigent server always sets runner CPU/memory limits. Keep them
+# far above node capacity so runners can use whatever the node has free.
+runner_cpu_limit = "1000"
+runner_memory_limit = "1024Gi"
 runner_ephemeral_limit = "8Gi"
 # Each session keeps its home directory on a volume of this size until the
 # session is deleted. local-path does not enforce the size.

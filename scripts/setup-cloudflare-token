@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Store or rotate the Cloudflare API token cert-manager uses for DNS-01, when
+# the environment sets acme_challenge = "cloudflare-dns-01".
+set -euo pipefail
+
+KUBECTL=("$(dirname "${BASH_SOURCE[0]}")/kube")
+
+echo "Create a Cloudflare API token with Zone:DNS:Edit and Zone:Zone:Read,"
+echo "limited to the zone that holds your hostname."
+read -rsp "Cloudflare API token (blank cancels): " token
+echo
+[[ -n "$token" ]] || exit 0
+
+# Header and Secret value go through stdin so the token never appears in argv.
+verify="$(printf 'Authorization: Bearer %s\n' "$token" \
+  | curl --silent --show-error --max-time 20 -H @- \
+      https://api.cloudflare.com/client/v4/user/tokens/verify)"
+jq -e '.success and .result.status == "active"' <<<"$verify" >/dev/null || {
+  echo "Cloudflare did not accept the token: $(jq -c '.errors' <<<"$verify" 2>/dev/null || echo "$verify")" >&2
+  exit 1
+}
+
+printf '%s' "$token" \
+  | "${KUBECTL[@]}" create secret generic cloudflare-api-token -n cert-manager \
+      --from-file=api-token=/dev/stdin --dry-run=client -o json \
+  | "${KUBECTL[@]}" apply --server-side --force-conflicts --field-manager=omnigent-operator -f - >/dev/null
+unset token verify
+echo "Cloudflare token stored."
+
+# cert-manager waits up to hours between failed attempts. Recreating a
+# certificate that is not Ready yet makes it retry now; its Ingress recreates it.
+if ready="$("${KUBECTL[@]}" get certificate omnigent-tls -n omnigent \
+      -o 'jsonpath={.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" \
+    && [[ "$ready" != "True" ]]; then
+  "${KUBECTL[@]}" delete certificate omnigent-tls -n omnigent >/dev/null
+  echo "Retrying the TLS certificate; mise run status shows its progress."
+fi

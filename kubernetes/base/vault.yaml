@@ -60,6 +60,7 @@ spec:
         app.kubernetes.io/name: vault
         app.kubernetes.io/component: credential-encryption
     spec:
+      priorityClassName: omnigent-core
       securityContext:
         runAsNonRoot: true
         runAsUser: 100
@@ -120,10 +121,9 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
+              # Measured peak ~170 MiB (2026-10-06); see server_memory_request
+              # in environments/production.toml.
+              memory: 256Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

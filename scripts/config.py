@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # its window must cover a few missed renewals. Upstream's default.
 MIN_RUNNER_SUSPEND_WINDOW_SECONDS = 300
 
+# How Let's Encrypt checks that we control the hostname. http-01 fetches a
+# token from the VM over the Internet; cloudflare-dns-01 looks up a TXT record
+# that cert-manager writes through the Cloudflare API, so the VM can be private.
+ACME_CHALLENGES = ("http-01", "cloudflare-dns-01")
+
 
 class ConfigError(ValueError):
     pass
@@ -79,14 +84,16 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
         raise ConfigError("hostname must be a real fully-qualified DNS name")
     for key in ("acme_email", "admin_email"):
         require_string(data, key, r"[^\s@]+@[^\s@]+\.[^\s@]+")
+    data.setdefault("acme_challenge", "http-01")
+    if data["acme_challenge"] not in ACME_CHALLENGES:
+        raise ConfigError(f"acme_challenge must be one of: {', '.join(ACME_CHALLENGES)}")
     registry = require_string(data, "image_registry", r"[a-z0-9.-]+/[A-Za-z0-9_.-]+")
     if "REPLACE_ME" in registry:
         raise ConfigError("set image_registry to the public GHCR namespace")
     for key in ("runner_image", "server_image"):
         require_string(data, key, r"[A-Za-z0-9_.-]+")
     for key in (
-        "server_cpu_request", "server_memory_request", "server_cpu_limit",
-        "server_memory_limit", "postgres_storage", "artifact_storage",
+        "server_cpu_request", "server_memory_request", "postgres_storage", "artifact_storage",
         "codex_storage", "runner_cpu_request", "runner_memory_request",
         "runner_ephemeral_request", "runner_cpu_limit", "runner_memory_limit",
         "runner_ephemeral_limit", "runner_home_limit",

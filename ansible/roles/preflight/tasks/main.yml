@@ -28,12 +28,27 @@
   changed_when: false
   failed_when: dns_result.rc != 0 or dns_result.stdout | trim == ''
 
+# HTTP-01 needs Let's Encrypt to reach the VM, so the name must point at its
+# primary (public) address. With DNS-01 it can point at any of its addresses,
+# such as its Tailscale IP.
 - name: Verify DNS points at this VM
   ansible.builtin.assert:
     that: ansible_default_ipv4.address in dns_result.stdout
     fail_msg: >-
       {{ omnigent_hostname }} does not resolve to this VM's primary address
       {{ ansible_default_ipv4.address }}.
+  when: omnigent_acme_challenge == 'http-01'
+
+- name: Verify DNS points at one of this VM's addresses
+  ansible.builtin.assert:
+    that: >-
+      ansible_all_ipv4_addresses | union(ansible_all_ipv6_addresses)
+      | select('in', dns_result.stdout.split()) | list | length > 0
+    fail_msg: >-
+      {{ omnigent_hostname }} resolves to {{ dns_result.stdout.split() | unique | join(', ') }},
+      none of which belong to this VM. Point it at the VM's Tailscale IP
+      (`tailscale ip -4`), and make sure Cloudflare does not proxy the record.
+  when: omnigent_acme_challenge != 'http-01'
 
 - name: Detect an existing Omnigent namespace
   ansible.builtin.command:

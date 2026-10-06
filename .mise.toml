@@ -61,6 +61,10 @@ run = './scripts/setup-claude'
 description = "Store or rotate the optional private-Git HTTPS token"
 run = './scripts/setup-git-token'
 
+[tasks.setup-cloudflare-token]
+description = "Store or rotate the Cloudflare token for DNS-01 certificates"
+run = './scripts/setup-cloudflare-token'
+
 [tasks.setup-tailscale]
 description = "Store or rotate the Tailscale key runner Pods join the tailnet with"
 run = './scripts/setup-tailscale'

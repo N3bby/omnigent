@@ -257,6 +257,7 @@ spec:
     deploy_repository_id = str(cfg.get("deploy_github_repository_id", ""))
     deployment_vars = f"""---
 omnigent_hostname: {yaml_string(str(cfg['hostname']))}
+omnigent_acme_challenge: {yaml_string(str(cfg['acme_challenge']))}
 omnigent_kubernetes_api_host: {yaml_string(str(cfg['kubernetes_api_host']))}
 omnigent_deploy_github_repository_id: {yaml_string(deploy_repository_id)}
 omnigent_deploy_github_environment: {yaml_string(str(cfg.get('deploy_github_environment', '')))}
@@ -313,12 +314,6 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/requests/memory
         value: {yaml_string(str(cfg['server_memory_request']))}
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/cpu
-        value: {yaml_string(str(cfg['server_cpu_limit']))}
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: {yaml_string(str(cfg['server_memory_limit']))}
   - target:
       version: v1
       kind: PersistentVolumeClaim
@@ -349,6 +344,18 @@ patches:
 
     platform = generated / "platform"
     platform.mkdir(exist_ok=True)
+    if cfg["acme_challenge"] == "cloudflare-dns-01":
+        # `mise run setup-cloudflare-token` stores the token. The VM needs no
+        # inbound access: Let's Encrypt only looks up the TXT record.
+        solver = """      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token
+              key: api-token"""
+    else:
+        solver = """      - http01:
+          ingress:
+            ingressClassName: traefik"""
     (platform / "dynamic.yaml").write_text(f"""---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -361,9 +368,7 @@ spec:
     privateKeySecretRef:
       name: letsencrypt-prod-account-key
     solvers:
-      - http01:
-          ingress:
-            ingressClassName: traefik
+{solver}
 """)
     (platform / "kustomization.yaml").write_text(f"""apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
