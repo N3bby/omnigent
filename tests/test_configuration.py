@@ -59,7 +59,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertNotIn("kind: NetworkPolicy", manifest)
         self.assertIn("@sha256:", manifest)
         self.assertIn("ephemeral-storage", manifest)
-        self.assertIn("memory: 2Gi", manifest)
+        self.assertIn("memory: 512Mi", manifest)
         self.assertIn("name: vault", manifest)
         self.assertIn(f"hashicorp/vault@{load_versions()['vault_digest']}", manifest)
         for line in manifest.splitlines():
