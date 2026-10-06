@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 1280 692" width="1280" height="692" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 1280 936" width="1280" height="936" role="img" aria-labelledby="t d">
   <title id="t">Omnigent deployment overview</title>
-  <desc id="d">The Deploy workflow in GitHub Actions builds images for your fork, commits their digests, and deploys them over Tailscale through the Kubernetes API of a single Ubuntu VM running k3s. mise run bootstrap sets up the VM itself over SSH. Traefik serves HTTPS to the Omnigent server, which stores data in PostgreSQL and Vault and starts one runner sandbox per session. The agent-sandbox controller runs each sandbox's pod, stops it when idle, and keeps the session's home volume until the session is deleted. Runner pods call the model APIs and GitHub.</desc>
+  <desc id="d">The Deploy workflow in GitHub Actions builds images for your fork, commits their digests, and deploys them over Tailscale through the Kubernetes API of a single Ubuntu VM running k3s. mise run bootstrap sets up the VM itself over SSH. Traefik serves HTTPS to the Omnigent server, which stores data in PostgreSQL and Vault and creates one Sandbox per session and moves its stop time later while the agent works. The agent-sandbox controller watches Sandboxes, runs each one's runner pod with the session's home volume, and deletes the pod once the stop time passes. The home volume is kept until the session is deleted. Runner pods call the model APIs and GitHub.</desc>
   <style>
     .bg { fill: #f8fafc; }
     .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
@@ -40,7 +40,7 @@
     </marker>
   </defs>
 
-  <rect class="bg" y="40" width="1280" height="692" rx="16"/>
+  <rect class="bg" y="40" width="1280" height="936" rx="16"/>
 
   <!-- Left column: build and deploy -->
   <text class="h" x="32" y="100">BUILD &amp; DEPLOY</text>
@@ -79,16 +79,12 @@
   <text class="lbl" x="321" y="276" text-anchor="middle">Tailscale</text>
 
   <!-- Middle: the VM -->
-  <rect class="vm" x="352" y="72" width="576" height="628" rx="14"/>
+  <rect class="vm" x="352" y="72" width="576" height="880" rx="14"/>
   <text class="h" x="372" y="100">YOUR UBUNTU VM · K3S</text>
 
-  <rect class="edge" x="384" y="120" width="196" height="56" rx="10"/>
-  <text class="title" x="400" y="144">agent-sandbox</text>
-  <text class="sub" x="400" y="163">stops idle runner pods</text>
-
-  <rect class="edge" x="596" y="120" width="300" height="56" rx="10"/>
-  <text class="title" x="616" y="144">Traefik + cert-manager</text>
-  <text class="sub" x="616" y="163">automatic HTTPS (Let's Encrypt)</text>
+  <rect class="edge" x="384" y="120" width="512" height="56" rx="10"/>
+  <text class="title" x="404" y="144">Traefik + cert-manager</text>
+  <text class="sub" x="404" y="163">HTTPS with automatic Let's Encrypt certificates</text>
 
   <rect class="ns" x="376" y="200" width="528" height="192" rx="10"/>
   <text class="nslbl" x="890" y="219" text-anchor="end">namespace omnigent</text>
@@ -108,27 +104,52 @@
   <path class="line" d="M648 296 H686" marker-end="url(#a)"/>
   <path class="line" d="M648 330 C668 330 668 346 686 346" marker-end="url(#a)"/>
 
-  <path class="line" d="M620 176 V272" marker-end="url(#a)"/>
+  <path class="line" d="M600 176 V272" marker-end="url(#a)"/>
 
-  <rect class="ns" x="376" y="416" width="528" height="264" rx="10"/>
-  <text class="nslbl" x="890" y="435" text-anchor="end">namespace omnigent-sandboxes</text>
+  <rect class="ns" x="640" y="416" width="264" height="96" rx="10"/>
+  <text class="nslbl" x="890" y="435" text-anchor="end">namespace agent-sandbox-system</text>
+  <rect class="edge" x="664" y="446" width="216" height="52" rx="10"/>
+  <text class="title" x="680" y="468">agent-sandbox</text>
+  <text class="sub" x="680" y="487">Kubernetes controller</text>
 
-  <rect class="card" x="424" y="488" width="448" height="124" rx="10"/>
-  <rect class="card" x="416" y="480" width="448" height="124" rx="10"/>
-  <rect class="accent" x="408" y="472" width="448" height="124" rx="10"/>
-  <text class="title" x="428" y="500">Runner pod, one per session</text>
-  <text class="sub" x="428" y="522">Claude Code or Codex, working in a checkout of your repo</text>
-  <text class="sub" x="428" y="542">root inside the pod only: maps to an unprivileged host user</text>
-  <text class="sub" x="428" y="562">Podman for containers, apt-get for packages</text>
-  <text class="sub" x="428" y="582">uses the shared agent logins you set up</text>
+  <rect class="ns" x="376" y="536" width="528" height="400" rx="10"/>
+  <text class="nslbl" x="890" y="555" text-anchor="end">namespace omnigent-sandboxes</text>
 
-  <text class="lbl" x="408" y="640">stops when idle · keeps its home disk until the session is deleted</text>
-  <text class="lbl" x="408" y="660">CPU and memory limits per pod · unrestricted network</text>
+  <rect class="card" x="664" y="576" width="216" height="60" rx="10"/>
+  <text class="title" x="680" y="601">Sandbox</text>
+  <text class="sub" x="680" y="621">one per session</text>
 
-  <path class="line" d="M470 346 V470" marker-end="url(#a)"/>
-  <text class="lbl" x="478" y="409">starts sandbox</text>
-  <path class="line" d="M580 472 V348" marker-end="url(#a)"/>
-  <text class="lbl" x="588" y="409">connects back</text>
+  <path class="line" d="M620 348 V606 H662" marker-end="url(#a)"/>
+  <text class="lbl" x="612" y="440" text-anchor="end">creates it, and moves</text>
+  <text class="lbl" x="612" y="456" text-anchor="end">its stop time later</text>
+  <text class="lbl" x="612" y="472" text-anchor="end">while the agent works</text>
+
+  <path class="line" d="M684 498 V574" marker-end="url(#a)"/>
+  <text class="lbl" x="692" y="528">watches</text>
+
+  <path class="line" d="M772 636 V686" marker-end="url(#a)"/>
+  <text class="lbl" x="764" y="656" text-anchor="end">runs its pod, deletes it</text>
+  <text class="lbl" x="764" y="672" text-anchor="end">once the stop time passes</text>
+
+  <rect class="card" x="424" y="704" width="448" height="124" rx="10"/>
+  <rect class="card" x="416" y="696" width="448" height="124" rx="10"/>
+  <rect class="accent" x="408" y="688" width="448" height="124" rx="10"/>
+  <text class="title" x="428" y="716">Runner pod, one per session</text>
+  <text class="sub" x="428" y="738">Claude Code or Codex, working in a checkout of your repo</text>
+  <text class="sub" x="428" y="758">root inside the pod only: maps to an unprivileged host user</text>
+  <text class="sub" x="428" y="778">Podman for containers, apt-get for packages</text>
+  <text class="sub" x="428" y="798">uses the shared agent logins you set up</text>
+
+  <path class="line" d="M432 686 V348" marker-end="url(#a)"/>
+  <text class="lbl" x="440" y="520">connects back</text>
+
+  <path class="line" d="M632 828 V846"/>
+  <text class="lbl" x="640" y="841">mounts</text>
+  <rect class="store" x="408" y="846" width="448" height="52" rx="10"/>
+  <text class="title" x="428" y="868">Home volume, one per session</text>
+  <text class="sub" x="428" y="888">/home/omnigent, kept until the session is deleted</text>
+
+  <text class="lbl" x="408" y="922">CPU and memory limits per pod · unrestricted network</text>
 
   <!-- Right column: people and services -->
   <text class="h" x="988" y="100">USERS &amp; SERVICES</text>
@@ -139,14 +160,14 @@
   <path class="line" d="M986 148 H898" marker-end="url(#a)"/>
   <text class="lbl" x="958" y="140" text-anchor="middle">HTTPS</text>
 
-  <rect class="ext" x="988" y="468" width="260" height="64" rx="10"/>
-  <text class="title" x="1004" y="494">Anthropic and OpenAI</text>
-  <text class="sub" x="1004" y="514">model APIs</text>
+  <rect class="ext" x="988" y="684" width="260" height="64" rx="10"/>
+  <text class="title" x="1004" y="710">Anthropic and OpenAI</text>
+  <text class="sub" x="1004" y="730">model APIs</text>
 
-  <rect class="ext" x="988" y="556" width="260" height="64" rx="10"/>
-  <text class="title" x="1004" y="582">GitHub</text>
-  <text class="sub" x="1004" y="602">clone, push, pull requests</text>
+  <rect class="ext" x="988" y="772" width="260" height="64" rx="10"/>
+  <text class="title" x="1004" y="798">GitHub</text>
+  <text class="sub" x="1004" y="818">clone, push, pull requests</text>
 
-  <path class="line" d="M878 500 H986" marker-end="url(#a)"/>
-  <path class="line" d="M878 588 H986" marker-end="url(#a)"/>
+  <path class="line" d="M878 716 H986" marker-end="url(#a)"/>
+  <path class="line" d="M878 804 H986" marker-end="url(#a)"/>
 </svg>
