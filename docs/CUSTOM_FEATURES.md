@@ -13,6 +13,7 @@ does, what you'll notice, and how to turn it off where that's possible.
 | [GitHub repository picker](#pick-repositories-from-github) | Choose repositories from a list | Optional setup step |
 | [Idle sessions stop](#idle-sessions-stop-and-keep-their-files) | Idle runner Pods free their CPU and memory, and keep their files | You can change the timing |
 | [Runners on your tailnet](#reach-a-session-over-tailscale) | SSH into a session's Pod, or open its dev servers, from your own devices | Optional setup step |
+| [Open in Gateway](#open-a-session-in-jetbrains-gateway) | Open the session's repository in IntelliJ through JetBrains Gateway | Requires Tailscale |
 
 ## See your usage limits
 
@@ -220,6 +221,26 @@ are already running keep their old timing until they stop.
   with it.
 
 </details>
+
+## Open a session in JetBrains Gateway
+
+On desktop, the composer shows **Open in Gateway** next to the Tailscale name
+when the session has a runner address and a project directory. The gray
+Gateway icon and label are one clickable control, hidden on mobile.
+
+Install [JetBrains Gateway](https://www.jetbrains.com/remote-development/gateway/)
+on your computer and connect it to the same tailnet as the runner. Click the
+control and allow your browser to open Gateway. The connection uses Tailscale
+SSH as `root` and opens the session's repository, such as
+`/home/omnigent/workspace/my-project`.
+
+The IntelliJ build is pinned by `jetbrains_idea_build` in `versions.yaml` and
+`JETBRAINS_IDEA_BUILD` in `images/server/Dockerfile`. Gateway installs that
+build on the runner if needed and downloads the matching local client.
+The first connection can still ask for SSH authentication or project trust.
+
+Wake a stopped session before connecting. Backend preinstallation and IDE
+activity in the idle timer are separate from this control.
 
 ## Reach a session over Tailscale
 

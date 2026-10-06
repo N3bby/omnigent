@@ -1,0 +1,128 @@
+Open the session repository in JetBrains Gateway from the composer.
+
+Adds one muted Gateway icon-and-label link beside the Tailscale name on
+desktop, hidden below the md breakpoint. The connection uses the runner's full
+tailnet address, the session workspace, and the IntelliJ build injected by the
+web image build. Gateway reuses or installs the selected IDE rather than
+assuming a session-specific IDE path.
+Applies after 0002-composer-tailscale-host.patch.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/components/composer/ComposerGatewayLink.tsx b/web/src/components/composer/ComposerGatewayLink.tsx
+new file mode 100644
+index 0000000..7e3cb5a
+--- /dev/null
++++ b/web/src/components/composer/ComposerGatewayLink.tsx
+@@ -0,0 +1,52 @@
++import type { SVGProps } from "react";
++import { COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS } from "./ChatComposer";
++import { gatewayLink } from "@/lib/gateway";
++import { cn } from "@/lib/utils";
++
++/** Monochrome faces of JetBrains' Gateway icon (JetBrains/logos, web/gateway). */
++function GatewayIcon(props: SVGProps<SVGSVGElement>) {
++  return (
++    <svg viewBox="0 0 70 70" fill="currentColor" {...props}>
++      <path d="M35 5 60.9745 19.9635 35 34.9844 9.02551 19.9635Z" />
++      <path d="M35 34.9844 60.9745 19.9635 60.9745 49.9806 35 65.0004Z" opacity=".65" />
++      <path d="M9.02551 19.9635 35 34.9844 35 65.0004 9.02551 49.9806Z" opacity=".35" />
++    </svg>
++  );
++}
++
++export function ComposerGatewayLink({
++  host,
++  projectPath,
++  className,
++}: {
++  host: string | null;
++  projectPath: string | null;
++  className?: string;
++}) {
++  const href = gatewayLink(host, projectPath);
++  if (!href) return null;
++
++  return (
++    <a
++      data-testid="composer-gateway-link"
++      href={href}
++      aria-label="Open in Gateway"
++      title={`Open ${projectPath} in JetBrains Gateway on ${host}`}
++      className={cn(
++        "group ml-0.5 hidden h-6 min-w-6 max-w-full shrink cursor-pointer items-center justify-center gap-1 rounded px-0.5 text-xs leading-4 font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 md:inline-flex md:px-1",
++        className,
++      )}
++    >
++      <GatewayIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
++      <span
++        data-workspace-collapse-label=""
++        className={cn(
++          "min-w-0 truncate underline decoration-dotted underline-offset-2 group-hover:decoration-solid group-focus-visible:decoration-solid",
++          COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS,
++        )}
++      >
++        Open in Gateway
++      </span>
++    </a>
++  );
++}
+diff --git a/web/src/lib/gateway.ts b/web/src/lib/gateway.ts
+new file mode 100644
+index 0000000..4ad5a89
+--- /dev/null
++++ b/web/src/lib/gateway.ts
+@@ -0,0 +1,31 @@
++import { parseTailscaleHost } from "./tailscale";
++
++/** Gateway needs a specific IDE build to install or reuse it without a wizard. */
++export function gatewayLink(host: string | null, projectPath: string | null): string | null {
++  const tailscaleHost = parseTailscaleHost(host);
++  const buildNumber = import.meta.env.VITE_OMNIGENT_GATEWAY_IDEA_BUILD;
++  const hasControlCharacters = Array.from(projectPath ?? "").some((char) => {
++    const code = char.charCodeAt(0);
++    return code < 32 || code === 127;
++  });
++  if (
++    !tailscaleHost ||
++    !projectPath?.startsWith("/") ||
++    hasControlCharacters ||
++    !/^\d+(?:\.\d+)+$/.test(buildNumber ?? "")
++  ) {
++    return null;
++  }
++
++  const params = new URLSearchParams({
++    type: "ssh",
++    host: tailscaleHost,
++    port: "22",
++    user: "root",
++    projectPath,
++    productCode: "IU",
++    buildNumber,
++    deploy: "true",
++  });
++  return `jetbrains-gateway://connect#${params.toString().replaceAll("+", "%20")}`;
++}
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index 9e4a16a..7632c5e 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -227,6 +227,7 @@ import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
+ import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
+ import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
+ import { ComposerTailscaleHost } from "@/components/composer/ComposerTailscaleHost";
++import { ComposerGatewayLink } from "@/components/composer/ComposerGatewayLink";
+ import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
+ import { composerContextFromLabels } from "@/lib/composerContextAdapters";
+ import {
+@@ -3702,6 +3703,10 @@ function ComposerImpl(
+             showWorktree={composerGit.isWorktree === true}
+           />
+           <ComposerTailscaleHost host={composerTailscaleHost} />
++          <ComposerGatewayLink
++            host={composerTailscaleHost}
++            projectPath={composerWorkspace ?? null}
++          />
+           <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1">
+             <div
+               data-testid="composer-task-indicators"

@@ -6,6 +6,8 @@ ARG WEB_BUILDER_IMAGE=docker.io/library/node:22.23.3-slim@sha256:43ac6c60b8f8972
 FROM ${WEB_BUILDER_IMAGE} AS web
 ARG OMNIGENT_COMMIT=c8b9b85f822f2c9203ff995c10f3cc49d064bbe5
 ARG PNPM_VERSION=11.15.1
+ARG JETBRAINS_IDEA_BUILD=263.6259.32
+ENV VITE_OMNIGENT_GATEWAY_IDEA_BUILD=${JETBRAINS_IDEA_BUILD}
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates git patch \
     && rm -rf /var/lib/apt/lists/*
