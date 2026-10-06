@@ -18,6 +18,8 @@ A compromised runner **can**:
   as its short-lived token is valid
 - reach anything on the network: the internet, and other services in the
   cluster (which still need their own credentials)
+- reach what your tailnet policy lets runners reach, if you
+  [put runners on your tailnet](#runners-on-your-tailnet)
 
 Short of a Linux kernel bug, it **can't**:
 
@@ -66,6 +68,27 @@ do there.
   again, but since the agent is root in its pod it could change that setting
   itself. Treat it as a guard against mistakes, not against an attacker.
   Changes only apply to new runners.
+
+## Runners on your tailnet
+
+[Tailscale for runners](CUSTOM_FEATURES.md#reach-a-session-over-tailscale) is
+off until you store a key. Once it's on, every runner Pod is a node on your
+tailnet, and the agent is root in it, so treat the node as untrusted:
+
+- **What it can reach is up to your tailnet policy.** Grant your devices
+  access to `tag:omnigent`, and grant `tag:omnigent` nothing. With
+  Tailscale's default allow-all policy, a compromised runner could connect
+  to every device on your tailnet, including your own machine and the VM's
+  Kubernetes API (port 6443), which the firewall only allows from private
+  addresses.
+- **It can read the Tailscale key.** The key is in every runner's
+  environment. With an OAuth client, a runner can create more ephemeral
+  nodes, but only with the tags you gave the client. Give the client a tag
+  of its own, and rotate it with `mise run setup-tailscale` if you suspect a
+  leak.
+- **Devices your policy allows can get a root shell in the Pod** through
+  Tailscale SSH, and reach any port the agent opens. That's the same access
+  the agent already has.
 
 ## GitHub tokens and Vault
 

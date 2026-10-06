@@ -1,0 +1,339 @@
+Show the session's tailnet name in the composer workspace bar.
+
+Reads the omnigent.tailscale_host session label and session.tailscale events,
+and renders the Tailscale mark and the runner Pod's MagicDNS short name
+(omnigent-e1dcab9b) after the working directory, with a button that copies the
+full name (omnigent-e1dcab9b.tail1234.ts.net). Pairs with the server patch
+0003-tailscale-host.patch. Applies after 0001-composer-rate-limits.patch.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/components/composer/ComposerTailscaleHost.tsx b/web/src/components/composer/ComposerTailscaleHost.tsx
+new file mode 100644
+index 0000000..21bf8ae
+--- /dev/null
++++ b/web/src/components/composer/ComposerTailscaleHost.tsx
+@@ -0,0 +1,109 @@
++import { CheckIcon, CopyIcon } from "lucide-react";
++import { useEffect, useRef, useState, type SVGProps } from "react";
++
++import { COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS } from "./ChatComposer";
++import { copyText } from "@/lib/clipboard";
++import { tailscaleShortName } from "@/lib/tailscale";
++import { cn } from "@/lib/utils";
++
++/** How long the copy button shows its check mark. */
++const COPIED_MS = 2000;
++
++/** Dot centers of the Tailscale mark's 3×3 grid, in a 24×24 box. */
++const TAILSCALE_DOTS = [3, 12, 21];
++
++/**
++ * The Tailscale mark in the current text color: the middle row and bottom
++ * center dots solid, the rest faded, as in Tailscale's own logo.
++ */
++function TailscaleIcon(props: SVGProps<SVGSVGElement>) {
++  return (
++    <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
++      {TAILSCALE_DOTS.flatMap((cy) =>
++        TAILSCALE_DOTS.map((cx) => (
++          <circle
++            key={`${cx}-${cy}`}
++            cx={cx}
++            cy={cy}
++            r={3}
++            opacity={cy === 12 || (cy === 21 && cx === 12) ? 1 : 0.3}
++          />
++        )),
++      )}
++    </svg>
++  );
++}
++
++/**
++ * Tailnet name chip for the composer workspace bar: the runner Pod's
++ * MagicDNS short name, e.g. `omnigent-e1dcab9b`, and a button that copies
++ * the full name, so another device on the tailnet can `ssh` or browse to it.
++ * The full name copies because the short one only resolves where MagicDNS
++ * search domains are on. Self-nulls when the session has no tailnet name.
++ *
++ * @param host - Full name, e.g. `omnigent-e1dcab9b.tail1234.ts.net`, or
++ *   `null` when the session's Pod isn't on a tailnet.
++ */
++export function ComposerTailscaleHost({
++  host,
++  className,
++}: {
++  host: string | null;
++  className?: string;
++}) {
++  const [copied, setCopied] = useState(false);
++  const resetRef = useRef<number | undefined>(undefined);
++  useEffect(() => () => window.clearTimeout(resetRef.current), []);
++  // A different session's name must not inherit the check mark.
++  useEffect(() => setCopied(false), [host]);
++
++  if (host === null) return null;
++  const shortName = tailscaleShortName(host);
++
++  const copy = async () => {
++    try {
++      await copyText(host);
++    } catch {
++      return;
++    }
++    setCopied(true);
++    window.clearTimeout(resetRef.current);
++    resetRef.current = window.setTimeout(() => setCopied(false), COPIED_MS);
++  };
++
++  return (
++    <span
++      data-testid="composer-tailscale-host"
++      className={cn(
++        "relative inline-flex h-6 min-w-0 shrink items-center gap-1 pl-0.5 text-xs leading-4 font-normal text-muted-foreground md:pl-1",
++        className,
++      )}
++      title={`Tailscale: ${host}`}
++    >
++      <TailscaleIcon className="size-3.5 shrink-0" aria-hidden />
++      <span
++        data-workspace-collapse-label=""
++        className={cn("min-w-0 truncate font-mono", COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS)}
++      >
++        {shortName}
++      </span>
++      <button
++        type="button"
++        data-testid="composer-tailscale-copy"
++        onClick={() => void copy()}
++        aria-label={copied ? `Copied ${host}` : `Copy Tailscale name ${host}`}
++        title={copied ? "Copied" : `Copy ${host}`}
++        className="inline-flex size-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
++      >
++        {copied ? (
++          <CheckIcon className="size-3" aria-hidden />
++        ) : (
++          <CopyIcon className="size-3" aria-hidden />
++        )}
++      </button>
++      <span className="sr-only" aria-live="polite">
++        {copied ? "Copied" : ""}
++      </span>
++    </span>
++  );
++}
+diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
+index af7efb9..85196d5 100644
+--- a/web/src/lib/events.ts
++++ b/web/src/lib/events.ts
+@@ -705,6 +705,16 @@ export interface SessionTerminalPendingEvent {
+   pending: boolean;
+ }
+ 
++/**
++ * `session.tailscale` — the tailnet name of the session's managed runner
++ * Pod, e.g. `omnigent-e1dcab9b.tail1234.ts.net`, recorded by a launch or wake.
++ */
++export interface SessionTailscaleEvent {
++  type: "session_tailscale";
++  conversationId: string;
++  host: string;
++}
++
+ /**
+  * `session.sandbox_status` — the session's managed-sandbox launch
+  * advanced a stage (provision → clone → host start → runner connect),
+@@ -1023,6 +1033,7 @@ export type StreamEvent =
+   | SessionTodosEvent
+   | SessionTerminalPendingEvent
+   | SessionSandboxStatusEvent
++  | SessionTailscaleEvent
+   | SessionMcpStartupEvent
+   | SessionInputConsumedEvent
+   | SessionInterruptedEvent
+diff --git a/web/src/lib/sse.ts b/web/src/lib/sse.ts
+index d9cc9de..a463da4 100644
+--- a/web/src/lib/sse.ts
++++ b/web/src/lib/sse.ts
+@@ -57,6 +57,7 @@ import type {
+   SessionAgentChangedEvent,
+   SessionTodosEvent,
+   SessionSandboxStatusEvent,
++  SessionTailscaleEvent,
+   McpServerStartup,
+   SessionMcpStartupEvent,
+   SessionTerminalPendingEvent,
+@@ -72,6 +73,7 @@ import type {
+ } from "./events";
+ import { NATIVE_TOOL_TYPES } from "./events";
+ import { parseRateLimits } from "./rateLimits";
++import { parseTailscaleHost } from "./tailscale";
+ import { routingExtrasFromWire } from "./routingDecision";
+ import type {
+   BackgroundTaskInfo,
+@@ -767,6 +769,17 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+       pending,
+     } satisfies SessionTerminalPendingEvent;
+   }
++  if (eventType === "session.tailscale") {
++    const conversationId = data.conversation_id;
++    if (typeof conversationId !== "string" || !conversationId) return null;
++    const host = parseTailscaleHost(data.host);
++    if (host === null) return null;
++    return {
++      type: "session_tailscale",
++      conversationId,
++      host,
++    } satisfies SessionTailscaleEvent;
++  }
+   if (eventType === "session.sandbox_status") {
+     const conversationId = data.conversation_id;
+     if (typeof conversationId !== "string" || !conversationId) return null;
+diff --git a/web/src/lib/tailscale.ts b/web/src/lib/tailscale.ts
+new file mode 100644
+index 0000000..c5754fc
+--- /dev/null
++++ b/web/src/lib/tailscale.ts
+@@ -0,0 +1,33 @@
++/**
++ * The tailnet name of a managed session's runner Pod, e.g.
++ * `omnigent-e1dcab9b.tail1234.ts.net`. The deployment's runner image joins
++ * Tailscale under it, so a device on the tailnet can reach the Pod by name.
++ */
++
++/** Session label holding the name, for a reload before any update. */
++export const TAILSCALE_HOST_LABEL_KEY = "omnigent.tailscale_host";
++
++const DNS_NAME =
++  /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
++
++/**
++ * Parse a wire tailnet name (`session.tailscale` event or the session label).
++ *
++ * @param raw - e.g. `"omnigent-e1dcab9b.tail1234.ts.net"`.
++ * @returns The lowercased name, or `null` when absent or not a DNS name.
++ */
++export function parseTailscaleHost(raw: unknown): string | null {
++  if (typeof raw !== "string") return null;
++  const host = raw.trim().toLowerCase().replace(/\.$/, "");
++  return DNS_NAME.test(host) ? host : null;
++}
++
++/** Read the session label; anything unusable reads as no name. */
++export function tailscaleHostFromLabels(labels: Record<string, string> | undefined): string | null {
++  return parseTailscaleHost(labels?.[TAILSCALE_HOST_LABEL_KEY]);
++}
++
++/** The MagicDNS short name, e.g. `"omnigent-e1dcab9b"`. */
++export function tailscaleShortName(host: string): string {
++  return host.split(".", 1)[0];
++}
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index 49325ae..9e4a16a 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -226,6 +226,7 @@ import { ComposerWorkspaceStatus } from "@/components/composer/ComposerWorkspace
+ import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
+ import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
+ import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
++import { ComposerTailscaleHost } from "@/components/composer/ComposerTailscaleHost";
+ import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
+ import { composerContextFromLabels } from "@/lib/composerContextAdapters";
+ import {
+@@ -2617,6 +2618,7 @@ function ComposerImpl(
+   const composerContextWindow = useChatStore((s) => s.contextWindow);
+   const composerTokensUsed = useChatStore((s) => s.tokensUsed);
+   const composerRateLimits = useChatStore((s) => s.rateLimits);
++  const composerTailscaleHost = useChatStore((s) => s.tailscaleHost);
+   const openComposerGithubTab = useOpenGithubTab();
+   // Devin shares this control but not Claude's vocabulary: its rungs are
+   // normal / accept-edits / smart / dangerous, cycled in the TUI.
+@@ -3699,6 +3701,7 @@ function ComposerImpl(
+             creationBranch={composerGit.creationBranch}
+             showWorktree={composerGit.isWorktree === true}
+           />
++          <ComposerTailscaleHost host={composerTailscaleHost} />
+           <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1">
+             <div
+               data-testid="composer-task-indicators"
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index 3d07864..9c4364b 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -148,6 +148,7 @@ import { isSystemUserContent, taskNotificationMarkerContent } from "@/lib/system
+ import { isNativeTerminalSession as isNativeTerminalSessionFn } from "@/lib/nativeCodingAgents";
+ import type { StoredReplyDraft } from "@/lib/replyDraft";
+ import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
++import { tailscaleHostFromLabels } from "@/lib/tailscale";
+ 
+ export interface SendOptions {
+   /** Client-only quote provenance, retained if the composer needs to retry. */
+@@ -862,6 +863,13 @@ export interface ConversationState {
+    * ``session.usage`` events that carry them. ``null`` until reported.
+    */
+   rateLimits: RateLimits | null;
++  /**
++   * Tailnet name of the session's managed runner Pod, e.g.
++   * ``omnigent-e1dcab9b.tail1234.ts.net``. Seeded from the session's
++   * ``omnigent.tailscale_host`` label on bind and replaced by
++   * ``session.tailscale`` events. ``null`` when the Pod isn't on a tailnet.
++   */
++  tailscaleHost: string | null;
+   /**
+    * Worktree branch checked out for the active session, surfaced in the
+    * composer status line. Seeded from the session snapshot on bind
+@@ -1741,6 +1749,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+   sessionCostUsd: null,
+   sessionUsageByModel: null,
+   rateLimits: null,
++  tailscaleHost: null,
+   gitBranch: null,
+   todos: [],
+   codexModelOptions: [],
+@@ -4050,6 +4059,7 @@ async function bindStream(
+         sessionReasoningEffort: effectiveEffort,
+         tokensUsed: session.lastTotalTokens ?? null,
+         rateLimits: rateLimitsFromLabels(session.labels),
++        tailscaleHost: tailscaleHostFromLabels(session.labels),
+         sessionCostUsd:
+           state.sessionCostUsd !== stateBeforeFetch.sessionCostUsd
+             ? state.sessionCostUsd
+@@ -4252,6 +4262,8 @@ function reconnectStatusPatch(
+   if (session.usageByModel != null) patch.sessionUsageByModel = session.usageByModel;
+   const rateLimits = rateLimitsFromLabels(session.labels);
+   if (rateLimits !== null) patch.rateLimits = rateLimits;
++  const tailscaleHost = tailscaleHostFromLabels(session.labels);
++  if (tailscaleHost !== null) patch.tailscaleHost = tailscaleHost;
+   // `waiting` is a TURN-END snapshot (the turn finished; only background work
+   // outlives it), so it settles the local send lifecycle like `idle` — it must
+   // NOT reopen a streaming response. The server keeps `active_response_id`
+@@ -6146,6 +6158,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+         mcpStartupLaunch: updateMcpStartupLaunch(s.mcpStartupLaunch, event.pending),
+       }));
+       return;
++    case "session_tailscale":
++      applyToConversation({ tailscaleHost: event.host });
++      return;
+     case "session_sandbox_status":
+       // Advance the managed-sandbox provisioning indicator. `ready`
+       // clears it — from then on the session looks like any
+diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
+index 3da0c66..d930eca 100644
+--- a/web/src/store/conversationState.ts
++++ b/web/src/store/conversationState.ts
+@@ -49,6 +49,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
+   sessionCostUsd: true,
+   sessionUsageByModel: true,
+   rateLimits: true,
++  tailscaleHost: true,
+   gitBranch: true,
+   todos: true,
+   codexModelOptions: true,
+@@ -116,6 +117,7 @@ export function createInitialConversationState(): ConversationState {
+     sessionCostUsd: null,
+     sessionUsageByModel: null,
+     rateLimits: null,
++    tailscaleHost: null,
+     gitBranch: null,
+     todos: [],
+     codexModelOptions: [],

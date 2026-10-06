@@ -10,11 +10,21 @@ RUN apt-get update \
     && podman --version \
     && docker-compose version
 RUN install -d -m 1777 /etc/claude-code
+ARG TAILSCALE_VERSION=1.102.5
+ARG TAILSCALE_SHA256=65e6d7f19ad7e1c87d20c2a21e92f38a96795cb897af54b04536590e1c148d12
+RUN curl -fsSLo /tmp/tailscale.tgz "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_amd64.tgz" \
+    && echo "${TAILSCALE_SHA256}  /tmp/tailscale.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/tailscale.tgz -C /usr/local/bin --strip-components=1 \
+        "tailscale_${TAILSCALE_VERSION}_amd64/tailscale" "tailscale_${TAILSCALE_VERSION}_amd64/tailscaled" \
+    && rm /tmp/tailscale.tgz \
+    && tailscale version
 COPY containers/containers.conf /etc/containers/containers.conf.d/50-omnigent.conf
 COPY containers/storage.conf /etc/containers/storage.conf
 COPY --chmod=0755 containers/podman-service.sh /usr/local/bin/omnigent-podman-service
 COPY --chmod=0755 containers/docker-compose.sh /usr/local/bin/docker-compose
 COPY containers/podman-service-profile.sh /etc/profile.d/omnigent-podman-service.sh
+COPY --chmod=0755 tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailscale
+COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
 
 WORKDIR /opt/omnigent-agent-clis
 COPY package.json package-lock.json ./

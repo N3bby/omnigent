@@ -67,7 +67,8 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
         "cert_manager", "cert_manager_manifest_sha256", "agent_sandbox",
         "agent_sandbox_manifest_sha256", "postgres",
         "postgres_digest", "vault", "vault_digest", "hvac", "web_builder",
-        "web_builder_digest", "pnpm", "claude_code", "codex_cli",
+        "web_builder_digest", "pnpm", "claude_code", "codex_cli", "tailscale",
+        "tailscale_sha256",
     }
     missing_versions = sorted(required_versions - versions.keys())
     if missing_versions:
@@ -116,6 +117,12 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
             raise ConfigError(f"{key} is not locked; run ENV={name} mise run lock-images")
     data.setdefault("kubernetes_api_host", hostname)
     require_string(data, "kubernetes_api_host", r"(?=.{1,253}$)(?!-)[A-Za-z0-9.-]+(?<!-)")
+    # Runner Pods join the tailnet only once `mise run setup-tailscale` stores
+    # a key; this is the tailnet's MagicDNS suffix the composer shows.
+    if "tailscale_tailnet" in data:
+        require_string(data, "tailscale_tailnet", r"(?=.{1,200}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+")
+    data.setdefault("tailscale_tags", "tag:omnigent")
+    require_string(data, "tailscale_tags", r"tag:[A-Za-z0-9-]+(?:,tag:[A-Za-z0-9-]+)*")
     if "deploy_github_repository_id" in data:
         require_string(data, "deploy_github_repository_id", r"[1-9][0-9]*")
         data.setdefault("deploy_github_environment", "production")

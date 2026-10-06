@@ -11,7 +11,8 @@ What you get:
 - agent sessions in Kubernetes runner Pods that stop after 4 idle hours
   and keep their files until you delete the session
 - a few features on top of upstream Omnigent, such as showing your Claude and
-  Codex usage limits in the Omnigent UI, and Podman inside runners. See
+  Codex usage limits in the Omnigent UI, Podman inside runners, and reaching
+  each session over Tailscale. See
   [custom features](docs/CUSTOM_FEATURES.md).
 
 Images are built by GitHub Actions, published to your GHCR namespace, and

@@ -50,6 +50,8 @@ class ConfigurationTests(unittest.TestCase):
         )
         self.assertIn(f"PNPM_VERSION={versions['pnpm']}", server_dockerfile)
         self.assertIn(f"OMNIGENT_COMMIT={versions['omnigent_commit']}", server_dockerfile)
+        self.assertIn(f"TAILSCALE_VERSION={versions['tailscale']}\n", dockerfile)
+        self.assertIn(f"TAILSCALE_SHA256={versions['tailscale_sha256']}\n", dockerfile)
 
     def test_render_has_no_secret_or_mutable_application_image(self) -> None:
         subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
@@ -102,6 +104,46 @@ class ConfigurationTests(unittest.TestCase):
         with mock.patch("config.load_environment", return_value=too_short):
             with self.assertRaises(ConfigError):
                 validate("ci")
+
+    def test_runners_join_the_tailnet_under_the_name_the_server_shows(self) -> None:
+        subprocess.run(
+            [str(ROOT / "scripts" / "render"), "--environment", "ci", "--prepare-only"],
+            check=True, capture_output=True,
+        )
+        generated = ROOT / ".generated" / "ci"
+        env = (generated / "omnigent-config.env").read_text()
+        self.assertIn("OMNIGENT_TAILSCALE_TAILNET=tailnet.invalid\n", env)
+        self.assertIn("OMNIGENT_TAILSCALE_TAGS=tag:omnigent\n", env)
+        sandbox = (generated / "sandbox-config.yaml").read_text()
+        self.assertIn("      - OMNIGENT_TAILSCALE_TAGS\n", sandbox)
+        # The Pod and the server derive the same name from the host id.
+        script = (ROOT / "images" / "runner" / "tailscale" / "tailscale-service.sh").read_text()
+        self.assertIn("""name="omnigent-$(printf '%.8s' "$host_id" | tr '[:upper:]' '[:lower:]')\"""", script)
+        self.assertIn("--ssh", script)
+        self.assertIn("ephemeral=true&preauthorized=true", script)
+        server_patch = (ROOT / "images" / "server" / "patches" / "0003-tailscale-host.patch").read_text()
+        self.assertIn('return f"omnigent-{host_id[:8].lower()}.{tailnet}"', server_patch)
+        self.assertIn('_TAILSCALE_TAILNET_ENV_VAR = "OMNIGENT_TAILSCALE_TAILNET"', server_patch)
+        dockerfile = (ROOT / "images" / "runner" / "Dockerfile").read_text()
+        self.assertIn("tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailscale", dockerfile)
+        self.assertIn("tailscale/tailscale-service-profile.sh /etc/profile.d/", dockerfile)
+        self.assertIn("[tasks.setup-tailscale]", (ROOT / ".mise.toml").read_text())
+        self.assertIn("TAILSCALE_AUTHKEY", (ROOT / "scripts" / "setup-tailscale").read_text())
+        base = load_environment("ci")
+        for key, value in (
+            ("tailscale_tailnet", "Tail1.ts.net"),
+            ("tailscale_tailnet", "ts.net\nx"),
+            ("tailscale_tags", "omnigent"),
+            ("tailscale_tags", "tag:a,b"),
+        ):
+            with self.subTest(key=key, value=value):
+                with mock.patch("config.load_environment", return_value=dict(base, **{key: value})):
+                    with self.assertRaises(ConfigError):
+                        validate("ci")
+        without = {k: v for k, v in base.items() if k != "tailscale_tailnet"}
+        with mock.patch("config.load_environment", return_value=without):
+            values, _ = validate("ci")
+        self.assertNotIn("tailscale_tailnet", values)
 
     def test_production_contains_no_secret_values(self) -> None:
         text = (ROOT / "environments" / "production.toml").read_text().lower()

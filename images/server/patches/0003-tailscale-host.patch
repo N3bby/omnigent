@@ -1,0 +1,154 @@
+Record the tailnet name of a managed session's runner Pod.
+
+When OMNIGENT_TAILSCALE_TAILNET is set (e.g. tail1234.ts.net), a managed
+launch and every wake store omnigent-<first 8 hex of the host id>.<tailnet>,
+the name the runner image joins Tailscale as, in the omnigent.tailscale_host
+session label for page loads, and broadcast it as a session.tailscale event.
+Best-effort: a failed write is logged and the launch carries on.
+Applies after 0002-rate-limits.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index 9379916..03160a4 100644
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -12,6 +12,7 @@ import contextlib
+ import hashlib
+ import json
+ import math
++import os
+ import re
+ import secrets
+ import time
+@@ -350,6 +351,7 @@ from omnigent.server.schemas import (
+     SessionModelEvent,
+     SessionResponse,
+     SessionStatusEvent,
++    SessionTailscaleEvent,
+     SessionUsageEvent,
+ )
+ from omnigent.spec.types import (
+@@ -3175,6 +3177,69 @@ async def _wait_for_host_bound_runner_client(
+             await asyncio.gather(*outstanding, return_exceptions=True)
+ 
+ 
++# The tailnet name of a managed session's runner Pod, read by the web composer
++# on load; live updates ride on ``session.tailscale``. The runner image joins
++# Tailscale as ``omnigent-<first 8 hex of the host id>``, which stays the same
++# when the Pod suspends and wakes.
++_TAILSCALE_HOST_LABEL_KEY = "omnigent.tailscale_host"
++# The tailnet's MagicDNS suffix, e.g. ``tail1234.ts.net``; unset turns it off.
++_TAILSCALE_TAILNET_ENV_VAR = "OMNIGENT_TAILSCALE_TAILNET"
++
++
++def _tailscale_host_for(host_id: str) -> str | None:
++    """
++    The MagicDNS name the runner Pod of managed host *host_id* joins as.
++
++    :param host_id: Managed host id, e.g. ``"e1dcab9b1db64fbc90dd0811d31a0b9b"``.
++    :returns: e.g. ``"omnigent-e1dcab9b.tail1234.ts.net"``, or ``None`` when
++        no tailnet is configured.
++    """
++    tailnet = os.environ.get(_TAILSCALE_TAILNET_ENV_VAR, "").strip().strip(".").lower()
++    if not tailnet:
++        return None
++    return f"omnigent-{host_id[:8].lower()}.{tailnet}"
++
++
++async def _stamp_tailscale_host(
++    session_id: str,
++    host_id: str,
++    conv: Conversation,
++    conversation_store: ConversationStore,
++) -> None:
++    """
++    Record and broadcast the tailnet name of a managed session's Pod.
++
++    Best-effort: the name is a convenience, so a failure is logged and the
++    launch carries on.
++
++    :param session_id: Session/conversation identifier.
++    :param host_id: The managed host the session is bound to.
++    :param conv: The session row, whose labels skip an unchanged write.
++    :param conversation_store: Store holding the session row.
++    """
++    host = _tailscale_host_for(host_id)
++    if host is None or conv.labels.get(_TAILSCALE_HOST_LABEL_KEY) == host:
++        return
++    try:
++        await asyncio.to_thread(
++            conversation_store.set_labels, session_id, {_TAILSCALE_HOST_LABEL_KEY: host}
++        )
++    except Exception:  # noqa: BLE001 - never fail a launch over a display label
++        _logger.warning(
++            "Could not record the tailnet name of session %s",
++            session_id,
++            exc_info=True,
++            extra={"session_id": session_id},
++        )
++        return
++    session_stream.publish(
++        session_id,
++        SessionTailscaleEvent(
++            type="session.tailscale", conversation_id=session_id, host=host
++        ).model_dump(exclude_none=True),
++    )
++
++
+ async def _run_managed_launch(
+     *,
+     session_id: str,
+@@ -3377,6 +3442,7 @@ async def _bind_and_launch_managed_runner(
+         return
+     if relaunch_host is not None:
+         await _note_workspace_reset_on_recreate(session_id, conversation_store)
++    await _stamp_tailscale_host(session_id, managed.host_id, conv, conversation_store)
+     # Host bound; what remains is launching the runner and waiting
+     # for its tunnel.
+     _publish_sandbox_status(session_id, "connecting")
+@@ -4197,6 +4263,8 @@ async def _run_managed_wake(
+         if refreshed is None:
+             tracker.fail(session_id, "session not found after wake")
+             return
++        # Also covers sessions created before the tailnet was configured.
++        await _stamp_tailscale_host(session_id, host_id, refreshed, conversation_store)
+         runner_id: str | None = None
+         host_conn = host_registry.get(host_id) if host_registry is not None else None
+         if host_registry is not None and host_conn is None:
+diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
+index f0513ec..3b40c79 100644
+--- a/omnigent/server/schemas.py
++++ b/omnigent/server/schemas.py
+@@ -3178,6 +3178,25 @@ class SessionUsageEvent(_SSEEventBase):
+     rate_limits: dict[str, list[dict[str, float | int | None]]] | None = None
+ 
+ 
++class SessionTailscaleEvent(_SSEEventBase):
++    """
++    The tailnet name of a managed session's runner Pod.
++
++    Emitted when a managed launch or wake stamps the
++    ``omnigent.tailscale_host`` session label, so an open composer shows
++    the name without a reload.
++
++    :param type: Always ``"session.tailscale"``.
++    :param conversation_id: Session identifier.
++    :param host: The Pod's MagicDNS name, e.g.
++        ``"omnigent-e1dcab9b.tail1234.ts.net"``.
++    """
++
++    type: Literal["session.tailscale"]
++    conversation_id: str
++    host: str
++
++
+ class SessionModelEvent(_SSEEventBase):
+     """
+     Active-model report from a harness integration.
+@@ -4753,6 +4772,7 @@ ServerStreamEvent = Annotated[
+     | SessionTodosEvent
+     | SessionTerminalPendingEvent
+     | SessionSandboxStatusEvent
++    | SessionTailscaleEvent
+     | SessionMcpStartupEvent
+     | SessionModelOptionsEvent
+     | SessionInputConsumedEvent

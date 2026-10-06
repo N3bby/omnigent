@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+KUBECTL=("$(dirname "${BASH_SOURCE[0]}")/kube")
+
+cat <<'INFO'
+Runner Pods join your tailnet as ephemeral nodes tagged tag:omnigent (or the
+tailscale_tags setting). Create an OAuth client at
+https://login.tailscale.com/admin/settings/oauth with the "Auth Keys: Write"
+scope and only that tag. A reusable, ephemeral, pre-approved auth key with the
+tag works too, but expires within 90 days.
+INFO
+read -rsp "Tailscale OAuth client secret or auth key (blank cancels): " key
+echo
+[[ -n "$key" ]] || exit 0
+[[ "$key" == tskey-client-* || "$key" == tskey-auth-* ]] \
+  || { echo "expected a tskey-client-... or tskey-auth-... value" >&2; exit 1; }
+patch="$(jq -nc --arg value "$key" '{stringData:{TAILSCALE_AUTHKEY:$value}}')"
+"${KUBECTL[@]}" patch secret omnigent-creds -n omnigent-sandboxes --type=merge -p "$patch" >/dev/null
+unset key patch
+echo "Tailscale key stored. Runner Pods join the tailnet when they next start."

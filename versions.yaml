@@ -21,3 +21,6 @@ web_builder_digest: "sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe42383
 pnpm: "11.15.1"
 claude_code: "2.1.285"
 codex_cli: "0.159.1"
+# Joins runner Pods to your tailnet, from pkgs.tailscale.com/stable (amd64).
+tailscale: "1.102.5"
+tailscale_sha256: "65e6d7f19ad7e1c87d20c2a21e92f38a96795cb897af54b04536590e1c148d12"
