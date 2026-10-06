@@ -18,13 +18,13 @@ A compromised runner **can**:
   as its short-lived token is valid
 - reach anything on the network: the internet, and other services in the
   cluster (which still need their own credentials)
+- use all of the VM's spare CPU and memory, which slows down other sessions
 
 Short of a Linux kernel bug, it **can't**:
 
 - take over the VM
 - read the database or the server's secrets
 - use the Kubernetes API, or touch other namespaces
-- use more CPU or memory than its limits allow
 
 ## The network is open
 
@@ -39,7 +39,7 @@ reach as reachable by an attacker.
 | User namespace | The agent is root inside its pod, but that maps to an unprivileged user on the host. See [the diagram](CUSTOM_FEATURES.md#install-packages-and-run-containers). |
 | Admission policy | Rejects runner pods that are privileged, mount host paths, share host namespaces or use host ports (`kubernetes/platform/runner-userns.yaml`). |
 | No Kubernetes access | The runner's service account has no permissions, and its token isn't mounted. |
-| Resource limits | CPU, memory, scratch disk, and the number of pods and jobs are all capped. The home volume is not; see below. |
+| Resource limits | Scratch disk and the number of pods and jobs are capped. CPU and memory limits are above the VM's size, so runners share whatever is free, and the server, database and Vault have a higher priority than runners. The home volume is not capped; see below. |
 | Separate namespace | PostgreSQL and the server's secrets live in a different namespace. Runners only get the runner credentials. |
 
 The server itself can only manage sandboxes, jobs, pods, logs and launch
