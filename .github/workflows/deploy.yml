@@ -4,12 +4,21 @@ name: Deploy
 # GitHub OIDC identity that can only manage the application in the Omnigent
 # namespaces; there are no stored credentials. Platform changes still need
 # `mise run bootstrap` from your machine; the deploy refuses to run until that
-# is done.
+# is done. Each deployment has a GitHub Environment of the same name, which
+# holds its approval rule and Tailscale identifiers.
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment to release to
+        type: choice
+        options:
+          - production-alternative
+          - production
+        default: production-alternative
 permissions: {}
 concurrency:
-  group: production
+  group: deploy-${{ inputs.environment }}
   cancel-in-progress: false
 jobs:
   run:
@@ -17,15 +26,15 @@ jobs:
     # enforce main; the API server also rejects tokens from other refs.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    environment: production
+    environment: ${{ inputs.environment }}
     timeout-minutes: 60
     permissions:
       contents: write # commits the new digests to main
       packages: write # pushes the new images
       id-token: write # OIDC tokens for Tailscale and the Kubernetes API
     env:
-      ENV: production
-      INVENTORY: ansible/inventory/production/hosts.yml
+      ENV: ${{ inputs.environment }}
+      INVENTORY: ansible/inventory/${{ inputs.environment }}/hosts.yml
     steps:
       # Pinned by SHA: every step can mint the job's OIDC tokens.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
