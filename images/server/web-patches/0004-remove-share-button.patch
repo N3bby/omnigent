@@ -1,0 +1,211 @@
+Remove the Share button from the web UI.
+
+Drops Share from the chat header, its dropdown and the mobile three-dot menu,
+and from each session row's menu in the sidebar (kebab and right-click). The
+Settings → Sharing admin page and the server's sharing API are unchanged.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/shell/AppShell.tsx b/web/src/shell/AppShell.tsx
+index 1ec7959..fd48acc 100644
+--- a/web/src/shell/AppShell.tsx
++++ b/web/src/shell/AppShell.tsx
+@@ -77,9 +77,6 @@ import {
+   nativeCodingAgentForSubagentWrapper,
+   WRAPPER_LABEL_KEY,
+ } from "@/lib/nativeCodingAgents";
+-import { useServerInfo } from "@/lib/CapabilitiesContext";
+-import { isSingleUserMode } from "@/lib/capabilities";
+-import { isCurrentServerLocal } from "@/lib/serverOrigin";
+ import { isTempConvId, useChatStore } from "@/store/chatStore";
+ import {
+   STARTING_GRACE_S,
+@@ -625,32 +622,9 @@ export function AppShell() {
+   // three-dot menu render the exact same set (they can't drift apart).
+   // Stop session is not a header action — it lives in the sidebar row's
+   // kebab menu (see Sidebar's ConversationRow).
+-  // Only the owner can manage sharing; top-level only. Sharing a
+-  // sub-agent is a no-op anyway — children inherit the parent's grants via
+-  // the server's parent-delegation path — so we hide the affordance.
+-  // Also hidden in single-user mode: with no other users to grant to, the
+-  // affordance is meaningless (unlike the local-server / sharing-off cases
+-  // below, which stay present-but-disabled with an explanatory tooltip).
+-  // ``isOwnerLevel`` is permissive on a null level (single-user / still
+-  // loading), matching the sidebar's owner-only Share gate and the terminal
+-  // ``readOnly`` gate below; the authoritative snapshot level resolves it.
+-  const serverInfo = useServerInfo();
+-  const canShare =
+-    !!conversationId &&
+-    isKnownTopLevel &&
+-    isOwnerLevel(permissionLevel) &&
+-    !isSingleUserMode(serverInfo);
+-  // Two independent reasons the Share affordance is present-but-disabled: a
+-  // local server can't produce openable links, and a deployed server whose
+-  // admin set OMNIGENT_SHARING_MODE=off reports sharing_mode "off" via
+-  // /v1/info. Fail open (share enabled) while the capability probe loads.
+-  const sharingOff = serverInfo !== "loading" && serverInfo.sharing_mode === "off";
+-  const shareDisabled = canShare && (isCurrentServerLocal() || sharingOff);
+-  const shareDisabledReason = !shareDisabled
+-    ? undefined
+-    : isCurrentServerLocal()
+-      ? "Sharing is unavailable from a local server."
+-      : "Sharing has been disabled for this Omnigent server.";
++  // This deployment removes Share from the header, its dropdown and the
++  // mobile three-dot menu.
++  const canShare = false;
+   // Any viewer can fork a shared session, sub-agents included — forking a
+   // child is how it gets promoted to a top-level session of its own. Gated on
+   // knowing which the session is (sidebar row or loaded snapshot) so the
+@@ -2161,8 +2135,6 @@ export function AppShell() {
+                     wrapperLabel={wrapperLabel}
+                     canShare={canShare}
+                     canFork={canClone}
+-                    shareDisabled={shareDisabled}
+-                    shareDisabledReason={shareDisabledReason}
+                     onShare={() => setShareOpen(true)}
+                     onFork={() => forkDialogContextValue.openForkDialog()}
+                     hasAgentInfo={hasAgentInfo}
+diff --git a/web/src/shell/Sidebar.tsx b/web/src/shell/Sidebar.tsx
+index 76b6fbb..c42cd0f 100644
+--- a/web/src/shell/Sidebar.tsx
++++ b/web/src/shell/Sidebar.tsx
+@@ -57,7 +57,6 @@ import {
+   PlusIcon,
+   SearchIcon,
+   Settings2Icon,
+-  ShareIcon,
+   SmilePlusIcon,
+   SquareIcon,
+   SquareCheckIcon,
+@@ -161,7 +160,6 @@ import { relativeTime } from "@/lib/relativeTime";
+ import { USER_SESSION_TITLE_MAX_CHARS } from "@/lib/sessionTitles";
+ import { showToast } from "@/components/ui/toast";
+ import { showArchiveUndoToast } from "./archiveUndoToast";
+-import { PermissionsModal } from "@/components/PermissionsModal";
+ import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
+ import { ProjectRowIcon } from "./ProjectPicker";
+ import { EmojiPicker } from "@/components/ProjectIconPicker";
+@@ -3296,7 +3294,6 @@ function ConversationMenuItems({
+   isPinned,
+   isArchived,
+   isOwner,
+-  sharingOff,
+   isSingleUser,
+   canStop,
+   canMarkUnread,
+@@ -3307,7 +3304,6 @@ function ConversationMenuItems({
+   onProjectAssigned,
+   moveToProject,
+   stopSession,
+-  setShareOpen,
+   setForkOpen,
+   setIsEditing,
+   setStopOpen,
+@@ -3321,11 +3317,7 @@ function ConversationMenuItems({
+   isPinned: boolean;
+   isArchived: boolean;
+   isOwner: boolean;
+-  // Server-wide sharing kill switch (OMNIGENT_SHARING_MODE=off): disables the
+-  // Share item for everyone, independent of the per-user ownership check.
+-  sharingOff: boolean;
+-  // Single-user mode: hide the Share item entirely (no other users to share
+-  // with), rather than disabling it like sharingOff does.
++  // Single-user mode: owners and viewers are the same user, so Delete stays.
+   isSingleUser: boolean;
+   canStop: boolean;
+   // Whether "Mark as unread" applies: any row not already showing the
+@@ -3338,7 +3330,6 @@ function ConversationMenuItems({
+   onProjectAssigned?: (projectName: string) => void;
+   moveToProject: ReturnType<typeof useMoveToProject>;
+   stopSession: ReturnType<typeof useStopSession>;
+-  setShareOpen: (open: boolean) => void;
+   setForkOpen: (open: boolean) => void;
+   setIsEditing: (editing: boolean) => void;
+   setStopOpen: (open: boolean) => void;
+@@ -3422,33 +3413,6 @@ function ConversationMenuItems({
+           {isPinned ? "Unpin" : "Pin"}
+         </C.Item>
+       )}
+-      {/* Single-user mode has no other users to share with — omit the item
+-          entirely rather than showing it disabled. */}
+-      {!isSingleUser &&
+-        (isOwner && !sharingOff ? (
+-          <C.Item data-testid="share-conversation" onSelect={() => setShareOpen(true)}>
+-            <ShareIcon className="size-3.5" />
+-            Share
+-          </C.Item>
+-        ) : (
+-          <Tooltip>
+-            <TooltipTrigger asChild>
+-              <div>
+-                <C.Item data-testid="share-conversation" disabled>
+-                  <ShareIcon className="size-3.5" />
+-                  Share
+-                </C.Item>
+-              </div>
+-            </TooltipTrigger>
+-            {/* Sharing-off is server-wide, so it outranks the per-user owner
+-                reason when both apply. */}
+-            <TooltipContent side="left">
+-              {sharingOff
+-                ? "Sharing has been disabled for this Omnigent server."
+-                : "Only the session owner can share this session"}
+-            </TooltipContent>
+-          </Tooltip>
+-        ))}
+       <C.Item data-testid="fork-conversation" onSelect={() => setForkOpen(true)}>
+         <GitForkIcon className="size-3.5" />
+         Fork
+@@ -3783,7 +3747,6 @@ function ConversationRowImpl({
+   const [menuOpen, setMenuOpen] = useState(false);
+   // Opt-in "delete local branch" checkbox (worktree sessions only).
+   const [deleteBranch, setDeleteBranch] = useState(false);
+-  const [shareOpen, setShareOpen] = useState(false);
+   const [forkOpen, setForkOpen] = useState(false);
+   const [leaveOpen, setLeaveOpen] = useState(false);
+   const gitBranch = conversation.git_branch ?? null;
+@@ -3796,13 +3759,7 @@ function ConversationRowImpl({
+   // `isOwner` below is derived from it. From context (ViewerIdContext).
+   const viewerId = useContext(ViewerIdContext);
+   const isOwner = isOwnedByViewer(conversation, viewerId);
+-  // Server-wide sharing kill switch (OMNIGENT_SHARING_MODE=off) reported by
+-  // /v1/info — disables the row's Share item even for managers. Fail open
+-  // (share enabled) while the capability probe is still loading. From context.
+   const serverInfo = useContext(ServerInfoContext);
+-  const sharingOff = serverInfo !== "loading" && serverInfo.sharing_mode === "off";
+-  // Single-user mode has no other users to share with, so the Share item is
+-  // hidden entirely (not just disabled) — mirrors the header Share button.
+   const isSingleUser = isSingleUserMode(serverInfo);
+   // Gates the kebab's "Stop session" item. `false` = runner known-offline
+   // (already stopped — hide the destructive control); `undefined` = not yet
+@@ -4056,7 +4013,6 @@ function ConversationRowImpl({
+     isPinned,
+     isArchived,
+     isOwner,
+-    sharingOff,
+     isSingleUser,
+     canStop,
+     canMarkUnread,
+@@ -4067,7 +4023,6 @@ function ConversationRowImpl({
+     onProjectAssigned,
+     moveToProject,
+     stopSession,
+-    setShareOpen,
+     setForkOpen,
+     setIsEditing,
+     setStopOpen,
+@@ -4465,15 +4420,6 @@ function ConversationRowImpl({
+           </DropdownMenu>
+         </div>
+       )}
+-      {/* Mount only while open — one per row, its hook tree + JSX would
+-          otherwise run closed on every row re-render. */}
+-      {shareOpen && (
+-        <PermissionsModal
+-          sessionId={conversation.id}
+-          open={shareOpen}
+-          onOpenChange={setShareOpen}
+-        />
+-      )}
+       {forkOpen && (
+         <ForkSessionDialog
+           sourceSessionId={conversation.id}

@@ -14,6 +14,7 @@ does, what you'll notice, and how to turn it off where that's possible.
 | [Idle sessions stop](#idle-sessions-stop-and-keep-their-files) | Idle runner Pods free their CPU and memory, and keep their files | You can change the timing |
 | [Runners on your tailnet](#reach-a-session-over-tailscale) | SSH into a session's Pod, or open its dev servers, from your own devices | Optional setup step |
 | [Open in Gateway](#open-a-session-in-jetbrains-gateway) | Open the session's repository in IntelliJ through JetBrains Gateway | Requires Tailscale |
+| [No Share button](#no-share-button) | Sessions can't be shared from the web UI | No |
 
 ## See your usage limits
 
@@ -344,6 +345,20 @@ again under the same name.
 The server works the name out instead of asking the Pod, so the composer
 shows it even if the Pod couldn't join. Check `/run/omnigent-tailscale.log`
 in the Pod, or `mise run credential-status` for the key.
+
+</details>
+
+## No Share button
+
+The web UI has no **Share** button. It's gone from the chat header, the
+header's menu on mobile, and each session's menu in the sidebar. Admins still
+see **Settings → Sharing**, and the server's sharing API still works.
+
+<details>
+<summary>How it works</summary>
+
+- **Web UI** (`images/server/web-patches/0004-remove-share-button.patch`):
+  hides Share in the header and removes the sidebar menu item.
 
 </details>
 
