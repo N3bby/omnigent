@@ -219,7 +219,17 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertIn("workflow_dispatch:", triggers)
                 self.assertNotIn("push:", triggers)
                 self.assertNotIn("pull_request", triggers)
-                self.assertIn("environment: production", workflow)
+                # Each run gets one Environment, whose required reviewer gates it.
+                self.assertIn("environment: ${{ inputs.environment }}", workflow)
+                self.assertIn("type: choice", workflow)
+                # The API server only accepts tokens from the Environment named
+                # in the environment file, so every option must match its own.
+                options = workflow.split("options:\n", 1)[1].split("default:", 1)[0]
+                for name in re.findall(r"^\s+- (\S+)$", options, re.M):
+                    with self.subTest(environment=name):
+                        cfg = load_environment(name)
+                        self.assertEqual(cfg.get("deploy_github_environment"), name)
+                        self.assertTrue((ROOT / "ansible" / "inventory" / name / "hosts.yml").is_file())
                 self.assertIn("github.ref == 'refs/heads/main'", workflow)
                 for action in re.findall(r"uses: (\S+)", workflow):
                     if not action.startswith("./"):

@@ -123,9 +123,10 @@ Deploys come in two levels of access:
   and their Pod Security labels, the admission policies, RBAC and quotas.
 - **`mise run deploy`** needs only the Kubernetes API. From GitHub Actions it
   authenticates with a short-lived GitHub OIDC token. The API server accepts
-  the token only from this repository's `production` Environment on `main`,
-  and the token can only manage the application in the two Omnigent
-  namespaces (`kubernetes/platform/deployer-rbac.yaml`).
+  the token only from this repository's Environment for that deployment,
+  such as `production`, on `main`, and the token can only manage the
+  application in the two Omnigent namespaces
+  (`kubernetes/platform/deployer-rbac.yaml`).
 - **The `Deploy` workflow** runs that deploy after building the images. Its
   job can also push images to GHCR and commit to `main`, because it records
   the new digests there.

@@ -156,15 +156,16 @@ GitHub Actions; see below.
 
 ## Deploying from GitHub Actions
 
-The `Deploy` workflow builds both images, commits their digests to
-`production.toml` on `main`, and deploys that commit, all after one approval
-when the run starts. It only runs when started by hand from the Actions tab,
-only from `main`, and only in the `production` Environment. It stores no
-credentials: it joins your tailnet and authenticates to Kubernetes with the
-job's short-lived GitHub OIDC token. `mise run bootstrap` configures the VM's
-Kubernetes API to accept that token only from your repository's `production`
-Environment on `main`, and it can only manage the application in the two
-Omnigent namespaces. It can't change the platform or touch the VM, but the job
+The `Deploy` workflow builds both images, commits their digests to the chosen
+deployment's environment file on `main`, and deploys that commit, all after
+one approval when the run starts. It only runs when started by hand from the
+Actions tab, only from `main`, and only in the GitHub Environment with the
+same name as the deployment, such as `production`. It stores no credentials:
+it joins your tailnet and authenticates to Kubernetes with the job's
+short-lived GitHub OIDC token. `mise run bootstrap` configures the VM's
+Kubernetes API to accept that token only from your repository's
+`deploy_github_environment` on `main`, and it can only manage the application
+in the two Omnigent namespaces. It can't change the platform or touch the VM, but the job
 can also push images to GHCR and commit to `main`.
 
 1. **Run `mise run bootstrap`** with `deploy_github_repository_id` and
@@ -193,6 +194,12 @@ A run you approve can still read and change everything in the two Omnigent
 namespaces, including the database and all secrets, and it decides which
 images and digest commit production gets. See the
 [threat model](docs/THREAT_MODEL.md#deploying-from-github-actions).
+
+To deploy another environment, such as `production-alternative` below, from
+the same workflow: set its `deploy_github_environment` to its own name, run
+its bootstrap, repeat steps 2 and 3 with that name in place of `production`,
+and add it to the `environment` options in `.github/workflows/deploy.yml`.
+Tag its VM `tag:omnigent` too.
 
 `mise run bootstrap` and the credential setup tasks (`setup-codex`,
 `setup-claude`, `setup-git-token`, `setup-github-app`,
@@ -244,8 +251,8 @@ keeps its own kubeconfig in `~/.kube/omnigent-production-alternative.yaml`.
    - `hostname` to the name from step 1
    - `acme_challenge = "cloudflare-dns-01"`
    - `kubernetes_api_host` to the VM's MagicDNS name
-   - remove `deploy_github_repository_id` and `deploy_github_environment`;
-     the `Deploy` workflow only deploys `production`
+   - `deploy_github_environment = "production-alternative"`, or remove it
+     and `deploy_github_repository_id` if GitHub Actions shouldn't deploy it
 
    The image digests it copies are already locked.
    `ENV=production-alternative mise run lock-images` updates them later.

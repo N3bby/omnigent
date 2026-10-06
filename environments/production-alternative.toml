@@ -22,8 +22,8 @@ tailscale_tailnet = "taild5bc1b.ts.net"
 
 # The GitHub repository (by numeric ID) and Environment whose Actions runs may
 # deploy. Remove both to turn off deploying from GitHub Actions.
-# deploy_github_repository_id = "1386328125"
-# deploy_github_environment = "production"
+deploy_github_repository_id = "1386328125"
+deploy_github_environment = "production-alternative"
 
 # Change this to the public GHCR namespace used by this repository.
 image_registry = "ghcr.io/n3bby"
