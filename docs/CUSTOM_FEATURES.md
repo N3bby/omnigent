@@ -249,22 +249,8 @@ automatic-deployment links require an `ssh` connection ID saved on the local
 computer, which cannot be shared between users or between Linux and macOS.
 The first connection can still ask for SSH authentication or project trust.
 
-To deploy and test the connection:
-
-1. Run the GitHub Actions **Deploy** workflow on `main`, selecting the
-   environment you use. It builds, locks, and deploys both the server and
-   runner images. A local `mise run deploy` alone uses the already-pinned
-   images; for local deployment, follow the README's
-   [image publishing steps](../README.md#making-changes).
-2. After the deployment succeeds, refresh the web app and create a new
-   session. Existing running sessions keep their old runner image.
-3. Wait for the runner's Tailscale name to appear, then click **Open in
-   Gateway**. Confirm that IntelliJ opens the session's repository and that
-   edits made by an agent appear in the IDE.
-
 The first runner on a node can take longer to start while the larger image is
-downloaded and unpacked. Linux connections have been tested; the same link
-format is intended for macOS, which still needs a client-side verification.
+downloaded and unpacked.
 
 For capacity planning, allow roughly 2–4 GiB RAM for the backend with a
 typical project open, or 4–8+ GiB for a large project with a larger heap.
