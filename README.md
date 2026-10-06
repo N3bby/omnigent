@@ -8,7 +8,7 @@ What you get:
 
 - k3s with Traefik and cert-manager (automatic HTTPS)
 - one Omnigent server, PostgreSQL, and a small in-cluster Vault
-- agent sessions in Kubernetes runner Pods that stop after 30 idle minutes
+- agent sessions in Kubernetes runner Pods that stop after 4 idle hours
   and keep their files until you delete the session
 - a few features on top of upstream Omnigent, such as showing your Claude and
   Codex usage limits in the Omnigent UI, and Podman inside runners. See

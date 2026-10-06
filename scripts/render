@@ -11,7 +11,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from config import ConfigError, ROOT, RUNNER_SUSPEND_WINDOW_SECONDS, deploy_audience, fail, validate
+from config import ConfigError, ROOT, deploy_audience, fail, runner_suspend_window_seconds, validate
 
 
 def yaml_string(value: str) -> str:
@@ -101,7 +101,7 @@ def main() -> None:
             f"OMNIGENT_DEPLOYMENT_REVISION={deployment_revision}",
             # Idle runner Pods suspend instead of running until deleted, and keep
             # HOME on a per-session volume that is deleted with the session.
-            f"OMNIGENT_AGENT_SANDBOX_SHUTDOWN_WINDOW_S={RUNNER_SUSPEND_WINDOW_SECONDS}",
+            f"OMNIGENT_AGENT_SANDBOX_SHUTDOWN_WINDOW_S={runner_suspend_window_seconds(cfg)}",
             f"OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE={cfg['runner_home_limit']}",
             "OMNIGENT_AGENT_SANDBOX_STORAGE_CLASS=local-path",
             "",
@@ -125,7 +125,7 @@ def main() -> None:
             "  server_url: http://omnigent.omnigent.svc.cluster.local",
             # The runner exits after keep_warm_s idle, then the Pod suspends
             # one shutdown window later.
-            f"  keep_warm_s: {int(cfg['runner_idle_shutdown_seconds']) - RUNNER_SUSPEND_WINDOW_SECONDS}",
+            f"  keep_warm_s: {cfg['runner_agent_idle_seconds']}",
             "  host_config:",
             "    providers:",
             "      claude-subscription:",

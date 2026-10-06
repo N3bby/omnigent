@@ -13,7 +13,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from config import ConfigError, RUNNER_SUSPEND_WINDOW_SECONDS, load_environment, load_versions, validate  # noqa: E402
+from config import (  # noqa: E402
+    MIN_RUNNER_SUSPEND_WINDOW_SECONDS, ConfigError, load_environment, load_versions, validate,
+)
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -78,10 +80,11 @@ class ConfigurationTests(unittest.TestCase):
         generated = ROOT / ".generated" / "ci"
         sandbox = (generated / "sandbox-config.yaml").read_text()
         self.assertIn("  provider: agent_sandbox\n", sandbox)
-        keep_warm = values["runner_idle_shutdown_seconds"] - RUNNER_SUSPEND_WINDOW_SECONDS
-        self.assertIn(f"  keep_warm_s: {keep_warm}\n", sandbox)
+        agent_idle = values["runner_agent_idle_seconds"]
+        self.assertIn(f"  keep_warm_s: {agent_idle}\n", sandbox)
         env = (generated / "omnigent-config.env").read_text()
-        self.assertIn(f"OMNIGENT_AGENT_SANDBOX_SHUTDOWN_WINDOW_S={RUNNER_SUSPEND_WINDOW_SECONDS}\n", env)
+        window = values["runner_idle_shutdown_seconds"] - agent_idle
+        self.assertIn(f"OMNIGENT_AGENT_SANDBOX_SHUTDOWN_WINDOW_S={window}\n", env)
         self.assertIn(f"OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE={values['runner_home_limit']}\n", env)
         self.assertIn("OMNIGENT_AGENT_SANDBOX_STORAGE_CLASS=local-path\n", env)
         # The controller is part of the platform, installed from a pinned manifest.
@@ -92,7 +95,10 @@ class ConfigurationTests(unittest.TestCase):
         # The server's Role must cover what the agent_sandbox launcher calls.
         role = (ROOT / "kubernetes" / "platform" / "runner-rbac.yaml").read_text()
         self.assertIn("resources: [sandboxes]\n    verbs: [create, get, patch, delete]", role)
-        too_short = dict(load_environment("ci"), runner_idle_shutdown_seconds=RUNNER_SUSPEND_WINDOW_SECONDS)
+        too_short = dict(
+            load_environment("ci"),
+            runner_idle_shutdown_seconds=agent_idle + MIN_RUNNER_SUSPEND_WINDOW_SECONDS - 1,
+        )
         with mock.patch("config.load_environment", return_value=too_short):
             with self.assertRaises(ConfigError):
                 validate("ci")
