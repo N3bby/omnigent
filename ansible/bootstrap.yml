@@ -12,4 +12,5 @@
     - base
     - k3s
     - cert_manager
+    - agent_sandbox
     - platform

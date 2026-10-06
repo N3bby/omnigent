@@ -8,7 +8,8 @@ What you get:
 
 - k3s with Traefik and cert-manager (automatic HTTPS)
 - one Omnigent server, PostgreSQL, and a small in-cluster Vault
-- agent sessions in short-lived Kubernetes runner Pods
+- agent sessions in Kubernetes runner Pods that stop after 10 idle minutes
+  and keep their files until you delete the session
 - a few features on top of upstream Omnigent, such as showing your Claude and
   Codex usage limits in the Omnigent UI, and Podman inside runners. See
   [custom features](docs/CUSTOM_FEATURES.md).
@@ -73,11 +74,12 @@ deployed by digest.
    git commit -m "Record the cluster CA"
    ```
 
-   It installs k3s and cert-manager, and applies the platform: namespaces,
-   runner security policies, quotas and access rules. It also saves an admin
-   kubeconfig to `~/.kube/omnigent-production.yaml`, and records the cluster
-   CA for GitHub Actions. Use a clean VM: it refuses to take over an existing
-   `omnigent` namespace.
+   It installs k3s, cert-manager and the agent-sandbox controller, and
+   applies the platform: namespaces, runner security policies, quotas and
+   access rules. It also saves an admin kubeconfig to
+   `~/.kube/omnigent-production.yaml`, and records the cluster CA for GitHub
+   Actions. Use a clean VM: it refuses to take over an existing `omnigent`
+   namespace.
 
 6. **Deploy the application.** This needs only the Kubernetes API:
 
@@ -130,14 +132,14 @@ mise run status              # health, TLS, storage, failed runners
 mise run credential-status   # which credentials are present
 ```
 
-Changes to `ansible/`, `kubernetes/platform/`, the k3s or cert-manager
-entries in `versions.yaml`, or the environment's hostname, Kubernetes API host
-or GitHub deploy settings also need `mise run bootstrap` first. `mise run
-deploy` compares the cluster with your checkout and refuses to run until you
+Changes to `ansible/`, `kubernetes/platform/`, the k3s, cert-manager or
+agent-sandbox entries in `versions.yaml`, or the environment's hostname,
+Kubernetes API host or GitHub deploy settings also need `mise run bootstrap`
+first. `mise run deploy` compares the cluster with your checkout and refuses to run until you
 have. Other version bumps, such as the agent CLIs, only need a deploy.
 
 - **Upgrade versions** in `versions.yaml`, then deploy (bootstrap first for
-  k3s or cert-manager).
+  k3s, cert-manager or agent-sandbox).
 - **Change images** (`images/`): push the change, then run **Deploy**, which
   builds, locks and deploys them. From your machine: run the publish workflow
   on your pushed commit, then, with that commit checked out,
@@ -203,3 +205,6 @@ machine.
 - **Agents skip permission prompts** by default. Turn off
   `claude_bypass_permissions` and `codex_bypass_approvals` in
   `environments/production.toml` to change that.
+- **Sessions keep their disk until you delete them.** An idle session's Pod
+  stops, but its home directory stays on the VM's disk. Delete sessions you're
+  done with. See [idle sessions](docs/CUSTOM_FEATURES.md#idle-sessions-stop-and-keep-their-files).

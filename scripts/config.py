@@ -11,6 +11,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# How long a runner Pod lingers after its runner exits idle before the
+# agent-sandbox controller suspends it. Upstream's default, set explicitly so
+# runner_idle_shutdown_seconds stays the whole idle time.
+RUNNER_SUSPEND_WINDOW_SECONDS = 300
+
 
 class ConfigError(ValueError):
     pass
@@ -60,7 +65,8 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     data, versions = load_environment(name), load_versions()
     required_versions = {
         "omnigent", "omnigent_commit", "k3s", "k3s_installer_sha256",
-        "cert_manager", "cert_manager_manifest_sha256", "postgres",
+        "cert_manager", "cert_manager_manifest_sha256", "agent_sandbox",
+        "agent_sandbox_manifest_sha256", "postgres",
         "postgres_digest", "vault", "vault_digest", "hvac", "web_builder",
         "web_builder_digest", "pnpm", "claude_code", "codex_cli",
     }
@@ -89,6 +95,11 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     for key in ("runner_pod_ready_timeout_seconds", "runner_max_concurrency"):
         if not isinstance(data.get(key), int) or int(data[key]) < 1:
             raise ConfigError(f"{key} must be a positive integer")
+    idle = data.get("runner_idle_shutdown_seconds")
+    if not isinstance(idle, int) or isinstance(idle, bool) or idle < RUNNER_SUSPEND_WINDOW_SECONDS + 60:
+        raise ConfigError(
+            f"runner_idle_shutdown_seconds must be an integer of at least {RUNNER_SUSPEND_WINDOW_SECONDS + 60}"
+        )
     for key in ("codex_bypass_approvals", "claude_bypass_permissions", "backups_enabled"):
         if not isinstance(data.get(key), bool):
             raise ConfigError(f"{key} must be true or false")

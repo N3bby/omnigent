@@ -11,6 +11,7 @@ does, what you'll notice, and how to turn it off where that's possible.
 | [Root and containers in runners](#install-packages-and-run-containers) | Agents can `apt-get install`, and use Docker, Compose and Testcontainers | No |
 | [No permission prompts](#agents-dont-stop-to-ask) | Agents work without waiting for approval | Yes, one setting per agent |
 | [GitHub repository picker](#pick-repositories-from-github) | Choose repositories from a list | Optional setup step |
+| [Idle sessions stop](#idle-sessions-stop-and-keep-their-files) | Idle runner Pods free their CPU and memory, and keep their files | You can change the timing |
 
 ## See your usage limits
 
@@ -84,8 +85,8 @@ A few things don't work:
   still work, using Podman's builder.
 - per-container resource limits (the pod's limits still apply)
 
-Container images count towards the runner's home volume, which is capped by
-`runner_home_limit`.
+Container images live in the runner's home volume, so they're still there
+after an [idle session](#idle-sessions-stop-and-keep-their-files) wakes up.
 
 <details>
 <summary>How it works</summary>
@@ -158,6 +159,49 @@ Vault runs from `kubernetes/base/vault.yaml` and uses its Transit engine for
 the encryption. The key that unlocks Vault is stored in a Kubernetes Secret,
 so Vault comes back by itself after a restart. The server image adds the
 `hvac` Python client so the server can talk to Vault.
+
+</details>
+
+## Idle sessions stop and keep their files
+
+A session's runner Pod stops after about 10 minutes without agent activity,
+which frees its CPU and memory. Sending a message wakes it again, which takes
+about as long as starting a new session. The session keeps its home directory,
+`/home/omnigent`: your repositories, uncommitted changes, agent state and
+Podman images are where you left them. The home directory is only deleted
+when you delete the session.
+
+Anything outside the home directory starts fresh when a session wakes,
+including packages from `apt-get install`. Have agents install tools into the
+home directory, for example with `pip install --user` or `npm --prefix`, if
+they should survive.
+
+Stopped sessions still use disk. `local-path` doesn't enforce the volume size,
+`runner_home_limit`, so delete sessions you're done with. `mise run status`
+lists every session's volume, and shows stopped sessions as `Ready=False`,
+`SandboxExpired`.
+
+To change how long a session waits before it stops, set
+`runner_idle_shutdown_seconds` in `environments/production.toml` and deploy.
+The minimum is 360 seconds. Pods that are already running keep their old
+timing until they stop.
+
+<details>
+<summary>How it works</summary>
+
+- Runner Pods are `Sandbox` objects of the
+  [agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox)
+  controller, which `mise run bootstrap` installs. Upstream Omnigent's
+  `agent_sandbox` provider manages them.
+- While a runner is connected, the server keeps pushing the Sandbox's
+  `shutdownTime` forward. The runner exits once it has been idle for
+  `runner_idle_shutdown_seconds` minus five minutes. Five minutes later the
+  deadline passes and the controller deletes the Pod. The Sandbox and its
+  volume stay.
+- `OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE` in `scripts/render` puts the home
+  directory on a per-session `local-path` volume instead of an `emptyDir`.
+- Deleting the session deletes the Sandbox, and Kubernetes deletes its volume
+  with it.
 
 </details>
 
