@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 1280 936" width="1280" height="936" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 40 1280 956" width="1280" height="956" role="img" aria-labelledby="t d">
   <title id="t">Omnigent deployment overview</title>
-  <desc id="d">The Deploy workflow in GitHub Actions builds images for your fork, commits their digests, and deploys them over Tailscale through the Kubernetes API of a single Ubuntu VM running k3s. mise run bootstrap sets up the VM itself over SSH. Traefik serves HTTPS to the Omnigent server, which stores data in PostgreSQL and Vault and creates one Sandbox per session and moves its stop time later while the agent works. The agent-sandbox controller watches Sandboxes, runs each one's runner pod with the session's home volume, and deletes the pod once the stop time passes. The home volume is kept until the session is deleted. Runner pods call the model APIs and GitHub.</desc>
+  <desc id="d">The Deploy workflow in GitHub Actions builds images for your fork, commits their digests, and deploys them over Tailscale through the Kubernetes API of a single Ubuntu VM running k3s. mise run bootstrap sets up the VM itself over SSH. Traefik serves HTTPS to the Omnigent server, which stores data in PostgreSQL and Vault and creates one Sandbox per session and moves its stop time later while the agent works. The agent-sandbox controller watches Sandboxes, runs each one's runner pod with the session's home volume, and deletes the pod once the stop time passes. The home volume is kept until the session is deleted. Runner pods call the model APIs and GitHub, and can join your tailnet so your own devices reach them over Tailscale SSH and their dev server ports.</desc>
   <style>
     .bg { fill: #f8fafc; }
     .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
@@ -40,7 +40,7 @@
     </marker>
   </defs>
 
-  <rect class="bg" y="40" width="1280" height="936" rx="16"/>
+  <rect class="bg" y="40" width="1280" height="956" rx="16"/>
 
   <!-- Left column: build and deploy -->
   <text class="h" x="32" y="100">BUILD &amp; DEPLOY</text>
@@ -79,7 +79,7 @@
   <text class="lbl" x="321" y="276" text-anchor="middle">Tailscale</text>
 
   <!-- Middle: the VM -->
-  <rect class="vm" x="352" y="72" width="576" height="880" rx="14"/>
+  <rect class="vm" x="352" y="72" width="576" height="900" rx="14"/>
   <text class="h" x="372" y="100">YOUR UBUNTU VM · K3S</text>
 
   <rect class="edge" x="384" y="120" width="512" height="56" rx="10"/>
@@ -112,7 +112,7 @@
   <text class="title" x="680" y="468">agent-sandbox</text>
   <text class="sub" x="680" y="487">Kubernetes controller</text>
 
-  <rect class="ns" x="376" y="536" width="528" height="400" rx="10"/>
+  <rect class="ns" x="376" y="536" width="528" height="420" rx="10"/>
   <text class="nslbl" x="890" y="555" text-anchor="end">namespace omnigent-sandboxes</text>
 
   <rect class="card" x="664" y="576" width="216" height="60" rx="10"/>
@@ -131,25 +131,26 @@
   <text class="lbl" x="764" y="656" text-anchor="end">runs its pod, deletes it</text>
   <text class="lbl" x="764" y="672" text-anchor="end">once the stop time passes</text>
 
-  <rect class="card" x="424" y="704" width="448" height="124" rx="10"/>
-  <rect class="card" x="416" y="696" width="448" height="124" rx="10"/>
-  <rect class="accent" x="408" y="688" width="448" height="124" rx="10"/>
+  <rect class="card" x="424" y="704" width="448" height="144" rx="10"/>
+  <rect class="card" x="416" y="696" width="448" height="144" rx="10"/>
+  <rect class="accent" x="408" y="688" width="448" height="144" rx="10"/>
   <text class="title" x="428" y="716">Runner pod, one per session</text>
   <text class="sub" x="428" y="738">Claude Code or Codex, working in a checkout of your repo</text>
   <text class="sub" x="428" y="758">root inside the pod only: maps to an unprivileged host user</text>
   <text class="sub" x="428" y="778">Podman for containers, apt-get for packages</text>
   <text class="sub" x="428" y="798">uses the shared agent logins you set up</text>
+  <text class="sub" x="428" y="818">optionally joins your tailnet as <tspan class="mono">omnigent-&lt;id&gt;</tspan></text>
 
   <path class="line" d="M432 686 V348" marker-end="url(#a)"/>
   <text class="lbl" x="440" y="520">connects back</text>
 
-  <path class="line" d="M632 828 V846"/>
-  <text class="lbl" x="640" y="841">mounts</text>
-  <rect class="store" x="408" y="846" width="448" height="52" rx="10"/>
-  <text class="title" x="428" y="868">Home volume, one per session</text>
-  <text class="sub" x="428" y="888">/home/omnigent, kept until the session is deleted</text>
+  <path class="line" d="M632 848 V866"/>
+  <text class="lbl" x="640" y="861">mounts</text>
+  <rect class="store" x="408" y="866" width="448" height="52" rx="10"/>
+  <text class="title" x="428" y="888">Home volume, one per session</text>
+  <text class="sub" x="428" y="908">/home/omnigent, kept until the session is deleted</text>
 
-  <text class="lbl" x="408" y="922">pods share the VM's spare CPU and memory · unrestricted network</text>
+  <text class="lbl" x="408" y="942">pods share the VM's spare CPU and memory · unrestricted network</text>
 
   <!-- Right column: people and services -->
   <text class="h" x="988" y="100">USERS &amp; SERVICES</text>
@@ -160,14 +161,20 @@
   <path class="line" d="M986 148 H898" marker-end="url(#a)"/>
   <text class="lbl" x="958" y="140" text-anchor="middle">HTTPS</text>
 
-  <rect class="ext" x="988" y="684" width="260" height="64" rx="10"/>
-  <text class="title" x="1004" y="710">Anthropic and OpenAI</text>
-  <text class="sub" x="1004" y="730">model APIs</text>
+  <rect class="ext" x="988" y="636" width="260" height="64" rx="10"/>
+  <text class="title" x="1004" y="662">Anthropic and OpenAI</text>
+  <text class="sub" x="1004" y="682">model APIs</text>
 
-  <rect class="ext" x="988" y="772" width="260" height="64" rx="10"/>
-  <text class="title" x="1004" y="798">GitHub</text>
-  <text class="sub" x="1004" y="818">clone, push, pull requests</text>
+  <rect class="ext" x="988" y="728" width="260" height="64" rx="10"/>
+  <text class="title" x="1004" y="754">Your devices</text>
+  <text class="sub" x="1004" y="774">SSH and dev servers, by name</text>
 
-  <path class="line" d="M878 716 H986" marker-end="url(#a)"/>
-  <path class="line" d="M878 804 H986" marker-end="url(#a)"/>
+  <rect class="ext" x="988" y="820" width="260" height="64" rx="10"/>
+  <text class="title" x="1004" y="846">GitHub</text>
+  <text class="sub" x="1004" y="866">clone, push, pull requests</text>
+
+  <path class="line" d="M878 700 H986" marker-end="url(#a)"/>
+  <path class="line" d="M986 760 H874" marker-end="url(#a)"/>
+  <text class="lbl" x="957" y="752" text-anchor="middle">tailnet</text>
+  <path class="line" d="M878 820 H986" marker-end="url(#a)"/>
 </svg>
