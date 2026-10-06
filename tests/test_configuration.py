@@ -9,10 +9,11 @@ import tempfile
 import unittest
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from config import load_environment, load_versions, validate  # noqa: E402
+from config import ConfigError, RUNNER_SUSPEND_WINDOW_SECONDS, load_environment, load_versions, validate  # noqa: E402
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -23,6 +24,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertRegex(versions["omnigent_server_base_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(versions["vault_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertRegex(versions["web_builder_digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertRegex(versions["agent_sandbox_manifest_sha256"], r"^[0-9a-f]{64}$")
         self.assertNotIn("latest", versions.values())
 
     def test_ci_environment_encodes_accepted_policies(self) -> None:
@@ -69,6 +71,31 @@ class ConfigurationTests(unittest.TestCase):
         dockerfile = (ROOT / "images" / "runner" / "Dockerfile").read_text()
         self.assertIn("ln -s /mnt/codex-home/auth.json /opt/codex-home/auth.json", dockerfile)
         self.assertIn("codex-config.toml /opt/codex-home/config.toml", dockerfile)
+
+    def test_idle_runners_suspend_and_keep_their_home(self) -> None:
+        subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
+        values, _ = validate("ci")
+        generated = ROOT / ".generated" / "ci"
+        sandbox = (generated / "sandbox-config.yaml").read_text()
+        self.assertIn("  provider: agent_sandbox\n", sandbox)
+        keep_warm = values["runner_idle_shutdown_seconds"] - RUNNER_SUSPEND_WINDOW_SECONDS
+        self.assertIn(f"  keep_warm_s: {keep_warm}\n", sandbox)
+        env = (generated / "omnigent-config.env").read_text()
+        self.assertIn(f"OMNIGENT_AGENT_SANDBOX_SHUTDOWN_WINDOW_S={RUNNER_SUSPEND_WINDOW_SECONDS}\n", env)
+        self.assertIn(f"OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE={values['runner_home_limit']}\n", env)
+        self.assertIn("OMNIGENT_AGENT_SANDBOX_STORAGE_CLASS=local-path\n", env)
+        # The controller is part of the platform, installed from a pinned manifest.
+        self.assertIn("    - agent_sandbox\n", (ROOT / "ansible" / "bootstrap.yml").read_text())
+        tasks = (ROOT / "ansible" / "roles" / "agent_sandbox" / "tasks" / "main.yml").read_text()
+        self.assertIn('checksum: "sha256:{{ agent_sandbox_manifest_sha256 }}"', tasks)
+        self.assertIn("agent_sandbox_manifest_sha256:", (generated / "deployment-vars.yml").read_text())
+        # The server's Role must cover what the agent_sandbox launcher calls.
+        role = (ROOT / "kubernetes" / "platform" / "runner-rbac.yaml").read_text()
+        self.assertIn("resources: [sandboxes]\n    verbs: [create, get, patch, delete]", role)
+        too_short = dict(load_environment("ci"), runner_idle_shutdown_seconds=RUNNER_SUSPEND_WINDOW_SECONDS)
+        with mock.patch("config.load_environment", return_value=too_short):
+            with self.assertRaises(ConfigError):
+                validate("ci")
 
     def test_production_contains_no_secret_values(self) -> None:
         text = (ROOT / "environments" / "production.toml").read_text().lower()

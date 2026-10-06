@@ -13,8 +13,8 @@ if [[ "$live" != "$expected" ]]; then
 The platform on the cluster does not match this checkout.
   cluster:  ${live:-not bootstrapped}
   checkout: $expected
-The k3s or cert-manager version, the environment's host or deploy settings,
-ansible/ or kubernetes/platform changed. Run
+The k3s, cert-manager or agent-sandbox version, the environment's host or
+deploy settings, ansible/ or kubernetes/platform changed. Run
 ENV=$environment mise run bootstrap from your machine first.
 MESSAGE
   exit 1

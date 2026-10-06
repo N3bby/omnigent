@@ -24,7 +24,7 @@ Short of a Linux kernel bug, it **can't**:
 - take over the VM
 - read the database or the server's secrets
 - use the Kubernetes API, or touch other namespaces
-- use more CPU, memory or disk than its limits allow
+- use more CPU or memory than its limits allow
 
 ## The network is open
 
@@ -39,11 +39,12 @@ reach as reachable by an attacker.
 | User namespace | The agent is root inside its pod, but that maps to an unprivileged user on the host. See [the diagram](CUSTOM_FEATURES.md#install-packages-and-run-containers). |
 | Admission policy | Rejects runner pods that are privileged, mount host paths, share host namespaces or use host ports (`kubernetes/platform/runner-userns.yaml`). |
 | No Kubernetes access | The runner's service account has no permissions, and its token isn't mounted. |
-| Resource limits | CPU, memory, disk, home size, and the number of pods and jobs are all capped. |
+| Resource limits | CPU, memory, scratch disk, and the number of pods and jobs are all capped. The home volume is not; see below. |
 | Separate namespace | PostgreSQL and the server's secrets live in a different namespace. Runners only get the runner credentials. |
 
-The server itself can only manage jobs, pods, logs and launch secrets in the
-runner namespace, which limits what a compromised server could do there.
+The server itself can only manage sandboxes, jobs, pods, logs and launch
+secrets in the runner namespace, which limits what a compromised server could
+do there.
 
 ## Trade-offs worth knowing
 
@@ -54,6 +55,10 @@ runner namespace, which limits what a compromised server could do there.
   is ordinary containerd; stronger sandboxes like gVisor or Kata aren't used.
 - **Containers share the pod's limits.** Podman containers run without their
   own cgroups, so only the pod's overall limits constrain them.
+- **The home volume isn't capped.** Each session's home directory is a
+  `local-path` volume on the VM's disk, and `local-path` doesn't enforce its
+  requested size (`runner_home_limit`). A runner that fills its home fills the
+  VM's disk.
 - **Agent logins are shared.** Every runner uses the same Claude token and
   Codex login, so one compromised runner can use them.
 - **Agents skip permission prompts** by default (`claude_bypass_permissions`
@@ -78,8 +83,8 @@ Deploys come in two levels of access:
 
 - **`mise run bootstrap`** needs SSH and sudo on the VM, and runs from your
   machine. It owns everything that could weaken the boundaries above: the
-  firewall, k3s, cert-manager, the namespaces and their Pod Security labels,
-  the admission policies, RBAC and quotas.
+  firewall, k3s, cert-manager, the agent-sandbox controller, the namespaces
+  and their Pod Security labels, the admission policies, RBAC and quotas.
 - **`mise run deploy`** needs only the Kubernetes API. From GitHub Actions it
   authenticates with a short-lived GitHub OIDC token. The API server accepts
   the token only from this repository's `production` Environment on `main`,

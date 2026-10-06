@@ -15,7 +15,7 @@ echo "NODE"
 echo
 echo "PLATFORM"
 "${KUBECTL[@]}" get configmap omnigent-platform -n omnigent -o json 2>/dev/null \
-  | jq -r '.data | "k3s \(.k3s), cert-manager \(."cert-manager"), revision \(.revision[0:12])"' \
+  | jq -r '.data | "k3s \(.k3s), cert-manager \(."cert-manager"), agent-sandbox \(."agent-sandbox" // "none"), revision \(.revision[0:12])"' \
   || echo "no platform record; run mise run bootstrap"
 
 echo
@@ -27,8 +27,8 @@ echo "TLS"
 "${KUBECTL[@]}" get certificate,certificaterequest -n omnigent 2>/dev/null || true
 
 echo
-echo "RUNNERS (network unrestricted by policy)"
-"${KUBECTL[@]}" get jobs,pods,pvc,resourcequota -n omnigent-sandboxes -o wide
+echo "RUNNERS (network unrestricted by policy; Ready=False SandboxExpired means idle and stopped)"
+"${KUBECTL[@]}" get sandboxes,jobs,pods,pvc,resourcequota -n omnigent-sandboxes -o wide
 credential_keys="$("${KUBECTL[@]}" get secret omnigent-creds -n omnigent-sandboxes -o json | jq -r '.data // {} | keys | join(", ")')"
 echo "Configured optional runner credential keys: ${credential_keys:-none}"
 

@@ -1,0 +1,24 @@
+---
+# The agent-sandbox controller runs runner Pods as Sandbox objects. It stops a
+# Pod once the server stops extending its deadline, and keeps the Sandbox and
+# its home volume until the session is deleted. Only the core manifest: the
+# warm-pool extensions are not used.
+- name: Download the pinned agent-sandbox manifest
+  ansible.builtin.get_url:
+    url: "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/{{ agent_sandbox_version }}/sandbox.yaml"
+    dest: "{{ omnigent_remote_root }}/agent-sandbox.yaml"
+    checksum: "sha256:{{ agent_sandbox_manifest_sha256 }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Apply agent-sandbox
+  ansible.builtin.command:
+    argv: [k3s, kubectl, apply, --server-side=true, --force-conflicts, --field-manager=omnigent-deployment, -f, "{{ omnigent_remote_root }}/agent-sandbox.yaml"]
+  register: agent_sandbox_apply
+  changed_when: "'serverside-applied' in agent_sandbox_apply.stdout"
+
+- name: Wait for the agent-sandbox controller
+  ansible.builtin.command:
+    argv: [k3s, kubectl, wait, --for=condition=Available, deployment, --all, -n, agent-sandbox-system, --timeout=300s]
+  changed_when: false

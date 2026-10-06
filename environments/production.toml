@@ -39,9 +39,14 @@ runner_ephemeral_request = "2Gi"
 runner_cpu_limit = "2"
 runner_memory_limit = "4Gi"
 runner_ephemeral_limit = "8Gi"
+# Each session keeps its home directory on a volume of this size until the
+# session is deleted. local-path does not enforce the size.
 runner_home_limit = "8Gi"
 runner_pod_ready_timeout_seconds = 300
 runner_max_concurrency = 10
+# A runner Pod stops after this long without agent activity, and starts
+# again with its home directory on the next message.
+runner_idle_shutdown_seconds = 600
 
 # Deliberate policy choices.
 codex_bypass_approvals = true

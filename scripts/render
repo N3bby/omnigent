@@ -11,7 +11,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from config import ConfigError, ROOT, deploy_audience, fail, validate
+from config import ConfigError, ROOT, RUNNER_SUSPEND_WINDOW_SECONDS, deploy_audience, fail, validate
 
 
 def yaml_string(value: str) -> str:
@@ -99,6 +99,11 @@ def main() -> None:
             f"OMNIGENT_CLAUDE_BYPASS_PERMISSIONS={claude_bypass}",
             "OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH=/data/artifacts/.deployment/sandbox-model-catalogs.json",
             f"OMNIGENT_DEPLOYMENT_REVISION={deployment_revision}",
+            # Idle runner Pods suspend instead of running until deleted, and keep
+            # HOME on a per-session volume that is deleted with the session.
+            f"OMNIGENT_AGENT_SANDBOX_SHUTDOWN_WINDOW_S={RUNNER_SUSPEND_WINDOW_SECONDS}",
+            f"OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE={cfg['runner_home_limit']}",
+            "OMNIGENT_AGENT_SANDBOX_STORAGE_CLASS=local-path",
             "",
         ])
     )
@@ -116,8 +121,11 @@ def main() -> None:
             "    cli: codex",
             "    default: true",
             "sandbox:",
-            "  provider: kubernetes",
+            "  provider: agent_sandbox",
             "  server_url: http://omnigent.omnigent.svc.cluster.local",
+            # The runner exits after keep_warm_s idle, then the Pod suspends
+            # one shutdown window later.
+            f"  keep_warm_s: {int(cfg['runner_idle_shutdown_seconds']) - RUNNER_SUSPEND_WINDOW_SECONDS}",
             "  host_config:",
             "    providers:",
             "      claude-subscription:",
@@ -252,6 +260,8 @@ k3s_version: {yaml_string(versions['k3s'])}
 k3s_installer_sha256: {yaml_string(versions['k3s_installer_sha256'])}
 cert_manager_version: {yaml_string(versions['cert_manager'])}
 cert_manager_manifest_sha256: {yaml_string(versions['cert_manager_manifest_sha256'])}
+agent_sandbox_version: {yaml_string(versions['agent_sandbox'])}
+agent_sandbox_manifest_sha256: {yaml_string(versions['agent_sandbox_manifest_sha256'])}
 """
     (generated / "deployment-vars.yml").write_text(deployment_vars)
     kustomization = f"""apiVersion: kustomize.config.k8s.io/v1beta1
@@ -409,6 +419,7 @@ data:
   revision: {yaml_string(revision)}
   k3s: {yaml_string(versions['k3s'])}
   cert-manager: {yaml_string(versions['cert_manager'])}
+  agent-sandbox: {yaml_string(versions['agent_sandbox'])}
 """)
     (generated / "platform-revision").write_text(revision + "\n")
     print(generated / "manifest.yaml")
