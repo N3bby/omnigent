@@ -164,7 +164,7 @@ so Vault comes back by itself after a restart. The server image adds the
 
 ## Idle sessions stop and keep their files
 
-A session's runner Pod stops after about 10 minutes without agent activity,
+A session's runner Pod stops after about 30 minutes without agent activity,
 which frees its CPU and memory. Sending a message wakes it again, which takes
 about as long as starting a new session. The session keeps its home directory,
 `/home/omnigent`: your repositories, uncommitted changes, agent state and
@@ -183,7 +183,7 @@ lists every session's volume, and shows stopped sessions as `Ready=False`,
 
 To change how long a session waits before it stops, set
 `runner_idle_shutdown_seconds` in `environments/production.toml` and deploy.
-The minimum is 360 seconds. Pods that are already running keep their old
+The minimum is 660 seconds. Pods that are already running keep their old
 timing until they stop.
 
 <details>
@@ -195,7 +195,7 @@ timing until they stop.
   `agent_sandbox` provider manages them.
 - While a runner is connected, the server keeps pushing the Sandbox's
   `shutdownTime` forward. The runner exits once it has been idle for
-  `runner_idle_shutdown_seconds` minus five minutes. Five minutes later the
+  `runner_idle_shutdown_seconds` minus ten minutes. Ten minutes later the
   deadline passes and the controller deletes the Pod. The Sandbox and its
   volume stay.
 - `OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE` in `scripts/render` puts the home

@@ -12,9 +12,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 # How long a runner Pod lingers after its runner exits idle before the
-# agent-sandbox controller suspends it. Upstream's default, set explicitly so
-# runner_idle_shutdown_seconds stays the whole idle time.
-RUNNER_SUSPEND_WINDOW_SECONDS = 300
+# agent-sandbox controller suspends it. Part of runner_idle_shutdown_seconds,
+# which stays the whole idle time; the runner gets the rest.
+RUNNER_SUSPEND_WINDOW_SECONDS = 600
 
 
 class ConfigError(ValueError):
