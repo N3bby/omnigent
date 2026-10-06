@@ -46,7 +46,7 @@ runner_pod_ready_timeout_seconds = 300
 runner_max_concurrency = 10
 # A runner Pod stops after this long without agent activity, and starts
 # again with its home directory on the next message.
-runner_idle_shutdown_seconds = 600
+runner_idle_shutdown_seconds = 1800
 
 # Deliberate policy choices.
 codex_bypass_approvals = true
