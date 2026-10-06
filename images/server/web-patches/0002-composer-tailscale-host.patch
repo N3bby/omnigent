@@ -2,18 +2,19 @@ Show the session's tailnet name in the composer workspace bar.
 
 Reads the omnigent.tailscale_host session label and session.tailscale events,
 and renders the Tailscale mark and the runner Pod's MagicDNS short name
-(omnigent-e1dcab9b) after the working directory, with a button that copies the
-full name (omnigent-e1dcab9b.tail1234.ts.net). Pairs with the server patch
-0003-tailscale-host.patch. Applies after 0001-composer-rate-limits.patch.
+(omnigent-e1dcab9b) after the working directory, as a clickable label that
+copies the full name (omnigent-e1dcab9b.tail1234.ts.net) and briefly confirms it.
+Pairs with the server patch 0003-tailscale-host.patch. Applies after
+0001-composer-rate-limits.patch.
 Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/web/src/components/composer/ComposerTailscaleHost.tsx b/web/src/components/composer/ComposerTailscaleHost.tsx
 new file mode 100644
-index 0000000..fe4db37
+index 0000000..cf3d5dc
 --- /dev/null
 +++ b/web/src/components/composer/ComposerTailscaleHost.tsx
-@@ -0,0 +1,109 @@
-+import { CheckIcon, CopyIcon } from "lucide-react";
+@@ -0,0 +1,129 @@
++import { CheckIcon } from "lucide-react";
 +import { useEffect, useRef, useState, type SVGProps } from "react";
 +
 +import { COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS } from "./ChatComposer";
@@ -21,8 +22,8 @@ index 0000000..fe4db37
 +import { tailscaleShortName } from "@/lib/tailscale";
 +import { cn } from "@/lib/utils";
 +
-+/** How long the copy button shows its check mark. */
-+const COPIED_MS = 2000;
++/** How long clipboard feedback stays visible. */
++const FEEDBACK_MS = 2000;
 +
 +/** Dot centers of the Tailscale mark's 3×3 grid, in a 24×24 box. */
 +const TAILSCALE_DOTS = [3, 12, 21];
@@ -51,7 +52,7 @@ index 0000000..fe4db37
 +
 +/**
 + * Tailnet name chip for the composer workspace bar: the runner Pod's
-+ * MagicDNS short name, e.g. `omnigent-e1dcab9b`, and a button that copies
++ * MagicDNS short name, e.g. `omnigent-e1dcab9b`, as a button that copies
 + * the full name, so another device on the tailnet can `ssh` or browse to it.
 + * The full name copies because the short one only resolves where MagicDNS
 + * search domains are on. Self-nulls when the session has no tailnet name.
@@ -66,58 +67,78 @@ index 0000000..fe4db37
 +  host: string | null;
 +  className?: string;
 +}) {
-+  const [copied, setCopied] = useState(false);
++  const [feedback, setFeedback] = useState<"copied" | "error" | null>(null);
 +  const resetRef = useRef<number | undefined>(undefined);
-+  useEffect(() => () => window.clearTimeout(resetRef.current), []);
-+  // A different session's name must not inherit the check mark.
-+  useEffect(() => setCopied(false), [host]);
++  const copyAttemptRef = useRef(0);
++  useEffect(() => {
++    setFeedback(null);
++    // A pending copy must not report success for a different session.
++    copyAttemptRef.current += 1;
++    return () => {
++      copyAttemptRef.current += 1;
++      window.clearTimeout(resetRef.current);
++    };
++  }, [host]);
 +
 +  if (host === null) return null;
 +  const shortName = tailscaleShortName(host);
 +
 +  const copy = async () => {
++    const attempt = ++copyAttemptRef.current;
++    window.clearTimeout(resetRef.current);
++    setFeedback(null);
++    let result: "copied" | "error";
 +    try {
 +      await copyText(host);
++      result = "copied";
 +    } catch {
-+      return;
++      result = "error";
 +    }
-+    setCopied(true);
-+    window.clearTimeout(resetRef.current);
-+    resetRef.current = window.setTimeout(() => setCopied(false), COPIED_MS);
++    if (attempt !== copyAttemptRef.current) return;
++    setFeedback(result);
++    resetRef.current = window.setTimeout(() => setFeedback(null), FEEDBACK_MS);
 +  };
 +
 +  return (
 +    <span
 +      data-testid="composer-tailscale-host"
 +      className={cn(
-+        "relative ml-0.5 inline-flex h-6 min-w-0 shrink items-center gap-1 pl-0.5 text-xs leading-4 font-normal text-muted-foreground max-md:pointer-coarse:ml-1 md:pl-1",
++        "relative ml-0.5 inline-flex h-6 min-w-0 shrink items-center max-md:pointer-coarse:ml-1 max-md:pointer-coarse:h-8",
 +        className,
 +      )}
-+      title={`Tailscale: ${host}`}
 +    >
-+      <TailscaleIcon className="size-3.5 shrink-0" aria-hidden />
-+      <span
-+        data-workspace-collapse-label=""
-+        className={cn("min-w-0 truncate font-mono", COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS)}
-+      >
-+        {shortName}
-+      </span>
 +      <button
 +        type="button"
 +        data-testid="composer-tailscale-copy"
 +        onClick={() => void copy()}
-+        aria-label={copied ? `Copied ${host}` : `Copy Tailscale name ${host}`}
-+        title={copied ? "Copied" : `Copy ${host}`}
-+        className="inline-flex size-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
++        aria-label={`Copy Tailscale name ${host}`}
++        title={`Copy Tailscale name ${host}`}
++        className="group inline-flex h-full min-w-6 max-w-full cursor-pointer items-center justify-center gap-1 rounded px-0.5 text-xs leading-4 font-normal text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 max-md:pointer-coarse:min-w-8 md:px-1"
 +      >
-+        {copied ? (
-+          <CheckIcon className="size-3" aria-hidden />
-+        ) : (
-+          <CopyIcon className="size-3" aria-hidden />
-+        )}
++        <TailscaleIcon className="size-3.5 shrink-0" aria-hidden />
++        <span
++          data-workspace-collapse-label=""
++          className={cn(
++            "min-w-0 truncate font-mono underline decoration-dotted underline-offset-2 group-hover:decoration-solid group-focus-visible:decoration-solid",
++            COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS,
++          )}
++        >
++          {shortName}
++        </span>
 +      </button>
-+      <span className="sr-only" aria-live="polite">
-+        {copied ? "Copied" : ""}
++      <span
++        role="status"
++        aria-live="polite"
++        aria-atomic="true"
++        className={cn(
++          "pointer-events-none",
++          feedback === null
++            ? "sr-only"
++            : "absolute bottom-full left-1/2 z-50 mb-2 flex -translate-x-1/2 items-center gap-1 rounded-md border border-border bg-popover px-2 py-1.5 text-xs leading-4 whitespace-nowrap text-popover-foreground shadow-md",
++        )}
++      >
++        {feedback === "copied" && <CheckIcon className="size-3" aria-hidden />}
++        {feedback === "copied" ? "Copied" : feedback === "error" ? "Couldn't copy" : ""}
 +      </span>
 +    </span>
 +  );
