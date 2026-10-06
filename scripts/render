@@ -308,12 +308,6 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/requests/memory
         value: {yaml_string(str(cfg['server_memory_request']))}
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/cpu
-        value: {yaml_string(str(cfg['server_cpu_limit']))}
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: {yaml_string(str(cfg['server_memory_limit']))}
   - target:
       version: v1
       kind: PersistentVolumeClaim

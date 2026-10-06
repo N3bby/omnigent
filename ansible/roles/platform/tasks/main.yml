@@ -45,6 +45,7 @@
       - --prune-allowlist=rbac.authorization.k8s.io/v1/Role
       - --prune-allowlist=rbac.authorization.k8s.io/v1/RoleBinding
       - --prune-allowlist=cert-manager.io/v1/ClusterIssuer
+      - --prune-allowlist=scheduling.k8s.io/v1/PriorityClass
       - --prune-allowlist=admissionregistration.k8s.io/v1/MutatingAdmissionPolicy
       - --prune-allowlist=admissionregistration.k8s.io/v1/MutatingAdmissionPolicyBinding
       - --prune-allowlist=admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
