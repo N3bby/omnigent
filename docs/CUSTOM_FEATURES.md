@@ -388,3 +388,9 @@ The patches are applied when the images are built. If a patch no longer
 applies to the pinned `omnigent_commit`, the image build and `mise run test`
 fail. Once upstream Omnigent ships the same behaviour, delete the patch. Once
 no web patches are left, the server image can stop rebuilding the web UI.
+
+To check every feature after an upgrade, ask an agent in an Omnigent session
+on the deployment to run the `test-custom-features` skill
+(`.claude/skills/test-custom-features/`). It checks that the patches apply,
+tests the runner and the web UI, and lists the few checks you need to do
+yourself.

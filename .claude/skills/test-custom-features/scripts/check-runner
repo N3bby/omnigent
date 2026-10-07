@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+# Checks the custom features that live in the runner image, from inside a
+# runner Pod (an Omnigent session on the deployment). Prints PASS/FAIL/SKIP
+# per check and exits 1 if any check fails.
+#
+#   check-runner           # everything; pulls two small images the first time
+#   check-runner --quick   # skips apt-get and container runs
+#
+# Containers it starts are named omnigent-feature-check-* and removed on exit,
+# with any images it had to pull.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+quick=0
+[[ "${1:-}" == "--quick" ]] && quick=1
+failed=0
+work="$(mktemp -d)"
+
+pass() { echo "PASS  $1"; }
+fail() { echo "FAIL  $1${2:+ ($2)}"; failed=1; }
+skip() { echo "SKIP  $1${2:+ ($2)}"; }
+check() { local name="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$name"; else fail "$name"; fi; }
+version_of() { awk -F'"' -v k="$1" '$1 == k ": " {print $2}' "$root/versions.yaml"; }
+# shellcheck disable=SC2329 # invoked by the EXIT trap
+cleanup() {
+  docker rm -f omnigent-feature-check-web >/dev/null 2>&1
+  (cd "$work/compose" 2>/dev/null && docker compose down -v --remove-orphans >/dev/null 2>&1)
+  docker rmi -f omnigent-feature-check-build "${pulled_images[@]}" >/dev/null 2>&1
+  rm -rf "$work"
+}
+trap cleanup EXIT
+test_images=(docker.io/library/alpine:3.20 docker.io/library/nginx:alpine)
+pulled_images=()
+
+[[ "$(id -u)" == 0 ]] || { echo "run this inside a runner Pod, as its root agent" >&2; exit 2; }
+
+echo "== Pinned versions"
+site="$(python -c 'import omnigent, pathlib; print(pathlib.Path(omnigent.__file__).parents[1])' 2>/dev/null)"
+want="$(version_of omnigent)" got="$(omnigent --version 2>/dev/null)"
+if [[ "$got" == "omnigent ${want#v} "* ]]; then pass "omnigent $want"; else fail "omnigent" "want $want, got ${got:-nothing}"; fi
+for tool in "claude_code:claude-real --version" "codex_cli:codex-real --version" "tailscale:tailscale version"; do
+  key="${tool%%:*}" want="$(version_of "${tool%%:*}")"
+  got="$(${tool#*:} 2>/dev/null | head -n1)"
+  if [[ -n "$want" && "$got" == *"$want"* ]]; then pass "$key $want"; else fail "$key" "want $want, got ${got:-nothing}"; fi
+done
+
+echo "== Usage limits: runner patch is installed"
+check "claude-native posts rate limits" grep -q '_forward_rate_limits' "$site/omnigent/harnesses/claude_native/forwarder.py"
+check "claude-native reads statusLine rate_limits" grep -q 'def rate_limits_from_status_payload' "$site/omnigent/harnesses/claude_native/status.py"
+check "codex-native posts rate limits" grep -q '_forward_rate_limits' "$site/omnigent/harnesses/codex_native/forwarder.py"
+# claude-native keeps the statusLine's windows here, and posts them to the server.
+# The windows belong to the login, so every session's file has the same ones.
+mapfile -t contexts < <(ls -t /tmp/omnigent-*/claude-native/*/context.json 2>/dev/null)
+if ((${#contexts[@]})); then
+  windows="$(python3 -c 'import json, sys
+for path in sys.argv[1:]:
+    w = (json.load(open(path)).get("rate_limits") or {}).get("windows") or []
+    if w:
+        print(" ".join("%d:%.0f" % (x["window_minutes"], x["used_percent"]) for x in w))
+        break' "${contexts[@]}" 2>/dev/null)"
+  if [[ "$windows" =~ ^300:([0-9]+)\ 10080:([0-9]+)$ ]]; then
+    pass "Claude statusLine reports usage windows: 5h ${BASH_REMATCH[1]}% · 7d ${BASH_REMATCH[2]}%"
+  else
+    fail "Claude statusLine reports 5-hour and weekly windows" "got: ${windows:-none}; needs a Claude subscription login and one reply"
+  fi
+else
+  skip "Claude statusLine reports 5-hour and weekly windows" "no Claude session in this Pod"
+fi
+
+echo "== Agents don't stop to ask"
+want='{"permissions":{"defaultMode":"bypassPermissions"},"skipDangerousModePermissionPrompt":true}'
+got="$(cat /etc/claude-code/managed-settings.json 2>/dev/null)"
+if [[ "$got" == "$want" ]]; then
+  pass "Claude managed settings bypass permissions"
+elif [[ -z "$got" ]]; then
+  fail "Claude managed settings bypass permissions" "no /etc/claude-code/managed-settings.json; claude_bypass_permissions off, or no Claude session ran here yet"
+else
+  fail "Claude managed settings bypass permissions" "unexpected content: $got"
+fi
+check "claude is the deployment wrapper" grep -q 'managed-settings.json' /usr/local/bin/claude
+check "codex is the deployment wrapper" grep -q -- '--dangerously-bypass-approvals-and-sandbox' /usr/local/bin/codex
+codex_args="$(pgrep -a codex-real 2>/dev/null | head -n1)"
+if [[ -z "$codex_args" ]]; then
+  skip "running Codex has --dangerously-bypass-approvals-and-sandbox" "no Codex running in this Pod"
+elif [[ "$codex_args" == *--dangerously-bypass-approvals-and-sandbox* ]]; then
+  pass "running Codex has --dangerously-bypass-approvals-and-sandbox"
+else
+  fail "running Codex has --dangerously-bypass-approvals-and-sandbox" "$codex_args"
+fi
+
+echo "== Root and containers"
+uid_map="$(tr -s ' ' < /proc/self/uid_map)"
+if [[ "$uid_map" == " 0 0 4294967295" ]]; then
+  fail "root is mapped by a user namespace" "uid_map:$uid_map is host root"
+else
+  pass "root is mapped by a user namespace"
+fi
+check "Podman service is running" pgrep -f 'podman system service'
+check "Docker socket points at Podman" test "$(readlink /var/run/docker.sock)" = /run/podman/podman.sock
+check "Docker API answers on the default socket" curl -sf --max-time 10 --unix-socket /var/run/docker.sock http://d/_ping
+check "container images live in the home volume" grep -q '^graphroot = "/home/omnigent/' /etc/containers/storage.conf
+check "docker compose is installed" docker compose version
+if ((quick)); then
+  skip "apt-get install" --quick
+  skip "container run, build, published port, compose" --quick
+else
+  for image in "${test_images[@]}"; do
+    docker image exists "$image" 2>/dev/null || pulled_images+=("$image")
+  done
+  check "apt-get install as root" sh -c 'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq sl'
+  check "docker run" sh -c 'docker run --rm docker.io/library/alpine:3.20 echo ok | grep -qx ok'
+  check "docker build" sh -c "printf 'FROM docker.io/library/alpine:3.20\nRUN echo built > /built\n' | docker build -q -t omnigent-feature-check-build -"
+  docker run -d --name omnigent-feature-check-web -p 18080:80 docker.io/library/nginx:alpine >/dev/null 2>&1
+  # shellcheck disable=SC2016 # expanded by sh -c
+  check "published port reachable on localhost" sh -c 'for i in $(seq 20); do curl -sf -o /dev/null http://localhost:18080 && exit 0; sleep 1; done; exit 1'
+  mkdir -p "$work/compose"
+  cat > "$work/compose/compose.yaml" <<'YAML'
+name: omnigent-feature-check
+services:
+  web:
+    image: docker.io/library/nginx:alpine
+    ports: ["18081:80"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost"]
+      interval: 30s
+  client:
+    image: docker.io/library/alpine:3.20
+    depends_on:
+      web: {condition: service_healthy}
+    command: ["wget", "-q", "-O", "/dev/null", "http://web"]
+YAML
+  check "compose: depends_on service_healthy, service names resolve" \
+    sh -c "cd '$work/compose' && timeout 180 docker compose up --exit-code-from client client"
+  check "compose: published port reachable on localhost" curl -sf -o /dev/null --max-time 10 http://localhost:18081
+fi
+
+echo "== Idle sessions keep their files"
+home_fs="$(stat -fc %T /home/omnigent 2>/dev/null)" root_fs="$(stat -fc %T / 2>/dev/null)"
+if [[ "$home_fs" != "$root_fs" ]] || findmnt -n /home/omnigent >/dev/null 2>&1; then
+  pass "home directory is its own volume"
+else
+  fail "home directory is its own volume" "/home/omnigent is on the container root filesystem"
+fi
+
+echo "== Runners on your tailnet"
+ts() { timeout 10 tailscale --socket=/run/tailscale/tailscaled.sock "$@"; }
+if ! pgrep -x tailscaled >/dev/null; then
+  if grep -q 'omnigent-tailscale' /run/omnigent-tailscale.log 2>/dev/null; then
+    fail "tailscaled is running" "see /run/omnigent-tailscale.log"
+  else
+    skip "Tailscale checks" "tailscaled not running; no Tailscale key configured?"
+  fi
+else
+  status="$(ts status --json 2>/dev/null)"
+  field() { python3 -c 'import json, sys; d = json.loads(sys.argv[1]); print(eval(sys.argv[2], {}, {"d": d}))' "$1" "$2" 2>/dev/null; }
+  dns="$(field "$status" 'd["Self"]["DNSName"].rstrip(".")')"
+  short="${dns%%.*}"
+  check "tailnet backend Running" test "$(field "$status" 'd["BackendState"]')" = Running
+  if [[ "$short" =~ ^omnigent-[0-9a-f]{8}$ ]]; then pass "joined as $dns"; else fail "joined as omnigent-<8 hex>" "got ${dns:-nothing}"; fi
+  # The sandbox Pod's hostname carries the same host-id prefix.
+  if [[ "$(hostname)" == omnigent-managed-* ]]; then
+    check "name matches this Pod's host id ($(hostname))" test "${short#omnigent-}" = "$(hostname | cut -d- -f3)"
+  fi
+  tags="$(field "$status" '",".join(d["Self"].get("Tags") or [])')"
+  if [[ -n "$tags" ]]; then pass "advertises tags $tags"; else fail "advertises tags" "no tags"; fi
+  check "Tailscale SSH enabled" test "$(field "$(ts debug prefs 2>/dev/null)" 'd.get("RunSSH")')" = True
+  check "node state is on the home volume" test -s "$HOME/.local/state/omnigent-tailscale/tailscaled.state"
+fi
+
+echo "== Open in Gateway: IntelliJ backend"
+idea="$(version_of jetbrains_idea_path)" build="$(version_of jetbrains_idea_build)"
+check "backend at $idea is executable" test -x "$idea/bin/remote-dev-server.sh"
+check "backend is IntelliJ IDEA Ultimate $build" python3 -c 'import json, sys; i = json.load(open(sys.argv[1] + "/product-info.json")); assert i["buildNumber"] == sys.argv[2] and i["productCode"] == "IU", i' "$idea" "$build"
+
+echo
+if ((failed)); then echo "runner checks: FAILED"; else echo "runner checks: passed"; fi
+exit "$failed"
