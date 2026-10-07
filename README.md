@@ -10,7 +10,7 @@ files in Git and deploy them.
 
 - **A small Kubernetes cluster** (k3s) with automatic HTTPS.
 - **One Omnigent server**, with PostgreSQL and a small Vault for secrets.
-- **One Pod per agent session.** It stops after 4 idle hours and keeps its
+- **One Pod per agent session.** It stops after an idle hour and keeps its
   files until you delete the session.
 - **Extras on top of upstream Omnigent**, such as your Claude and Codex usage
   limits in the UI, Docker inside sessions, and SSH into a session over

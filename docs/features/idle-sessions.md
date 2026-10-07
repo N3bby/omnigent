@@ -7,7 +7,7 @@ Idle sessions free the CPU and memory they reserved, but keep your files.
 | After this long without agent activity | What happens |
 | --- | --- |
 | 30 minutes | The agent exits. The Pod keeps running, so everything in it is still there. |
-| 4 hours | The Pod stops, which frees its CPU and memory. |
+| 1 hour | The Pod stops, which frees its CPU and memory. |
 
 Sending a message wakes a stopped session. Waking takes about as long as
 starting a new session.
@@ -41,7 +41,7 @@ Set these in `environments/production.toml` and deploy:
 | Setting | Idle time before… | Default |
 | --- | --- | --- |
 | `runner_agent_idle_seconds` | the agent exits | 1800 (30 minutes) |
-| `runner_idle_shutdown_seconds` | the Pod stops | 14400 (4 hours) |
+| `runner_idle_shutdown_seconds` | the Pod stops | 3600 (1 hour) |
 
 - The Pod has to stop at least 300 seconds after the agent exits.
 - Pods that are already running keep their old timing until they stop.

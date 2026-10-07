@@ -35,7 +35,7 @@ downloads the matching local client on Linux or macOS.
 ## Good to know
 
 - **The session can stop while you're in the IDE.** IDE activity doesn't
-  count as agent activity. A session stops after 4 hours without agent
+  count as agent activity. A session stops after 1 hour without agent
   activity, even while you're using the IDE. See
   [idle sessions](idle-sessions.md).
 - **IDE settings and caches are lost** when the Pod is recreated. They live

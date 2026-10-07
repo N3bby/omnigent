@@ -69,7 +69,7 @@ runner_max_concurrency = 10
 # stops runner_idle_shutdown_seconds after the last agent activity, and starts
 # again with its home directory on the next message.
 runner_agent_idle_seconds = 1800
-runner_idle_shutdown_seconds = 14400
+runner_idle_shutdown_seconds = 3600
 
 # Deliberate policy choices.
 codex_bypass_approvals = true

@@ -293,7 +293,7 @@ own composer. They belong to the login, so they match this session's.
 Waiting out the timers takes hours, so check the evidence instead:
 
 - `grep -E '^runner_(agent_idle|idle_shutdown)_seconds' environments/<env>.toml`.
-  **Expected:** unset (defaults 1800 and 14400) or what the user chose.
+  **Expected:** unset (defaults 1800 and 3600) or what the user chose.
   Step 3's preflight for the environment checks that they're valid, and the unit
   tests check that render turns them into the Sandbox shutdown settings.
 - `check-runner` already showed that the home directory and the Tailscale
@@ -311,7 +311,7 @@ Hand these to the user; they need their own devices or VM access:
    `root` and opens the session's repository in IntelliJ.
 3. **Mobile:** the Tailscale name still shows, **Open in Gateway** doesn't, and
    tapping the usage numbers opens the bars.
-4. **Idle stop and wake:** after 4 idle hours, `mise run status` shows the
+4. **Idle stop and wake:** after 1 idle hour, `mise run status` shows the
    session `Ready=False`, `SandboxExpired`. Sending a message wakes it with
    its repository, uncommitted changes and Tailscale name intact.
 5. **After a k3s upgrade:** `scripts/check-userns` on the VM. Its summary
