@@ -1,5 +1,7 @@
 # Omnigent deployment
 
+![What this deployment does: each session gets its own sandboxed pod running Claude Code or Codex, reachable from the Omnigent UI, over Tailscale and in IntelliJ through JetBrains Gateway](docs/features.svg)
+
 Deploy your own [Omnigent](https://github.com/omnigent-ai/omnigent) server on a
 single Ubuntu VM. One command provisions a fresh VM and later reconciles any
 change you commit.
