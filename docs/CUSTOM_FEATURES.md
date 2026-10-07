@@ -484,10 +484,11 @@ Every Claude Code and Codex session starts with a short description of the
 runner, so you don't have to explain it yourself. Agents know that they're
 root and can run containers, that they should install tools with mise
 before `apt-get`, and that only the home directory survives an idle Pod
-stopping. They link files with a Markdown link
-to the absolute path, so you can open them from the browser. When you ask how
-to reach something running in the session, they give its tailnet address
-rather than `localhost`.
+stopping. When git has no name or email, as happens when you haven't
+connected GitHub, they commit as the identity the file names. They link files
+with a Markdown link to the absolute path, so you can open them from the
+browser. When you ask how to reach something running in the session, they
+give its tailnet address rather than `localhost`.
 
 The text is in `images/runner/agent-instructions.md`, and it's the same for
 every deployment. To change it, edit the file and deploy. New sessions get the

@@ -34,6 +34,17 @@ survive the Pod stopping.
   Python and Node packages with `pip install --user` or `npm --prefix` under
   the home directory if they should survive.
 
+## Committing
+
+Git may have no name or email set. Omnigent only sets them when the user has
+connected GitHub. If `git config user.email` is empty before you commit, set
+them in that repository and commit:
+
+```bash
+git config user.name "Levi Vandenbempt"
+git config user.email "levi.vandenbempt.sjcm@gmail.com"
+```
+
 ## Linking files
 
 When you mention a file the user may want to open, such as an image,
