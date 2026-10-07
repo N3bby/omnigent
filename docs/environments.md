@@ -1,7 +1,8 @@
 # Running more than one deployment
 
 One fork can manage several deployments, each on its own VM. This repository
-has two: `production` and `production-alternative`.
+has one, `production`; the steps below use `production-alternative` as an
+example of adding another.
 
 ## How environments work
 

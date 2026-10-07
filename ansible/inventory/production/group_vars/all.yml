@@ -12,6 +12,6 @@ omnigent_local_kubeconfig: "{{ lookup('env', 'HOME') }}/.kube/omnigent-{{ omnige
 k3s_api_private_cidrs: []
 
 # Record the actual VM capacity here. Preflight refuses smaller hosts.
-minimum_vcpus: 4
-minimum_memory_mb: 15000
-minimum_disk_gb: 60
+minimum_vcpus: 16
+minimum_memory_mb: 31000
+minimum_disk_gb: 90

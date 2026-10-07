@@ -13,9 +13,8 @@ on:
         description: Deployment to release to
         type: choice
         options:
-          - production-alternative
           - production
-        default: production-alternative
+        default: production
 permissions: {}
 concurrency:
   group: deploy-${{ inputs.environment }}
