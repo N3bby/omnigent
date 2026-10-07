@@ -38,7 +38,7 @@ reach as reachable by an attacker.
 
 | Boundary | What it does |
 | --- | --- |
-| User namespace | The agent is root inside its pod, but that maps to an unprivileged user on the host. See [the diagram](CUSTOM_FEATURES.md#install-packages-and-run-containers). |
+| User namespace | The agent is root inside its pod, but that maps to an unprivileged user on the host. See [the diagram](features/root-and-containers.md#is-root-safe). |
 | Admission policy | Rejects runner pods that are privileged, mount host paths, share host namespaces or use host ports (`kubernetes/platform/runner-userns.yaml`). |
 | No Kubernetes access | The runner's service account has no permissions, and its token isn't mounted. |
 | Resource limits | Scratch disk and the number of pods and jobs are capped. CPU and memory limits are above the VM's size, so runners share whatever is free, and the server, database and Vault have a higher priority than runners. The home volume is not capped; see below. |
@@ -75,7 +75,7 @@ do there.
 
 ## Runners on your tailnet
 
-[Tailscale for runners](CUSTOM_FEATURES.md#reach-a-session-over-tailscale) is
+[Tailscale for sessions](features/tailscale.md) is
 off until you store a key. Once it's on, every runner Pod is a node on your
 tailnet, and the agent is root in it, so treat the node as untrusted:
 
