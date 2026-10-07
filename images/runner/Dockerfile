@@ -48,7 +48,7 @@ COPY --chmod=0755 tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailsca
 COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
 COPY mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh
 # Claude Code's managed instructions; Codex gets the same file as AGENTS.md.
-COPY --chmod=0644 mise/agent-instructions.md /etc/claude-code/CLAUDE.md
+COPY --chmod=0644 agent-instructions.md /etc/claude-code/CLAUDE.md
 
 WORKDIR /opt/omnigent-agent-clis
 COPY package.json package-lock.json ./
@@ -65,7 +65,7 @@ COPY --chmod=0755 claude-wrapper.sh /usr/local/bin/claude
 # SQLite databases in its home, and on the shared volume Pods in different
 # user namespaces left files that the others couldn't open.
 COPY --chmod=0644 codex-config.toml /opt/codex-home/config.toml
-COPY --chmod=0644 mise/agent-instructions.md /opt/codex-home/AGENTS.md
+COPY --chmod=0644 agent-instructions.md /opt/codex-home/AGENTS.md
 RUN ln -s /mnt/codex-home/auth.json /opt/codex-home/auth.json
 
 # --fuzz=0 fails the build when upstream code under a patch has moved.

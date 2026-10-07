@@ -16,6 +16,7 @@ does, what you'll notice, and how to turn it off where that's possible.
 | [Runners on your tailnet](#reach-a-session-over-tailscale) | SSH into a session's Pod, or open its dev servers, from your own devices | Optional setup step |
 | [Open in Gateway](#open-a-session-in-jetbrains-gateway) | Open the session's repository in IntelliJ through JetBrains Gateway | Requires Tailscale |
 | [No Share button](#no-share-button) | Sessions can't be shared from the web UI | No |
+| [Agents know the runner](#agents-know-where-theyre-running) | Agents know what the Pod can do, link files you can open, and give tailnet addresses | You can change the text |
 
 ## See your usage limits
 
@@ -125,9 +126,10 @@ node --version      # the pinned version, in this directory
 mise run test       # the project's mise tasks
 ```
 
-Agents are told to run `mise install` when they find one of those files, and
-to use `mise use node@22` rather than `apt-get` for runtimes a project doesn't
-pin. Once a tool has been installed, changing its version in the file is
+Agents are [told](#agents-know-where-theyre-running) to run `mise install`
+when they find one of those files, and to use `mise use -g node@22` rather
+than `apt-get` for runtimes and tools a project doesn't pin, which doesn't
+touch the project's files. Once a tool has been installed, changing its version in the file is
 enough: the next `node` installs the new version. Outside a project, `node`
 and `python` are still the image's own.
 
@@ -162,9 +164,9 @@ A few things to know:
   but root's home in `/etc/passwd`, which Tailscale SSH uses, is `/root`,
   which isn't kept.
 - **No prompts:** `MISE_YES=1` and `MISE_TRUSTED_CONFIG_PATHS=/home/omnigent`.
-- **Agent instructions:** `images/runner/mise/agent-instructions.md` is
-  Claude Code's managed `/etc/claude-code/CLAUDE.md` and Codex's global
-  `AGENTS.md`.
+- **Agent instructions:** the mise advice is part of
+  `images/runner/agent-instructions.md`; see
+  [Agents know where they're running](#agents-know-where-theyre-running).
 
 </details>
 
@@ -436,6 +438,39 @@ see **Settings → Sharing**, and the server's sharing API still works.
 
 - **Web UI** (`images/server/web-patches/0004-remove-share-button.patch`):
   hides Share in the header and removes the sidebar menu item.
+
+</details>
+
+## Agents know where they're running
+
+Every Claude Code and Codex session starts with a short description of the
+runner, so you don't have to explain it yourself. Agents know that they're
+root and can run containers, that they should install tools with mise
+before `apt-get`, and that only the home directory survives an idle Pod
+stopping. They link files with a Markdown link
+to the absolute path, so you can open them from the browser. When you ask how
+to reach something running in the session, they give its tailnet address
+rather than `localhost`.
+
+The text is in `images/runner/agent-instructions.md`, and it's the same for
+every deployment. To change it, edit the file and deploy. New sessions get the
+new text; existing sessions get it the next time their Pod starts. A
+repository's own `CLAUDE.md` or `AGENTS.md` still applies on top, so keep
+project rules there.
+
+Agents read the file at the start of every session, so keep it short and
+accurate: a wrong port or path there misleads every agent.
+
+<details>
+<summary>How it works</summary>
+
+The runner image copies the file to two places:
+
+- `/etc/claude-code/CLAUDE.md`, the managed instructions file that Claude Code
+  always loads, even when an agent turns off other setting sources.
+- `/opt/codex-home/AGENTS.md`. Omnigent gives each Codex session a private
+  `CODEX_HOME` and links `AGENTS.md` into it from `/opt/codex-home`, the same
+  way it links the login.
 
 </details>
 
