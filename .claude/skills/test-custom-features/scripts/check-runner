@@ -195,6 +195,26 @@ idea="$(version_of jetbrains_idea_path)" build="$(version_of jetbrains_idea_buil
 check "backend at $idea is executable" test -x "$idea/bin/remote-dev-server.sh"
 check "backend is IntelliJ IDEA Ultimate $build" python3 -c 'import json, sys; i = json.load(open(sys.argv[1] + "/product-info.json")); assert i["buildNumber"] == sys.argv[2] and i["productCode"] == "IU", i' "$idea" "$build"
 
+echo "== Agents know the runner"
+instructions="$root/images/runner/agent-instructions.md"
+for copy in /etc/claude-code/CLAUDE.md /opt/codex-home/AGENTS.md; do
+  if cmp -s "$instructions" "$copy"; then
+    pass "$copy matches images/runner/agent-instructions.md"
+  elif [[ -f "$copy" ]]; then
+    fail "$copy matches images/runner/agent-instructions.md" "differs; the image predates this checkout, or this session predates the deploy"
+  else
+    fail "$copy matches images/runner/agent-instructions.md" "missing"
+  fi
+done
+# Omnigent gives each Codex session a private CODEX_HOME and links AGENTS.md
+# into it from /opt/codex-home.
+mapfile -t codex_homes < <(ls -td /home/omnigent/.omnigent/codex-native/*/codex-home 2>/dev/null)
+if ((${#codex_homes[@]})); then
+  check "a Codex session's CODEX_HOME has the AGENTS.md" cmp -s /opt/codex-home/AGENTS.md "${codex_homes[0]}/AGENTS.md"
+else
+  skip "a Codex session's CODEX_HOME has the AGENTS.md" "no Codex session in this Pod"
+fi
+
 echo
 if ((failed)); then echo "runner checks: FAILED"; else echo "runner checks: passed"; fi
 exit "$failed"

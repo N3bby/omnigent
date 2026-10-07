@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, and the removed Share button. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, and the runner description agents get. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -181,6 +181,10 @@ PASS  codex still runs in that project
 == Open in Gateway: IntelliJ backend
 PASS  backend at /opt/jetbrains/intellij is executable
 PASS  backend is IntelliJ IDEA Ultimate 263.6259.32
+== Agents know the runner
+PASS  /etc/claude-code/CLAUDE.md matches images/runner/agent-instructions.md
+PASS  /opt/codex-home/AGENTS.md matches images/runner/agent-instructions.md
+SKIP  a Codex session's CODEX_HOME has the AGENTS.md (no Codex session in this Pod)
 
 runner checks: passed
 ```
@@ -188,7 +192,7 @@ runner checks: passed
 The version lines must match `versions.yaml`, whatever it pins now. Write
 down the `joined as` name and the `5h <n>% · 7d <n>%` usage, which step 5
 compares with the UI. Usage keeps moving while agents work, so expect a point
-or two of difference. The Codex `SKIP` turns into a check in step 5. If the
+or two of difference. The two Codex `SKIP`s turn into checks in step 5. If the
 deployment has no Tailscale key, the tailnet block is a single `SKIP`. That's
 fine; skip the Tailscale and Gateway UI checks too.
 
@@ -202,7 +206,10 @@ What a failure usually means:
 | managed settings / wrappers | `images/runner/Dockerfile` no longer installs the wrappers over the real CLIs, or `claude_bypass_permissions` is off |
 | user namespace / Podman / compose | k3s, containerd or the admission policies changed; run `scripts/check-userns` on the VM |
 | tailnet | see `/run/omnigent-tailscale.log`; the key may have expired (`mise run credential-status`) |
-| mise | `images/runner/mise/` isn't installed by `images/runner/Dockerfile`, or a newer mise changed its settings or shims; `mise doctor` in a login shell shows what it sees |
+| mise shims, pinned Node | `images/runner/Dockerfile` no longer installs `images/runner/mise/mise-profile.sh`, or a newer mise changed its settings or shims; `mise doctor` in a login shell shows what it sees |
+| `… is told to use mise` | `images/runner/agent-instructions.md` lost its mise advice, or isn't installed; see the agent-instructions rows |
+| `… matches images/runner/agent-instructions.md` | the file changed in this checkout after the image was built, so deploy it, or this session started before the deploy; `missing` means `images/runner/Dockerfile` no longer copies it |
+| `a Codex session's CODEX_HOME has the AGENTS.md` | upstream stopped linking `AGENTS.md` into each session's private `CODEX_HOME` (`_CODEX_HOME_GLOBAL_INSTRUCTION_FILES` in `omnigent/inner/codex_executor.py`) |
 
 ## 5. Live checks
 
@@ -212,7 +219,7 @@ If the session tools aren't advertised to you, load them with ToolSearch
 children of this session and **run in this same Pod**, so you can inspect
 their processes and files directly. They don't start a new Pod.
 
-### 5a. Agents don't stop to ask, for both agents
+### 5a. Agents don't stop to ask, and know the runner, for both agents
 
 1. `sys_agent_list`, and pick the built-in Claude Code and Codex agents (the
    `claude-native` and `codex-native` harnesses).
@@ -222,13 +229,40 @@ their processes and files directly. They don't start a new Pod.
 3. Poll `sys_session_get_history` until the agent replies (allow a few
    minutes for the first turn). Use `sys_session_get_info` to watch for
    outstanding approval prompts.
+4. Then `sys_session_send` each session this message, and poll for the reply
+   again:
+
+   ```
+   Answer from what you already know about this environment, one short line
+   each. Don't run commands or read files for questions 1-3.
+   1. Which directory survives this Pod stopping?
+   2. How would you install a CLI tool that this project doesn't pin?
+   3. If you wrote report.md in /home/omnigent/workspace, how would you point me to it?
+   4. What URL would I use to reach a dev server you start here on port 3000?
+   ```
 
 **Expected:** each replies `created`, `/tmp/feature-check-<agent>` exists in
 this Pod, and `sys_session_get_info` never shows an outstanding approval
 prompt. While the Codex session is alive, `pgrep -a codex-real` shows
 `--dangerously-bypass-approvals-and-sandbox`. Re-run
-`check-runner --quick`; that line should now `PASS`. If Codex isn't logged in
-(its session errors with an auth message), record Codex as SKIP and continue.
+`check-runner --quick`; both Codex lines should now `PASS`. If Codex isn't
+logged in (its session errors with an auth message), record Codex as SKIP and
+continue.
+
+The answers to those questions come from
+`images/runner/agent-instructions.md`, so **expect**, from each agent:
+
+1. `/home/omnigent`.
+2. `mise use -g <tool>@<version>`, not `apt-get` and not plain `mise use`.
+3. A Markdown link to the absolute path,
+   `[report.md](/home/omnigent/workspace/report.md)`.
+4. `http://<the joined as name from check-runner>:3000`, not `localhost`.
+   The agent may run `tailscale status` for this. Without Tailscale, it should
+   say the Pod isn't on the tailnet rather than make up an address.
+
+An agent that runs commands or reads its instructions file to answer 1–3, or
+that answers them generically, didn't get the file: FAIL, and check the
+agent-instructions lines from `check-runner`. Record one result per agent.
 
 ### 5b. In the web UI
 

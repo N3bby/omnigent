@@ -129,9 +129,9 @@ mise run test       # the project's mise tasks
 Agents are [told](#agents-know-where-theyre-running) to run `mise install`
 when they find one of those files, and to use `mise use -g node@22` rather
 than `apt-get` for runtimes and tools a project doesn't pin, which doesn't
-touch the project's files. Once a tool has been installed, changing its version in the file is
-enough: the next `node` installs the new version. Outside a project, `node`
-and `python` are still the image's own.
+touch the project's files. Once a tool has been installed, changing its
+version in the file is enough: the next `node` installs the new version.
+Outside a project, `node` and `python` are still the image's own.
 
 Runtimes are installed in the home directory, so they're still there after an
 [idle session](#idle-sessions-stop-and-keep-their-files) wakes up. They do use
@@ -235,8 +235,8 @@ An idle session winds down in two steps:
    about as long as starting a new session.
 
 The session keeps its home directory, `/home/omnigent`: your repositories,
-uncommitted changes, agent state and Podman images are where you left them. The home directory is only deleted
-when you delete the session.
+uncommitted changes, agent state and Podman images are where you left them.
+The home directory is only deleted when you delete the session.
 
 Anything outside the home directory starts fresh when a stopped Pod wakes,
 including packages from `apt-get install`. Have agents install tools into the
@@ -330,6 +330,22 @@ stop after four hours without agent activity even while you are using the
 IDE. Backend settings and caches under `/root` are not on the persistent
 session volume and are lost when the runner Pod is recreated; repository
 files under `/home/omnigent` remain.
+
+<details>
+<summary>How it works</summary>
+
+- **Runner image:** downloads the IntelliJ IDEA Ultimate archive pinned in
+  `versions.yaml` (`jetbrains_idea_*`), checks its SHA-256 digest, and
+  unpacks it to `jetbrains_idea_path`. The build fails if the backend's
+  `product-info.json` isn't the pinned build.
+- **Web UI** (`images/server/web-patches/0003-composer-gateway-link.patch`):
+  adds the `ComposerGatewayLink` next to the Tailscale name. It builds the
+  `jetbrains-gateway://connect` link from the session's full Tailscale name,
+  its workspace and the backend path, which the server image build passes in
+  as `VITE_OMNIGENT_GATEWAY_IDEA_PATH`. In the desktop app the link opens as
+  a new window, because the app blocks same-window links to other apps.
+
+</details>
 
 ## Reach a session over Tailscale
 
