@@ -38,7 +38,7 @@ echo "== Pinned versions"
 site="$(python -c 'import omnigent, pathlib; print(pathlib.Path(omnigent.__file__).parents[1])' 2>/dev/null)"
 want="$(version_of omnigent)" got="$(omnigent --version 2>/dev/null)"
 if [[ "$got" == "omnigent ${want#v} "* ]]; then pass "omnigent $want"; else fail "omnigent" "want $want, got ${got:-nothing}"; fi
-for tool in "claude_code:claude-real --version" "codex_cli:codex-real --version" "tailscale:tailscale version"; do
+for tool in "claude_code:claude-real --version" "codex_cli:codex-real --version" "tailscale:tailscale version" "mise:mise --version"; do
   key="${tool%%:*}" want="$(version_of "${tool%%:*}")"
   got="$(${tool#*:} 2>/dev/null | head -n1)"
   if [[ -n "$want" && "$got" == *"$want"* ]]; then pass "$key $want"; else fail "$key" "want $want, got ${got:-nothing}"; fi
@@ -165,6 +165,29 @@ else
   if [[ -n "$tags" ]]; then pass "advertises tags $tags"; else fail "advertises tags" "no tags"; fi
   check "Tailscale SSH enabled" test "$(field "$(ts debug prefs 2>/dev/null)" 'd.get("RunSSH")')" = True
   check "node state is on the home volume" test -s "$HOME/.local/state/omnigent-tailscale/tailscaled.state"
+fi
+
+echo "== Runtimes from mise"
+shims=/home/omnigent/.local/share/mise/shims
+# Login shells are how the runner, and so the agents, start.
+check "login shells put mise shims first on PATH" sh -c "bash -lc 'echo \$PATH' | grep -q '^$shims:'"
+check "Claude is told to use mise" grep -q 'mise install' /etc/claude-code/CLAUDE.md
+check "Codex is told to use mise" grep -q 'mise install' /opt/codex-home/AGENTS.md
+if ((quick)); then
+  skip "a project's pinned Node, and codex on the image's Node" --quick
+else
+  # Under the home directory, which mise trusts without asking.
+  mkdir -p /home/omnigent/.cache
+  project="$(mktemp -d /home/omnigent/.cache/omnigent-feature-check-XXXXXX)"
+  pinned=20.18.0
+  had_pinned=0
+  bash -lc "mise where node@$pinned" >/dev/null 2>&1 && had_pinned=1
+  printf '[tools]\nnode = "%s"\n' "$pinned" > "$project/.mise.toml"
+  check "a project's .mise.toml pins node $pinned" sh -c "cd '$project' && bash -lc 'mise install -q && node --version' | grep -qx v$pinned"
+  check "outside a project, node is the image's" sh -c "cd / && test \"\$(bash -lc 'node --version')\" = \"\$(/usr/local/bin/node --version)\""
+  check "codex still runs in that project" sh -c "cd '$project' && bash -lc 'codex --version' | grep -q '$(version_of codex_cli)'"
+  ((had_pinned)) || bash -lc "mise uninstall -q node@$pinned" >/dev/null 2>&1
+  rm -rf "$project"
 fi
 
 echo "== Open in Gateway: IntelliJ backend"

@@ -56,6 +56,19 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn(f"OMNIGENT_COMMIT={versions['omnigent_commit']}", server_dockerfile)
         self.assertIn(f"TAILSCALE_VERSION={versions['tailscale']}\n", dockerfile)
         self.assertIn(f"TAILSCALE_SHA256={versions['tailscale_sha256']}\n", dockerfile)
+        self.assertIn(f"MISE_VERSION={versions['mise']}\n", dockerfile)
+        self.assertIn(f"MISE_SHA256={versions['mise_sha256']}\n", dockerfile)
+
+    def test_project_runtimes_come_first_but_not_for_the_agent_clis(self) -> None:
+        dockerfile = (ROOT / "images" / "runner" / "Dockerfile").read_text()
+        # Sorts after the base image's omnigent-venv.sh, so its shims stay first.
+        self.assertIn("mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh\n", dockerfile)
+        self.assertIn("agent-instructions.md /etc/claude-code/CLAUDE.md\n", dockerfile)
+        self.assertIn("agent-instructions.md /opt/codex-home/AGENTS.md\n", dockerfile)
+        profile = (ROOT / "images" / "runner" / "mise" / "mise-profile.sh").read_text()
+        self.assertIn("export MISE_DATA_DIR=/home/omnigent/", profile)
+        wrapper = (ROOT / "images" / "runner" / "codex-wrapper.sh").read_text()
+        self.assertNotRegex(wrapper, r'exec "\$real_codex"')
 
     def test_render_has_no_secret_or_mutable_application_image(self) -> None:
         subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)

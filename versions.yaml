@@ -29,3 +29,7 @@ codex_cli: "0.159.1"
 # Joins runner Pods to your tailnet, from pkgs.tailscale.com/stable (amd64).
 tailscale: "1.102.5"
 tailscale_sha256: "65e6d7f19ad7e1c87d20c2a21e92f38a96795cb897af54b04536590e1c148d12"
+# Lets agents install the runtimes a project pins, from github.com/jdx/mise
+# releases (linux-x64 binary).
+mise: "2026.10.3"
+mise_sha256: "8d48bc510b7d844fad0bc7156c0855c2a1e7230c51e498a7f6b63b021f8b57c5"

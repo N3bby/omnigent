@@ -2,6 +2,9 @@
 set -eu
 
 real_codex=/usr/local/bin/codex-real
+# The image's own Node, not whatever a project's mise config pins: Codex starts
+# in the project directory, where the mise shims come first on PATH.
+node=/usr/local/bin/node
 shared_auth=/mnt/codex-home/auth.json
 
 if [ -n "${CODEX_HOME:-}" ]; then
@@ -12,11 +15,11 @@ if [ -n "${CODEX_HOME:-}" ]; then
                 ln -s "$shared_auth" "$CODEX_HOME/auth.json"
             fi
             if [ "${OMNIGENT_CODEX_BYPASS_APPROVALS:-0}" = "1" ]; then
-                exec "$real_codex" --dangerously-bypass-approvals-and-sandbox "$@"
+                exec "$node" "$real_codex" --dangerously-bypass-approvals-and-sandbox "$@"
             fi
             ;;
     esac
 fi
 
-exec "$real_codex" "$@"
+exec "$node" "$real_codex" "$@"
 

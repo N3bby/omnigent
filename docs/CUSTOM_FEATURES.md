@@ -9,6 +9,7 @@ does, what you'll notice, and how to turn it off where that's possible.
 | [Usage limits in the UI](#see-your-usage-limits) | Your Claude and Codex usage, right in the composer | No |
 | [Model picker before the first session](#pick-a-model-straight-away) | Choose a model without starting a session first | No |
 | [Root and containers in runners](#install-packages-and-run-containers) | Agents can `apt-get install`, and use Docker, Compose and Testcontainers | No |
+| [Runtimes from mise](#use-the-runtimes-a-project-pins) | `node`, `python` and others follow a project's `.mise.toml` or `.tool-versions` | No |
 | [No permission prompts](#agents-dont-stop-to-ask) | Agents work without waiting for approval | Yes, one setting per agent |
 | [GitHub repository picker](#pick-repositories-from-github) | Choose repositories from a list | Optional setup step |
 | [Idle sessions stop](#idle-sessions-stop-and-keep-their-files) | Idle runner Pods free their CPU and memory, and keep their files | You can change the timing |
@@ -108,6 +109,62 @@ after an [idle session](#idle-sessions-stop-and-keep-their-files) wakes up.
   systemd, so `depends_on: service_healthy` works.
 - After upgrading k3s, run `scripts/check-userns` on the VM to check that
   all of this still works.
+
+</details>
+
+## Use the runtimes a project pins
+
+Runners have [mise](https://mise.jdx.dev), so agents can install the Node,
+Python, Go, Java or other versions a project pins in `.mise.toml`,
+`mise.toml` or `.tool-versions`:
+
+```bash
+cd ~/workspace/my-project
+mise install        # installs what the project pins
+node --version      # the pinned version, in this directory
+mise run test       # the project's mise tasks
+```
+
+Agents are told to run `mise install` when they find one of those files, and
+to use `mise use node@22` rather than `apt-get` for runtimes a project doesn't
+pin. Once a tool has been installed, changing its version in the file is
+enough: the next `node` installs the new version. Outside a project, `node`
+and `python` are still the image's own.
+
+Runtimes are installed in the home directory, so they're still there after an
+[idle session](#idle-sessions-stop-and-keep-their-files) wakes up. They do use
+the home volume's disk.
+
+A few things to know:
+
+- Shims only switch tool versions. For a project's `[env]` variables, run
+  commands through `mise exec --` or `mise run`.
+- mise trusts every config file in the home directory, so it never stops to
+  ask. See the [threat model](THREAT_MODEL.md#trade-offs-worth-knowing).
+- Some old Python patch releases fail with "No GitHub artifact attestations
+  found". mise refuses those builds because they weren't signed; pin a newer
+  patch release.
+
+<details>
+<summary>How it works</summary>
+
+- **Runner image:** installs the pinned `mise` binary (`mise` and
+  `mise_sha256` in `versions.yaml`) in `/usr/local/bin`.
+- **PATH:** `images/runner/mise/mise-profile.sh`, installed as
+  `/etc/profile.d/zz-omnigent-mise.sh`, puts mise's shims first on `PATH` for
+  every login shell, including the one the runner starts from and Tailscale
+  SSH. It sorts after the base image's `omnigent-venv.sh`, so a project's
+  Python comes before Omnigent's venv. Omnigent itself calls its venv's
+  Python by full path, and the `codex` wrapper runs Codex with the image's
+  Node, so a project's pins don't affect them.
+- **Home volume:** the script sets `MISE_DATA_DIR`, `MISE_CONFIG_DIR` and
+  `MISE_STATE_DIR` under `/home/omnigent`. Agents have `HOME=/home/omnigent`,
+  but root's home in `/etc/passwd`, which Tailscale SSH uses, is `/root`,
+  which isn't kept.
+- **No prompts:** `MISE_YES=1` and `MISE_TRUSTED_CONFIG_PATHS=/home/omnigent`.
+- **Agent instructions:** `images/runner/mise/agent-instructions.md` is
+  Claude Code's managed `/etc/claude-code/CLAUDE.md` and Codex's global
+  `AGENTS.md`.
 
 </details>
 

@@ -33,6 +33,12 @@ RUN curl -fsSLo /tmp/tailscale.tgz "https://pkgs.tailscale.com/stable/tailscale_
         "tailscale_${TAILSCALE_VERSION}_amd64/tailscale" "tailscale_${TAILSCALE_VERSION}_amd64/tailscaled" \
     && rm /tmp/tailscale.tgz \
     && tailscale version
+ARG MISE_VERSION=2026.10.3
+ARG MISE_SHA256=8d48bc510b7d844fad0bc7156c0855c2a1e7230c51e498a7f6b63b021f8b57c5
+RUN curl -fsSLo /usr/local/bin/mise "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-x64" \
+    && echo "${MISE_SHA256}  /usr/local/bin/mise" | sha256sum -c - \
+    && chmod 0755 /usr/local/bin/mise \
+    && mise --version
 COPY containers/containers.conf /etc/containers/containers.conf.d/50-omnigent.conf
 COPY containers/storage.conf /etc/containers/storage.conf
 COPY --chmod=0755 containers/podman-service.sh /usr/local/bin/omnigent-podman-service
@@ -40,6 +46,9 @@ COPY --chmod=0755 containers/docker-compose.sh /usr/local/bin/docker-compose
 COPY containers/podman-service-profile.sh /etc/profile.d/omnigent-podman-service.sh
 COPY --chmod=0755 tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailscale
 COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
+COPY mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh
+# Claude Code's managed instructions; Codex gets the same file as AGENTS.md.
+COPY --chmod=0644 mise/agent-instructions.md /etc/claude-code/CLAUDE.md
 
 WORKDIR /opt/omnigent-agent-clis
 COPY package.json package-lock.json ./
@@ -56,6 +65,7 @@ COPY --chmod=0755 claude-wrapper.sh /usr/local/bin/claude
 # SQLite databases in its home, and on the shared volume Pods in different
 # user namespaces left files that the others couldn't open.
 COPY --chmod=0644 codex-config.toml /opt/codex-home/config.toml
+COPY --chmod=0644 mise/agent-instructions.md /opt/codex-home/AGENTS.md
 RUN ln -s /mnt/codex-home/auth.json /opt/codex-home/auth.json
 
 # --fuzz=0 fails the build when upstream code under a patch has moved.

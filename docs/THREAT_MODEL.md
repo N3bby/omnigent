@@ -61,6 +61,10 @@ do there.
   `local-path` volume on the VM's disk, and `local-path` doesn't enforce its
   requested size (`runner_home_limit`). A runner that fills its home fills the
   VM's disk.
+- **mise trusts every project in the home directory.** A `.mise.toml` can
+  set environment variables and run hooks and tasks, and mise normally asks
+  before using one it hasn't seen. Runners skip that question, because agents
+  already run the code of any repository they work in.
 - **Agent logins are shared.** Every runner uses the same Claude token and
   Codex login, so one compromised runner can use them.
 - **Agents skip permission prompts** by default (`claude_bypass_permissions`

@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, the model picker, root and containers in runners, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, and the removed Share button. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, and the removed Share button. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -39,7 +39,7 @@ report at the end needs them.
 
 ```bash
 git log --oneline -5
-grep -E '^(omnigent|omnigent_commit|claude_code|codex_cli|tailscale|jetbrains_idea_build):' versions.yaml
+grep -E '^(omnigent|omnigent_commit|claude_code|codex_cli|tailscale|mise|jetbrains_idea_build):' versions.yaml
 ```
 
 Note the upstream version and commit. If the user gave you a candidate
@@ -111,7 +111,7 @@ python -m unittest discover -s tests
 ```
 
 **Expected:** `configuration and manifests for <env> are valid` for both, and
-the unit tests end in `OK` (16 tests on 2026-10-07). Warnings that
+the unit tests end in `OK` (17 tests on 2026-10-07). Warnings that
 `ansible-playbook` or `shellcheck` isn't installed are fine. The tests cover
 the rendered settings behind several features, such as idle-session timing and
 the per-session home volume. They are the local part of the `Validate`
@@ -123,10 +123,11 @@ workflow, which also runs kubeconform and shellcheck in CI.
 .claude/skills/test-custom-features/scripts/check-runner
 ```
 
-This takes about 10 seconds, plus pulling two small images (alpine, nginx) the
-first time. The script removes the containers it starts and any image it
-had to pull. `--quick` skips apt-get and the containers; step 5a uses it for a
-re-run.
+This takes about 10 seconds, plus pulling two small images (alpine, nginx) and
+installing Node 20.18.0 through mise the first time. The script removes the
+containers it starts, any image it had to pull, and the Node it installed.
+`--quick` skips apt-get, the containers and the Node install; step 5a uses it
+for a re-run.
 
 **Expected** (full run, in a Claude Code session on a deployment with
 Tailscale set up). The names and numbers in angle brackets differ per session:
@@ -137,6 +138,7 @@ PASS  omnigent v0.15.0
 PASS  claude_code 2.1.285
 PASS  codex_cli 0.159.1
 PASS  tailscale 1.102.5
+PASS  mise 2026.10.3
 == Usage limits: runner patch is installed
 PASS  claude-native posts rate limits
 PASS  claude-native reads statusLine rate_limits
@@ -169,6 +171,13 @@ PASS  name matches this Pod's host id (omnigent-managed-<8 hex>-<suffix>)
 PASS  advertises tags tag:omnigent-runner
 PASS  Tailscale SSH enabled
 PASS  node state is on the home volume
+== Runtimes from mise
+PASS  login shells put mise shims first on PATH
+PASS  Claude is told to use mise
+PASS  Codex is told to use mise
+PASS  a project's .mise.toml pins node 20.18.0
+PASS  outside a project, node is the image's
+PASS  codex still runs in that project
 == Open in Gateway: IntelliJ backend
 PASS  backend at /opt/jetbrains/intellij is executable
 PASS  backend is IntelliJ IDEA Ultimate 263.6259.32
@@ -193,6 +202,7 @@ What a failure usually means:
 | managed settings / wrappers | `images/runner/Dockerfile` no longer installs the wrappers over the real CLIs, or `claude_bypass_permissions` is off |
 | user namespace / Podman / compose | k3s, containerd or the admission policies changed; run `scripts/check-userns` on the VM |
 | tailnet | see `/run/omnigent-tailscale.log`; the key may have expired (`mise run credential-status`) |
+| mise | `images/runner/mise/` isn't installed by `images/runner/Dockerfile`, or a newer mise changed its settings or shims; `mise doctor` in a login shell shows what it sees |
 
 ## 5. Live checks
 
