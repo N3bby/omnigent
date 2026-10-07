@@ -34,10 +34,12 @@ All the documentation is listed in [docs/](docs/README.md).
 - **There are no backups.** If you lose the VM or its disk, you lose the
   data. To recover, you set up a fresh VM, deploy again and sign in again.
 - **Sessions are trusted.** They have full network access and share your
-  agent logins. Agents are root inside their own Pod, but that root is an
-  ordinary user on the VM. This suits one person or a team who trust each
-  other. Read the [threat model](docs/threat-model.md) before you invite
-  anyone else.
+  agent logins. This suits one person or a team who trust each other. Read
+  the [threat model](docs/threat-model.md) before you invite anyone else.
+- **Agents are root inside their own Pod**, so they can install packages and
+  run containers. The
+  [threat model](docs/threat-model.md#what-keeps-a-runner-contained) explains
+  how that's kept contained.
 - **Agents don't ask for permission** before running commands.
   [You can turn that off](docs/features/no-permission-prompts.md).
 - **Sessions keep using disk until you delete them**, even once they're idle.
