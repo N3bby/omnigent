@@ -231,7 +231,9 @@ Gateway icon and label are one clickable control, hidden on mobile.
 
 Install [JetBrains Gateway](https://www.jetbrains.com/remote-development/gateway/)
 on your computer and connect it to the same tailnet as the runner. Click the
-control and allow your browser to open Gateway. The connection uses Tailscale
+control and allow your browser to open Gateway. In the Omnigent desktop app,
+choose **Open** in the prompt that asks to open the `jetbrains-gateway` link;
+select **Always allow** to skip the prompt next time. The connection uses Tailscale
 SSH as `root` and opens the session's repository, such as
 `/home/omnigent/workspace/my-project`.
 

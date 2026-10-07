@@ -4,19 +4,59 @@ Adds one muted Gateway icon-and-label link beside the Tailscale name on
 desktop, hidden below the md breakpoint. The connection uses the runner's full
 tailnet address, the session workspace, and the preinstalled backend path.
 Host-based links use deploy=false: Gateway's deploy flow requires a saved
-SSH configuration ID local to each client. Applies after
+SSH configuration ID local to each client. In the desktop app the link
+opens as a new window: the app blocks same-window links to other apps and
+routes new-window ones to its open-link prompt. Applies after
 0002-composer-tailscale-host.patch.
 Base: omnigent v0.15.0 (c8b9b85f822f).
 
+diff --git a/web/src/components/composer/ComposerGatewayLink.test.tsx b/web/src/components/composer/ComposerGatewayLink.test.tsx
+new file mode 100644
+index 0000000..6cdbbd5
+--- /dev/null
++++ b/web/src/components/composer/ComposerGatewayLink.test.tsx
+@@ -0,0 +1,31 @@
++import { cleanup, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { ComposerGatewayLink } from "./ComposerGatewayLink";
++
++const host = "omnigent-388e67fd.taild5bc1b.ts.net";
++const projectPath = "/home/omnigent/workspace/project";
++
++beforeEach(() => vi.stubEnv("VITE_OMNIGENT_GATEWAY_IDEA_PATH", "/opt/jetbrains/intellij"));
++afterEach(() => {
++  cleanup();
++  vi.unstubAllEnvs();
++  delete (window as { omnigentDesktop?: unknown }).omnigentDesktop;
++});
++
++describe("ComposerGatewayLink", () => {
++  it("opens Gateway from the current browser tab", () => {
++    render(<ComposerGatewayLink host={host} projectPath={projectPath} />);
++    const link = screen.getByTestId("composer-gateway-link");
++    expect(link.getAttribute("href")).toMatch(/^jetbrains-gateway:\/\/connect#/);
++    expect(link).not.toHaveAttribute("target");
++  });
++
++  it("opens Gateway through the desktop shell's external-link handler", () => {
++    (window as { omnigentDesktop?: unknown }).omnigentDesktop = { kind: "electron" };
++    render(<ComposerGatewayLink host={host} projectPath={projectPath} />);
++    const link = screen.getByTestId("composer-gateway-link");
++    expect(link).toHaveAttribute("target", "_blank");
++    expect(link).toHaveAttribute("rel", "noopener noreferrer");
++  });
++});
 diff --git a/web/src/components/composer/ComposerGatewayLink.tsx b/web/src/components/composer/ComposerGatewayLink.tsx
 new file mode 100644
-index 0000000..7e3cb5a
+index 0000000..312257e
 --- /dev/null
 +++ b/web/src/components/composer/ComposerGatewayLink.tsx
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,57 @@
 +import type { SVGProps } from "react";
 +import { COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS } from "./ChatComposer";
 +import { gatewayLink } from "@/lib/gateway";
++import { isElectronShell } from "@/lib/nativeBridge";
 +import { cn } from "@/lib/utils";
 +
 +/** Monochrome faces of JetBrains' Gateway icon (JetBrains/logos, web/gateway). */
@@ -46,6 +86,10 @@ index 0000000..7e3cb5a
 +    <a
 +      data-testid="composer-gateway-link"
 +      href={href}
++      // The desktop shell denies same-window external-protocol navigation;
++      // a new-window link reaches its protocol prompt and opens Gateway.
++      target={isElectronShell() ? "_blank" : undefined}
++      rel="noopener noreferrer"
 +      aria-label="Open in Gateway"
 +      title={`Open ${projectPath} in JetBrains Gateway on ${host}`}
 +      className={cn(
