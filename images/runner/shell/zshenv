@@ -1,0 +1,5 @@
+# Tailscale SSH passes on the client's LANG and LC_*, but the image only has
+# the C.UTF-8 locale. Without a UTF-8 locale tmux replaces non-ASCII
+# characters, such as Nerd Font icons, with underscores.
+export LANG=C.UTF-8
+unset -m 'LC_*'

@@ -70,6 +70,14 @@ class ConfigurationTests(unittest.TestCase):
         wrapper = (ROOT / "images" / "runner" / "codex-wrapper.sh").read_text()
         self.assertNotRegex(wrapper, r'exec "\$real_codex"')
 
+    def test_ssh_shell_repositories_are_pinned(self) -> None:
+        script = (ROOT / "images" / "runner" / "shell" / "install.sh").read_text()
+        repositories = script.split("<<'EOF'\n", 1)[1].split("\nEOF\n", 1)[0].splitlines()
+        self.assertTrue(repositories)
+        for line in repositories:
+            with self.subTest(line=line):
+                self.assertRegex(line, r"^[\w.-]+/[\w.-]+ +[0-9a-f]{40} +\S+$")
+
     def test_render_has_no_secret_or_mutable_application_image(self) -> None:
         subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
         manifest = (ROOT / ".generated" / "ci" / "manifest.yaml").read_text()

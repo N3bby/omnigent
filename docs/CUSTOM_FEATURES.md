@@ -358,6 +358,20 @@ Any port a process in the Pod listens on is reachable, whether it listens on
 `localhost` or on all addresses. The short name needs MagicDNS on your device;
 the full name works either way.
 
+An SSH login gets zsh with oh-my-zsh, inside a tmux session named after the
+Pod's Tailscale name, such as `omnigent-e1dcab9b`. Detaching from tmux also
+ends the SSH session; run `detach-without-exit` to detach and keep it. Agents
+still use bash and their own tmux, so this setup doesn't affect them. Your
+shell history is lost when an idle Pod stops. `/home/omnigent`, where the
+agents' files are, is kept.
+
+This shell setup is one person's taste. To make it your own, change the files
+in `images/runner/shell/`: `install.sh` lists the packages and pinned
+repositories to install, and copies the config files into `/root`.
+`bash_profile` is what switches SSH logins from bash to zsh; to use another
+shell, point it at that one instead. To go without, delete that directory and
+the two lines that use it at the end of `images/runner/Dockerfile`.
+
 To set it up:
 
 1. In your [tailnet policy](https://login.tailscale.com/admin/acls), add a tag
@@ -414,6 +428,13 @@ again under the same name.
   still listed, Tailscale names the new node `omnigent-e1dcab9b-1`. The Pod
   logs that to `/run/omnigent-tailscale.log`, and the name in the composer
   won't reach it until the old node is gone.
+- **SSH shell** (`images/runner/shell/`): `install.sh` installs zsh, and puts
+  oh-my-zsh, the tmux config, tpm, its plugins and the catppuccin theme in
+  `/root`, at the commits pinned in the script. Tailscale SSH sets
+  `HOME` to `/root`, the home directory in root's passwd entry. Agents and Pod
+  startup use `HOME=/home/omnigent`, so they never read these files. Root's
+  login shell stays bash, because Pod startup relies on `/etc/profile.d`.
+  `/root/.bash_profile` switches to zsh only when `SSH_CONNECTION` is set.
 - **Server** (`images/server/patches/0003-tailscale-host.patch`): when it
   launches or wakes a session's Pod, it stores the same name, with
   `OMNIGENT_TAILSCALE_TAILNET` appended, in the `omnigent.tailscale_host`

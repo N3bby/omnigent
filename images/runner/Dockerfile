@@ -81,3 +81,8 @@ RUN set -eu; \
     rm -rf /var/lib/apt/lists/* /tmp/omnigent-patches; \
     python -m compileall -q -f "$site/omnigent/harnesses"; \
     python -c 'import omnigent.harnesses.claude_native.forwarder, omnigent.harnesses.codex_native.forwarder'
+
+# Shell setup for Tailscale SSH logins. It's personal taste: change
+# images/runner/shell/ to make it your own (see docs/CUSTOM_FEATURES.md).
+COPY shell/ /tmp/omnigent-shell/
+RUN /tmp/omnigent-shell/install.sh && rm -rf /tmp/omnigent-shell

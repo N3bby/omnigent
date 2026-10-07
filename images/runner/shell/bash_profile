@@ -1,0 +1,11 @@
+# Root's login shell stays bash, because Pod startup relies on a root login
+# shell reading /etc/profile.d. Tailscale SSH logins, the only shells that use
+# /root as HOME, switch to zsh. Agents and Pod startup use /home/omnigent.
+[ -f ~/.profile ] && . ~/.profile
+
+if [ -n "${SSH_CONNECTION:-}" ] && [[ $- == *i* ]] && command -v zsh >/dev/null; then
+    # tmux starts new panes with $SHELL.
+    SHELL=$(command -v zsh)
+    export SHELL
+    exec zsh -l
+fi
