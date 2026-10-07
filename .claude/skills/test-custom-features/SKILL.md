@@ -5,7 +5,7 @@ description: Test that this deployment's custom features on top of upstream Omni
 
 # Test the custom features
 
-`docs/CUSTOM_FEATURES.md` describes each feature. This skill tests them in
+`docs/features/` describes each feature, one page each. This skill tests them in
 layers, from cheap and offline to live, and ends with a report and a short
 checklist for the human. **Expected** values below are the results on Omnigent
 `v0.15.0` (2026-10-07). After an upgrade the same assertions should hold; when
@@ -82,7 +82,7 @@ kept the `.rej` files, one directory per patch. Patches in a set build on one
 another, so a FAIL marked `after an earlier failure in this set` may only be a
 knock-on of the first one; rebase them in order. For each failing patch, check
 whether upstream now ships the behaviour itself (then the patch can go, see
-"Keeping the patches up to date" in `docs/CUSTOM_FEATURES.md`) or needs
+"Keeping the patches up to date" in `docs/features/README.md`) or needs
 rebasing. Name the feature it belongs to in the report.
 
 For reference, on 2026-10-07 upstream `v0.18.0.dev20261007` failed
@@ -338,7 +338,7 @@ evidence (the command output line, the UI text, or the skip reason). Order
 failures first. Then:
 
 - for each FAIL: what you observed against what was expected, the likely
-  patch or file (see `docs/CUSTOM_FEATURES.md` "How it works"), and whether
+  patch or file (see "How it works" on the feature's page in `docs/features/`), and whether
   step 2 shows the patch no longer applies
 - step 2 results for any candidate upstream commit, separately
 - the sessions left for the user to delete

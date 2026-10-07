@@ -83,6 +83,6 @@ RUN set -eu; \
     python -c 'import omnigent.harnesses.claude_native.forwarder, omnigent.harnesses.codex_native.forwarder'
 
 # Shell setup for Tailscale SSH logins. It's personal taste: change
-# images/runner/shell/ to make it your own (see docs/CUSTOM_FEATURES.md).
+# images/runner/shell/ to make it your own (see docs/features/tailscale.md).
 COPY shell/ /tmp/omnigent-shell/
 RUN /tmp/omnigent-shell/install.sh && rm -rf /tmp/omnigent-shell
