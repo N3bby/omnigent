@@ -450,8 +450,10 @@ Hand these to the user; they need their own devices or VM access:
 11. **Codex theme:** in Settings → Appearance, pick **Codex** under Color
     theme. The sidebar turns flat grey without pink, and a session shows your
     messages in a grey bubble, a line after **Worked**, a round send button and
-    the working directory under the composer. Switch between light and dark
-    mode, then pick **Omnigent** again: the pink look is back.
+    the working directory under the composer, a few pixels clear of its
+    shadow. The labels in that bar, including the monospace Tailscale name,
+    sit on one baseline. Switch between light and dark mode, then pick
+    **Omnigent** again: the pink look is back.
 
 ## 7. Clean up
 

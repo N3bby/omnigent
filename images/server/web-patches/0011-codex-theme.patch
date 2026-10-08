@@ -7,17 +7,18 @@ regenerated from them. codexTheme.css changes the layout under
 [data-theme="codex"]: the native system font, a flat grey sidebar with
 compact rows, user messages in a borderless grey bubble, "Worked" folds
 followed by a hairline, flat code blocks without line numbers, a rounder
-composer with a round send button and the workspace bar beneath it, a
-terminal mark instead of the mascot on the new-session screen, and rounder
-menus. The other palettes are unchanged. Applies after
-0010-fast-mode-command-lifecycle.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+composer with a round send button and the workspace bar beneath it, its
+labels on one baseline whatever the fonts, a terminal mark instead of the
+mascot on the new-session screen, and rounder menus. The other palettes
+are unchanged. Applies after 0010-fast-mode-command-lifecycle.patch.
+Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/web/src/codexTheme.css b/web/src/codexTheme.css
 new file mode 100644
-index 0000000..34a26c4
+index 0000000..0e17133
 --- /dev/null
 +++ b/web/src/codexTheme.css
-@@ -0,0 +1,323 @@
+@@ -0,0 +1,339 @@
 +/* Codex palette: the layout and type changes that go beyond colour.
 + *
 + * themePalette.ts sets the colour tokens for `data-theme="codex"`; this file
@@ -260,7 +261,7 @@ index 0000000..34a26c4
 +[data-theme="codex"] .composer-workspace-surface,
 +:root:not(.dark)[data-theme="codex"] .composer-workspace-surface {
 +  height: 2rem;
-+  margin: 0.25rem 0.5rem 0;
++  margin: 0.5rem 0.5rem 0;
 +  padding: 0 0.25rem;
 +  border: 0;
 +  border-radius: 0;
@@ -269,6 +270,22 @@ index 0000000..34a26c4
 +
 +[data-theme="codex"] .composer-workspace-surface * {
 +  font-size: 12px;
++}
++
++/* Put every label in the bar on one baseline. Each chip centres its label's
++ * line box, but where the baseline falls in that box depends on the font, so
++ * the monospace Tailscale name sat off its neighbours. Trimming each label to
++ * end at its baseline and pinning that edge 4px below the bar's middle lines
++ * them up whatever the fonts. The 8px under it keeps room for descenders and
++ * the dotted underline, which a truncated label would clip. */
++@supports (text-box: trim-end text alphabetic) and (align-content: end) {
++  [data-theme="codex"] .composer-workspace-surface span:not(:has(*)) {
++    box-sizing: content-box;
++    height: 16px;
++    padding-block: 0 8px;
++    align-content: end;
++    text-box: trim-end text alphabetic;
++  }
 +}
 +
 +/* Except when it docks under queued messages, as in the default layout. */
