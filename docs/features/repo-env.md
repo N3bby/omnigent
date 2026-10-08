@@ -4,9 +4,33 @@ Give a repository its own environment variables, such as the token for a
 private npm registry. Sessions started on that repository get them in their
 agent's environment. Sessions on other repositories don't.
 
+![Settings → Repository variables, listing two repositories with their variable names and hidden values](../images/repo-env-settings.webp)
+
 ## Set it up
 
-From your machine, give the repository and a `.env` file:
+In Omnigent, go to **Settings → Repository variables** (admins only) and
+choose **Add repository**:
+
+1. Pick one of your GitHub repositories, or paste any clone URL. The page
+   shows the repository it will match, such as
+   `github.com/kunlabora/roadpass`.
+2. Add the variables one by one, or **Paste .env** to add `NAME=value`
+   lines at once.
+3. **Save.**
+
+![Adding a repository: the clone URL, the repository it matches, and two variables with hidden values](../images/repo-env-add.webp)
+
+Values are write-only. The page shows the names, never the values. To change
+a value, edit the repository with its pencil button and type a new one; a
+value left blank keeps what it was. The bin button removes all of the
+repository's variables.
+
+![Editing a repository: a blank value keeps the current one, a typed value replaces it](../images/repo-env-edit.webp)
+
+### From the command line
+
+The same variables can be set from your machine. The page and the command
+store them in the same place, so you can use either.
 
 ```bash
 mise run setup-repo-env kunlabora/roadpass ../roadpass-env/roadpass.env
@@ -26,17 +50,22 @@ mise run setup-repo-env kunlabora/roadpass
   blank lines, `export` and quotes around a value are fine. Nothing is
   expanded: `$HOME` stays `$HOME`.
 - **Running it again replaces** all the repository's variables with the new
-  ones.
+  ones, including any added on the page.
 - **To remove them:** `mise run setup-repo-env --delete kunlabora/roadpass`.
 - **To see which repositories have variables:** `mise run credential-status`.
   It lists names, never values.
 
 ## Using them
 
-Start a session on the repository with the repository picker. The agent has
-the variables in every command it runs, and so does anything those commands
-start, like `npm install`, `mise run dev` or `mise exec`. Tailscale SSH
-logins into the session get them too.
+Start a session on the repository with the repository picker. Once picked,
+the repository shows **2 variables** (or however many it has); click it to see
+their names.
+
+![The new-session form's repository list, with "2 variables" next to roadpass](../images/repo-env-new-session.webp)
+
+The agent has the variables in every command it runs, and so does anything
+those commands start, like `npm install`, `mise run dev` or `mise exec`.
+Tailscale SSH logins into the session get them too.
 
 For an npm registry, keep the token out of `.npmrc` and refer to the
 variable instead:
@@ -64,8 +93,11 @@ file doesn't exist, and mise skips it, so the session's variables stay.
   `HOME` and the like, and names starting with `OMNIGENT_`, `CLAUDE_`,
   `CODEX_`, `MISE_` or `TAILSCALE_`.
 - **Anyone who starts a session on the repository gets the variables.**
-  They belong to the repository, not to a user. See the
+  They belong to the repository, not to a user. Anyone signed in can see
+  their names in the new-session form. See the
   [threat model](../threat-model.md).
+- **Only admins manage them** on the page. Admins are the users with admin
+  rights in Omnigent, the same who see Members and Policies.
 
 ## Turning it off
 
@@ -79,10 +111,20 @@ There's nothing to turn off. A repository without variables starts as before.
   `omnigent-repo-env-kunlabora-roadpass-66ad182d`. The annotation
   `omnigent.dev/repository` holds the repository, such as
   `github.com/kunlabora/roadpass`.
+- **The Settings page** (`images/server/web-patches/0005-repo-variables-page.patch`)
+  calls `/v1/repo-env`, which `images/server/omnigent_repo_env_api.py`
+  serves (mounted by `images/server/patches/0006-repo-env-routes.patch`).
+  Listing returns names; saving sends each name with a new value, or `null`
+  to keep the current one, and replaces the Secret only if nobody changed it
+  since it was read. Every route but the names lookup is admin-only.
+- **Permissions:** for the page, the server may get, list and update Secrets
+  in `omnigent-sandboxes` (`kubernetes/platform/runner-rbac.yaml`). That's a
+  platform change, so it needs `mise run bootstrap` once.
 - **The name:** `images/server/omnigent_repo_env.py` turns any way of
   writing the repository into `host/owner/repo` in lower case. The name is a
   readable part plus a hash of that, so `my_repo` and `my.repo` don't share
-  one. `scripts/setup-repo-env` and the server use this same file.
+  one. `scripts/setup-repo-env`, the Pod and the page use this same file,
+  and the page repeats its rules in TypeScript to preview the match.
 - **The Pod** (`images/server/patches/0004-repo-env.patch`): when the
   server creates a runner Pod, it mounts the Secret for each of the session's
   repositories at `/run/omnigent/repo-env/<Secret name>/`, on the host

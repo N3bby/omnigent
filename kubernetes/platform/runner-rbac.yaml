@@ -23,9 +23,12 @@ rules:
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
+  # Launch-token Secrets, plus Settings → Repository variables, which lists,
+  # reads and replaces the omnigent-repo-env-* Secrets. RBAC can't limit list
+  # to those, so the server can read every Secret here.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [create, delete]
+    verbs: [create, delete, get, list, update]
   - apiGroups: [""]
     resources: [events]
     verbs: [list]

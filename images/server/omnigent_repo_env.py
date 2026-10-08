@@ -7,14 +7,19 @@ Pod, and the runner's agent wrappers export each file as a variable.
 
 The server image installs this file as the top-level ``omnigent_repo_env``
 module, and ``scripts/setup-repo-env`` imports it from here, so both sides
-derive the same Secret name from the same repository.
+derive the same Secret name from the same repository. The server's Settings
+page (``omnigent_repo_env_api``) reads and writes the Secrets with the
+functions at the end, which take a Kubernetes ``CoreV1Api``.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from datetime import timezone
+from typing import Any
 from urllib.parse import urlsplit
 
 NAMESPACE = "omnigent-sandboxes"
@@ -22,6 +27,8 @@ NAMESPACE = "omnigent-sandboxes"
 LABEL = "omnigent.dev/repo-env"
 # The normalised repository, e.g. github.com/kunlabora/roadpass.
 ANNOTATION = "omnigent.dev/repository"
+# Who last saved the variables from the Settings page.
+UPDATED_BY_ANNOTATION = "omnigent.dev/updated-by"
 # Each repository's Secret is mounted at MOUNT_ROOT/<Secret name>.
 MOUNT_ROOT = "/run/omnigent/repo-env"
 DEFAULT_HOST = "github.com"
@@ -176,3 +183,132 @@ def pod_volumes(urls: Iterable[str]) -> tuple[list[dict[str, object]], list[dict
         )
         mounts.append({"name": volume, "mountPath": f"{MOUNT_ROOT}/{name}", "readOnly": True})
     return volumes, mounts
+
+
+def _not_found(exc: Exception) -> bool:
+    return getattr(exc, "status", None) == 404
+
+
+def _updated_at(secret: Any) -> str | None:
+    """When the Secret last changed: its newest managed-fields entry."""
+    times = [entry.time for entry in secret.metadata.managed_fields or () if entry.time]
+    latest = max(times, default=secret.metadata.creation_timestamp)
+    if latest is None:
+        return None
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=timezone.utc)
+    return latest.isoformat()
+
+
+def _entry(secret: Any) -> dict[str, Any]:
+    annotations = secret.metadata.annotations or {}
+    return {
+        "repository": annotations.get(ANNOTATION, secret.metadata.name),
+        "names": sorted(secret.data or {}),
+        "updated_at": _updated_at(secret),
+        "updated_by": annotations.get(UPDATED_BY_ANNOTATION),
+    }
+
+
+def list_repositories(core: Any) -> list[dict[str, Any]]:
+    """
+    Every repository with variables, with the variables' names.
+
+    :param core: A Kubernetes ``CoreV1Api``.
+    :returns: e.g. ``[{"repository": "github.com/kunlabora/roadpass",
+        "names": ["GOVFLANDERS_NPM_TOKEN"], "updated_at": "2026-10-08T…",
+        "updated_by": "levi"}]``, sorted by repository. Never values.
+    """
+    secrets = core.list_namespaced_secret(NAMESPACE, label_selector=LABEL).items
+    return sorted((_entry(s) for s in secrets), key=lambda entry: entry["repository"])
+
+
+def variable_names(core: Any, key: str) -> list[str]:
+    """
+    The names of a repository's variables, or none.
+
+    :param core: A Kubernetes ``CoreV1Api``.
+    :param key: A key from :func:`repo_key`.
+    """
+    try:
+        secret = core.read_namespaced_secret(secret_name(key), NAMESPACE)
+    except Exception as exc:
+        if _not_found(exc):
+            return []
+        raise
+    return sorted(secret.data or {})
+
+
+def save_repository(
+    core: Any,
+    key: str,
+    variables: Mapping[str, str | None],
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    """
+    Store a repository's variables, replacing the ones it had.
+
+    A name without a value (``None``) keeps that variable's current value, so
+    a value never has to come back to the browser to be kept. Names that
+    aren't given are removed.
+
+    :param core: A Kubernetes ``CoreV1Api``.
+    :param key: A key from :func:`repo_key`.
+    :param variables: e.g. ``{"GOVFLANDERS_NPM_TOKEN": None, "NEW": "value"}``.
+    :param updated_by: The user saving them, kept as an annotation.
+    :returns: The repository's entry, as in :func:`list_repositories`.
+    :raises ValueError: On an empty set, a name :func:`check_variable_name`
+        rejects, or ``None`` for a variable the repository doesn't have.
+    """
+    if not variables:
+        raise ValueError("give at least one variable, or remove the repository")
+    for name in variables:
+        check_variable_name(name)
+    name = secret_name(key)
+    try:
+        current = core.read_namespaced_secret(name, NAMESPACE)
+    except Exception as exc:
+        if not _not_found(exc):
+            raise
+        current = None
+    current_data = (current.data or {}) if current is not None else {}
+    data: dict[str, str] = {}
+    for variable, value in variables.items():
+        if value is not None:
+            data[variable] = base64.b64encode(value.encode()).decode()
+        elif variable in current_data:
+            data[variable] = current_data[variable]
+        else:
+            raise ValueError(f"{variable} has no value yet")
+    annotations = {ANNOTATION: key}
+    if updated_by:
+        annotations[UPDATED_BY_ANNOTATION] = updated_by
+    metadata: dict[str, Any] = {
+        "name": name,
+        "namespace": NAMESPACE,
+        "labels": {LABEL: "true"},
+        "annotations": annotations,
+    }
+    body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": metadata, "data": data}
+    if current is None:
+        saved = core.create_namespaced_secret(NAMESPACE, body)
+    else:
+        # A save based on an older read fails with 409 instead of undoing
+        # someone else's change.
+        metadata["resourceVersion"] = current.metadata.resource_version
+        saved = core.replace_namespaced_secret(name, NAMESPACE, body)
+    return _entry(saved)
+
+
+def delete_repository(core: Any, key: str) -> None:
+    """
+    Remove a repository's variables. Removing what isn't there is fine.
+
+    :param core: A Kubernetes ``CoreV1Api``.
+    :param key: A key from :func:`repo_key`.
+    """
+    try:
+        core.delete_namespaced_secret(secret_name(key), NAMESPACE)
+    except Exception as exc:
+        if not _not_found(exc):
+            raise
