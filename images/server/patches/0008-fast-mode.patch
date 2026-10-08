@@ -1,0 +1,116 @@
+Accept, store and broadcast whether a native harness runs in fast mode.
+
+external_session_usage accepts data.fast_mode (a boolean), stores it as "true"
+or "false" in the omnigent.fast_mode session label for page loads, and adds it
+to the session.usage SSE event. Like a rate-limits-only post, a post carrying
+only fast_mode skips the cost roll-up. Pairs with the runner patch
+0004-fast-mode.patch and the web patch 0009-composer-fast-mode.patch. Applies
+after 0002-rate-limits.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index 03160a4..c006a12 100644
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -1734,6 +1734,28 @@ def _rate_limits_from_usage_data(
+     return {"windows": canonical}
+ 
+ 
++# Whether the session's native harness runs in fast mode (``/fast``), as
++# ``"true"`` or ``"false"``, read by the web composer on load; live updates
++# ride on ``session.usage``.
++_FAST_MODE_LABEL_KEY = "omnigent.fast_mode"
++
++
++def _fast_mode_from_usage_data(raw: object) -> bool | None:
++    """
++    Validate ``external_session_usage`` ``data.fast_mode``.
++
++    :param raw: ``True`` or ``False`` from a native forwarder, or ``None``.
++    :returns: The flag, or ``None`` when absent.
++    :raises OmnigentError: When present but not a boolean.
++    """
++    if raw is None or isinstance(raw, bool):
++        return raw
++    raise OmnigentError(
++        "external_session_usage data.fast_mode must be a boolean",
++        code=ErrorCode.INVALID_INPUT,
++    )
++
++
+ async def _persist_external_session_usage(
+     session_id: str,
+     body: SessionEventInput,
+@@ -1791,25 +1813,32 @@ async def _persist_external_session_usage(
+     )
+     has_cumulative = any(body.data.get(k) is not None for k in _CUMULATIVE_USAGE_KEYS)
+     rate_limits = _rate_limits_from_usage_data(body.data.get("rate_limits"))
++    fast_mode = _fast_mode_from_usage_data(body.data.get("fast_mode"))
+     if raw_tokens is None and raw_window is None and not has_cumulative:
+-        if rate_limits is None:
++        if rate_limits is None and fast_mode is None:
+             raise OmnigentError(
+                 "external_session_usage requires at least one of "
+                 "data.context_tokens, data.context_window, data.rate_limits, "
+-                "or a cumulative usage field",
++                "data.fast_mode, or a cumulative usage field",
+                 code=ErrorCode.INVALID_INPUT,
+             )
+-        # A subscription-window refresh touches no context or cost state, so
+-        # it skips the usage persist and subtree roll-up below.
+-        await asyncio.to_thread(
+-            conversation_store.set_labels,
+-            session_id,
+-            {_RATE_LIMITS_LABEL_KEY: json.dumps(rate_limits, separators=(",", ":"))},
+-        )
++        # A subscription-window or fast-mode refresh touches no context or
++        # cost state, so it skips the usage persist and subtree roll-up below.
++        status_labels: dict[str, str] = {}
++        if rate_limits is not None:
++            status_labels[_RATE_LIMITS_LABEL_KEY] = json.dumps(
++                rate_limits, separators=(",", ":")
++            )
++        if fast_mode is not None:
++            status_labels[_FAST_MODE_LABEL_KEY] = "true" if fast_mode else "false"
++        await asyncio.to_thread(conversation_store.set_labels, session_id, status_labels)
+         session_stream.publish(
+             session_id,
+             SessionUsageEvent(
+-                type="session.usage", conversation_id=session_id, rate_limits=rate_limits
++                type="session.usage",
++                conversation_id=session_id,
++                rate_limits=rate_limits,
++                fast_mode=fast_mode,
+             ).model_dump(exclude_none=True),
+         )
+         return None
+@@ -1852,6 +1881,8 @@ async def _persist_external_session_usage(
+         label_updates[_LAST_CONTEXT_WINDOW_LABEL_KEY] = str(raw_window)
+     if rate_limits is not None:
+         label_updates[_RATE_LIMITS_LABEL_KEY] = json.dumps(rate_limits, separators=(",", ":"))
++    if fast_mode is not None:
++        label_updates[_FAST_MODE_LABEL_KEY] = "true" if fast_mode else "false"
+     await asyncio.to_thread(
+         conversation_store.set_labels,
+         session_id,
+@@ -1892,6 +1923,8 @@ async def _persist_external_session_usage(
+         event_payload["usage_by_model"] = usage_by_model
+     if rate_limits is not None:
+         event_payload["rate_limits"] = rate_limits
++    if fast_mode is not None:
++        event_payload["fast_mode"] = fast_mode
+     event = SessionUsageEvent(**event_payload)
+     session_stream.publish(session_id, event.model_dump(exclude_none=True))
+     # This session's usage also moves its ANCESTORS' subtree cost (its spend
+diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
+index 3b40c79..01f0fdf 100644
+--- a/omnigent/server/schemas.py
++++ b/omnigent/server/schemas.py
+@@ -3176,6 +3176,8 @@ class SessionUsageEvent(_SSEEventBase):
+     # Subscription usage windows from a native harness, e.g. ``{"windows":
+     # [{"window_minutes": 300, "used_percent": 23.0, "resets_at": 1790370000}]}``.
+     rate_limits: dict[str, list[dict[str, float | int | None]]] | None = None
++    # Whether the native harness runs in fast mode (Claude's or Codex's ``/fast``).
++    fast_mode: bool | None = None
+ 
+ 
+ class SessionTailscaleEvent(_SSEEventBase):

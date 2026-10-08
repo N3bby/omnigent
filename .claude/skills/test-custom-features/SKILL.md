@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the swipe menu on touch devices, the runner description agents get, and repository variables. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the swipe menu on touch devices, the runner description agents get, and repository variables. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -67,6 +67,7 @@ upstream: <the pinned omnigent_commit>
 PASS  images/runner/patches/0001-rate-limits.patch
 PASS  images/runner/patches/0002-git-helper-python.patch
 PASS  images/runner/patches/0003-claude-bypass-switch.patch
+PASS  images/runner/patches/0004-fast-mode.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -75,6 +76,7 @@ PASS  images/server/patches/0004-repo-env.patch
 PASS  images/server/patches/0005-runner-python.patch
 PASS  images/server/patches/0006-repo-env-routes.patch
 PASS  images/server/patches/0007-claude-bypass-switch.patch
+PASS  images/server/patches/0008-fast-mode.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -84,6 +86,7 @@ PASS  images/server/web-patches/0005-repo-variables-page.patch
 PASS  images/server/web-patches/0006-mobile-repo-picker.patch
 PASS  images/server/web-patches/0007-sidebar-swipe-menu.patch
 PASS  images/server/web-patches/0008-claude-bypass-picker.patch
+PASS  images/server/web-patches/0009-composer-fast-mode.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -379,6 +382,13 @@ Hand these to the user; they need their own devices or VM access:
    chip, then **Choose a repository…**. The whole picker, search field
    included, is on screen and the keyboard stays closed. Tapping the search
    field opens the keyboard, and typing filters the list.
+10. **Fast mode:** it changes how fast and how expensively the agent runs, so
+    it's left to you. In a Claude session, send `/fast`. The chat shows the
+    command with `Fast mode ON`, or why fast mode isn't available for the
+    model, and a lightning bolt appears left of the model selector; hovering
+    it says `Fast mode is on. Send /fast to turn it off.` Send `/fast off`:
+    the bolt goes. In a Codex session, `/fast` and `/fast off` add and remove
+    the bolt the same way, without a reply.
 
 ## 7. Clean up
 
