@@ -45,6 +45,7 @@ COPY --chmod=0755 containers/podman-service.sh /usr/local/bin/omnigent-podman-se
 COPY --chmod=0755 containers/docker-compose.sh /usr/local/bin/docker-compose
 COPY containers/podman-service-profile.sh /etc/profile.d/omnigent-podman-service.sh
 COPY --chmod=0755 tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailscale
+COPY --chmod=0755 tailscale/tailscale-logout.sh /usr/local/bin/omnigent-tailscale-logout
 COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
 COPY mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh
 # Claude Code's managed instructions; Codex gets the same file as AGENTS.md.

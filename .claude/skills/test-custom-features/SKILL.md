@@ -171,6 +171,7 @@ PASS  name matches this Pod's host id (omnigent-managed-<8 hex>-<suffix>)
 PASS  advertises tags tag:omnigent-runner
 PASS  Tailscale SSH enabled
 PASS  node state is on the home volume
+PASS  logs out when the Pod stops
 == Runtimes from mise
 PASS  login shells put mise shims first on PATH
 PASS  Claude is told to use mise
@@ -313,7 +314,10 @@ Hand these to the user; they need their own devices or VM access:
    tapping the usage numbers opens the bars.
 4. **Idle stop and wake:** after 1 idle hour, `mise run status` shows the
    session `Ready=False`, `SandboxExpired`. Sending a message wakes it with
-   its repository, uncommitted changes and Tailscale name intact.
+   its repository, uncommitted changes and Tailscale name intact. The
+   session's node leaves the
+   [Tailscale machine list](https://login.tailscale.com/admin/machines) as
+   the Pod stops, not up to an hour later.
 5. **After a k3s upgrade:** `scripts/check-userns` on the VM. Its summary
    should show `user namespace active`, `apt install`, `podman run` and the
    published-port lines as `PASS`.
