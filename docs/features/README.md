@@ -18,6 +18,7 @@ where you can.
 | [Sessions on your tailnet](tailscale.md) | SSH into a session, or open its dev servers, from your own devices | Optional setup step |
 | [Open in JetBrains Gateway](jetbrains-gateway.md) | Open the session's repository in IntelliJ | Needs Tailscale |
 | [No Share button](no-share-button.md) | Sessions can't be shared from the web UI | No |
+| [Codex theme](codex-theme.md) | A colour theme that looks like the Codex app, beyond just the colours | It's off until you pick it in Settings → Appearance |
 | [Swipe for a session's menu](session-swipe-menu.md) | On a phone, swipe a session left for its menu; holding it down only moves it | No |
 | [Repository variables](repo-env.md) | A repository's own environment variables, such as an npm token, in its sessions | Optional setup step |
 | [Agents know where they're running](runner-instructions.md) | Agents know what the session can do, link files you can open, and give tailnet addresses | You can change the text |

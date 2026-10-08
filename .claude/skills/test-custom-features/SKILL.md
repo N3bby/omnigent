@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the swipe menu on touch devices, the runner description agents get, and repository variables. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the swipe menu on touch devices, the Codex theme, the runner description agents get, and repository variables. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -90,6 +90,7 @@ PASS  images/server/web-patches/0007-sidebar-swipe-menu.patch
 PASS  images/server/web-patches/0008-claude-bypass-picker.patch
 PASS  images/server/web-patches/0009-composer-fast-mode.patch
 PASS  images/server/web-patches/0010-fast-mode-command-lifecycle.patch
+PASS  images/server/web-patches/0011-codex-theme.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -446,6 +447,11 @@ Hand these to the user; they need their own devices or VM access:
     stays idle after the command, with no stuck “Pondering…” indicator or
     pending user bubble. Repeat during a response: it continues normally,
     and `/fast` bypasses the message queue.
+11. **Codex theme:** in Settings → Appearance, pick **Codex** under Color
+    theme. The sidebar turns flat grey without pink, and a session shows your
+    messages in a grey bubble, a line after **Worked**, a round send button and
+    the working directory under the composer. Switch between light and dark
+    mode, then pick **Omnigent** again: the pink look is back.
 
 ## 7. Clean up
 
