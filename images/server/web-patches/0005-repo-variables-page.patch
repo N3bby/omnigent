@@ -420,10 +420,10 @@ index 0000000..d44da2d
 +}
 diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
 new file mode 100644
-index 0000000..1cbaeaa
+index 0000000..bac8071
 --- /dev/null
 +++ b/web/src/pages/RepoVariablesPage.test.tsx
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,196 @@
 +// Tests for the admin Repository variables page. The identity module's
 +// authenticatedFetch is replaced by an in-memory /v1/repo-env, so the page,
 +// its react-query hooks and the fetch helpers run as they do in the browser.
@@ -536,7 +536,9 @@ index 0000000..1cbaeaa
 +  it("keeps blank values and replaces typed ones when editing", async () => {
 +    renderPage();
 +    const card = await screen.findByRole("article", { name: ROADPASS });
-+    fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++    );
 +    fireEvent.change(within(card).getByLabelText("Value for NPM_CONFIG_REGISTRY"), {
 +      target: { value: "https://new" },
 +    });
@@ -620,10 +622,10 @@ index 0000000..1cbaeaa
 +});
 diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
 new file mode 100644
-index 0000000..7a8fb5c
+index 0000000..f11db85
 --- /dev/null
 +++ b/web/src/pages/RepoVariablesPage.tsx
-@@ -0,0 +1,650 @@
+@@ -0,0 +1,656 @@
 +/**
 + * Admin page for repository variables (``/settings/repo-env``), added by this
 + * deployment. Rendered as a Settings sub-category, next to Members and
@@ -874,9 +876,15 @@ index 0000000..7a8fb5c
 +        </span>
 +        {!editing && (
 +          <div className="flex gap-1">
-+            <Button variant="ghost" size="sm" onClick={onEdit} componentId="settings.repo_env.edit">
++            <Button
++              variant="ghost"
++              size="icon-sm"
++              onClick={onEdit}
++              aria-label={`Edit variables for ${path}`}
++              title="Edit"
++              componentId="settings.repo_env.edit"
++            >
 +              <PencilIcon className="ui-icon" />
-+              Edit
 +            </Button>
 +            <Button
 +              variant="ghost"

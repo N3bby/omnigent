@@ -21,8 +21,9 @@ choose **Add repository**:
 ![Adding a repository: the clone URL, the repository it matches, and two variables with hidden values](../images/repo-env-add.webp)
 
 Values are write-only. The page shows the names, never the values. To change
-a value, **Edit** the repository and type a new one; a value left blank
-keeps what it was. **Remove** deletes all of the repository's variables.
+a value, edit the repository with its pencil button and type a new one; a
+value left blank keeps what it was. The bin button removes all of the
+repository's variables.
 
 ![Editing a repository: a blank value keeps the current one, a typed value replaces it](../images/repo-env-edit.webp)
 
