@@ -69,11 +69,14 @@ PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
 PASS  images/server/patches/0003-tailscale-host.patch
+PASS  images/server/patches/0004-repo-env.patch
+PASS  images/server/patches/0006-repo-env-routes.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
 PASS  images/server/web-patches/0003-composer-gateway-link.patch
 PASS  images/server/web-patches/0004-remove-share-button.patch
+PASS  images/server/web-patches/0005-repo-variables-page.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -291,6 +294,7 @@ settings.
 | Open in Gateway | Next to it, a link **Open in Gateway** titled `Open <workspace> in JetBrains Gateway on <full Tailscale name>`. If the snapshot exposes its URL, it is `jetbrains-gateway://connect#type=ssh&host=<full name>&port=22&user=root&projectPath=<workspace, URL-encoded>&idePath=%2Fopt%2Fjetbrains%2Fintellij&deploy=false`. |
 | No Share button | No **Share** in the chat header or its menu. Open a session row's menu (⋯) in the sidebar: it has **Fork** but no **Share**. Close the menu with Escape. |
 | Model picker | Start a new session (don't send it) with the Kubernetes sandbox and Claude Code: the model menu lists models, such as Opus and Sonnet, and never says `Models unavailable`. Repeat for Codex. Then discard it. |
+| Repository variables page | If you're an admin, Settings has **Repository variables** under Admin. It lists repositories with their variable names and `••••••••`, never a value. Don't add, edit or remove anything. Not an admin: record SKIP. |
 | GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository picker lists repositories. If it isn't connected, record SKIP (optional setup). |
 
 Also check that `feature-check claude` from 5a now shows usage numbers in its
@@ -334,6 +338,12 @@ Hand these to the user; they need their own devices or VM access:
    agent prints `ok` for `echo $FEATURE_CHECK`, and a session on another
    repository prints nothing. Then `mise run setup-repo-env --delete
    <owner/repo>`.
+8. **Repository variables page:** in Settings → Repository variables, add a
+   repository with no variables yet and `FEATURE_CHECK=page`. Picking it in
+   a new session shows **1 variable**, and the session's agent prints `page`.
+   Edit it, leave the value blank and save: the agent of a new session still
+   prints `page`. Then remove it. A `may not manage Secrets` error means the
+   platform wasn't bootstrapped after this feature was deployed.
 
 ## 7. Clean up
 

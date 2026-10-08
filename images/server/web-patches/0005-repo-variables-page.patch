@@ -1,0 +1,1437 @@
+Add Settings → Admin → Repository variables, and show them in the new-session form.
+
+Admins add a repository, by GitHub repository or clone URL, and give it
+NAME=value pairs, typed or pasted as a .env. Values are write-only: the page
+lists names, and editing keeps a value whose field is left blank. The page
+calls /v1/repo-env (images/server/omnigent_repo_env_api.py, mounted by
+0006-repo-env-routes.patch). A repository picked in the new-session form shows
+"N variables", which lists the names on click.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0004.
+
+diff --git a/web/src/components/RepoEnvBadge.test.tsx b/web/src/components/RepoEnvBadge.test.tsx
+new file mode 100644
+index 0000000..e62b78f
+--- /dev/null
++++ b/web/src/components/RepoEnvBadge.test.tsx
+@@ -0,0 +1,45 @@
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { RepoEnvBadge } from "./RepoEnvBadge";
++import * as identity from "@/lib/identity";
++
++vi.mock("@/lib/identity", () => ({ authenticatedFetch: vi.fn() }));
++
++function renderBadge(url: string, names: string[]) {
++  vi.mocked(identity.authenticatedFetch).mockResolvedValue(
++    new Response(JSON.stringify({ repository: "github.com/kunlabora/roadpass", names })),
++  );
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(
++    <QueryClientProvider client={client}>
++      <RepoEnvBadge url={url} />
++    </QueryClientProvider>,
++  );
++}
++
++afterEach(() => {
++  cleanup();
++  vi.mocked(identity.authenticatedFetch).mockReset();
++});
++
++describe("RepoEnvBadge", () => {
++  it("shows how many variables a repository has, and their names on click", async () => {
++    renderBadge("https://github.com/kunlabora/roadpass.git", ["NPM_CONFIG_REGISTRY", "TOKEN"]);
++    fireEvent.click(await screen.findByRole("button", { name: "2 variables for this repository" }));
++    expect(await screen.findByText("NPM_CONFIG_REGISTRY")).toBeInTheDocument();
++    expect(vi.mocked(identity.authenticatedFetch).mock.calls[0][0]).toBe(
++      "/v1/repo-env/names?repository=https%3A%2F%2Fgithub.com%2Fkunlabora%2Froadpass.git",
++    );
++  });
++
++  it("shows nothing without variables, and asks nothing for a non-repository", async () => {
++    const { container } = renderBadge("https://github.com/a/b", []);
++    await vi.waitFor(() => expect(identity.authenticatedFetch).toHaveBeenCalled());
++    expect(container).toBeEmptyDOMElement();
++    cleanup();
++    vi.mocked(identity.authenticatedFetch).mockReset();
++    renderBadge("not a repo", []);
++    expect(identity.authenticatedFetch).not.toHaveBeenCalled();
++  });
++});
+diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
+new file mode 100644
+index 0000000..829300f
+--- /dev/null
++++ b/web/src/components/RepoEnvBadge.tsx
+@@ -0,0 +1,43 @@
++/**
++ * "2 variables" next to a repository in the new-session form, when the
++ * repository has variables (added by this deployment). Clicking it lists
++ * their names; values never reach the browser. Renders nothing for a
++ * repository without variables, or while the names load.
++ */
++
++import { VariableIcon } from "lucide-react";
++import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
++import { useRepoEnvNames } from "@/hooks/useRepoEnv";
++
++export function RepoEnvBadge({ url }: { url: string }) {
++  const { data: names } = useRepoEnvNames(url);
++  if (!names?.length) return null;
++  const label = `${names.length} variable${names.length === 1 ? "" : "s"}`;
++  return (
++    <Popover>
++      <PopoverTrigger asChild>
++        <button
++          type="button"
++          className="flex shrink-0 items-center gap-1 rounded-sm px-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
++          aria-label={`${label} for this repository`}
++          data-testid="repo-env-badge"
++        >
++          <VariableIcon className="size-3.5" />
++          {label}
++        </button>
++      </PopoverTrigger>
++      <PopoverContent align="end" className="w-64 p-3">
++        <p className="mb-2 text-sm text-muted-foreground">
++          The agent gets these in its environment:
++        </p>
++        <ul className="flex flex-col gap-0.5">
++          {names.map((name) => (
++            <li key={name} className="truncate font-mono text-sm">
++              {name}
++            </li>
++          ))}
++        </ul>
++      </PopoverContent>
++    </Popover>
++  );
++}
+diff --git a/web/src/hooks/useRepoEnv.ts b/web/src/hooks/useRepoEnv.ts
+new file mode 100644
+index 0000000..54f384a
+--- /dev/null
++++ b/web/src/hooks/useRepoEnv.ts
+@@ -0,0 +1,57 @@
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import {
++  deleteRepoEnv,
++  fetchRepoEnv,
++  fetchRepoEnvNames,
++  repoKey,
++  saveRepoEnv,
++} from "@/lib/repoEnv";
++
++const LIST_KEY = ["repo-env"];
++const NAMES_KEY = "repo-env-names";
++
++/** Every repository with variables (admin only). */
++export function useRepoEnv() {
++  return useQuery({ queryKey: LIST_KEY, queryFn: fetchRepoEnv, staleTime: 5_000 });
++}
++
++/**
++ * The names of the variables sessions on ``url`` get, for the new-session
++ * form. Empty for a URL that isn't a repository.
++ */
++export function useRepoEnvNames(url: string) {
++  const key = repoKey(url);
++  return useQuery({
++    queryKey: [NAMES_KEY, key],
++    queryFn: () => fetchRepoEnvNames(url),
++    enabled: key !== null,
++    staleTime: 60_000,
++  });
++}
++
++function useInvalidate() {
++  const queryClient = useQueryClient();
++  return () => {
++    void queryClient.invalidateQueries({ queryKey: LIST_KEY });
++    void queryClient.invalidateQueries({ queryKey: [NAMES_KEY] });
++  };
++}
++
++/** Store a repository's variables; null keeps a variable's current value. */
++export function useSaveRepoEnv() {
++  const invalidate = useInvalidate();
++  return useMutation({
++    mutationFn: (args: { repository: string; variables: Record<string, string | null> }) =>
++      saveRepoEnv(args.repository, args.variables),
++    onSuccess: invalidate,
++  });
++}
++
++/** Remove a repository's variables. */
++export function useDeleteRepoEnv() {
++  const invalidate = useInvalidate();
++  return useMutation({
++    mutationFn: (repository: string) => deleteRepoEnv(repository),
++    onSuccess: invalidate,
++  });
++}
+diff --git a/web/src/lib/repoEnv.test.ts b/web/src/lib/repoEnv.test.ts
+new file mode 100644
+index 0000000..a4d3347
+--- /dev/null
++++ b/web/src/lib/repoEnv.test.ts
+@@ -0,0 +1,66 @@
++// repoKey and variableNameError mirror omnigent_repo_env.py; these cases are
++// the ones its tests use, so the page's preview matches what the server stores.
++
++import { describe, expect, it } from "vitest";
++import { parseEnv, repoKey, variableNameError } from "./repoEnv";
++
++describe("repoKey", () => {
++  it("gives every way of writing a repository one key", () => {
++    for (const url of [
++      "https://github.com/kunlabora/roadpass.git",
++      "https://github.com/kunlabora/roadpass",
++      "https://github.com/kunlabora/roadpass/",
++      "git@github.com:kunlabora/roadpass.git",
++      "ssh://git@github.com:22/kunlabora/roadpass.git",
++      "https://x-access-token:secret@github.com/kunlabora/roadpass.git",
++      "https://github.com/Kunlabora/RoadPass.git",
++      "kunlabora/roadpass",
++      "github.com/kunlabora/roadpass",
++    ]) {
++      expect(repoKey(url), url).toBe("github.com/kunlabora/roadpass");
++    }
++  });
++
++  it("keeps other hosts and subgroups", () => {
++    expect(repoKey("https://gitlab.com/group/sub/repo.git")).toBe("gitlab.com/group/sub/repo");
++    expect(repoKey("git@ghe.example.com:org/repo.git")).toBe("ghe.example.com/org/repo");
++  });
++
++  it("rejects what isn't a repository", () => {
++    for (const text of ["", "roadpass", "ftp://github.com/a/b", "https://github.com/a", "a/../b"]) {
++      expect(repoKey(text), text).toBeNull();
++    }
++  });
++});
++
++describe("variableNameError", () => {
++  it("allows ordinary names and rejects bad or reserved ones", () => {
++    expect(variableNameError("GOVFLANDERS_NPM_TOKEN")).toBeNull();
++    expect(variableNameError("1TOKEN")).toMatch(/letters, digits/);
++    expect(variableNameError("MY-TOKEN")).toMatch(/letters, digits/);
++    expect(variableNameError("PATH")).toBe("PATH is reserved for the runner.");
++    expect(variableNameError("CLAUDE_CONFIG_DIR")).toBe(
++      "CLAUDE_CONFIG_DIR is reserved for the runner.",
++    );
++  });
++});
++
++describe("parseEnv", () => {
++  it("parses a .env file without expanding", () => {
++    expect(
++      parseEnv("# comment\n\nexport TOKEN='a b'\nURL=\"https://x\"\nRAW=$HOME\nEMPTY=\n"),
++    ).toEqual({
++      variables: [
++        { name: "TOKEN", value: "a b" },
++        { name: "URL", value: "https://x" },
++        { name: "RAW", value: "$HOME" },
++        { name: "EMPTY", value: "" },
++      ],
++      badLines: [],
++    });
++  });
++
++  it("reports lines that aren't NAME=value", () => {
++    expect(parseEnv("A=1\njust text\n=nameless\n").badLines).toEqual([2, 3]);
++  });
++});
+diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
+new file mode 100644
+index 0000000..d44da2d
+--- /dev/null
++++ b/web/src/lib/repoEnv.ts
+@@ -0,0 +1,169 @@
++/**
++ * Repository variables: environment variables for sessions started on a
++ * repository (``/v1/repo-env``, added by this deployment).
++ *
++ * Values only go to the server. Listing returns names, and saving a name
++ * with ``null`` keeps its current value. ``repoKey`` and ``checkVariableName``
++ * mirror ``omnigent_repo_env.py`` so the page can preview the key a URL
++ * matches and flag names before saving; the server checks again.
++ */
++
++import { authenticatedFetch } from "./identity";
++
++/** One repository with variables, from ``GET /v1/repo-env``. */
++export interface RepoEnvEntry {
++  /** ``host/owner/repo`` in lower case, e.g. ``"github.com/kunlabora/roadpass"``. */
++  repository: string;
++  /** Variable names, sorted. Never values. */
++  names: string[];
++  /** ISO-8601 time of the last change, or null. */
++  updated_at: string | null;
++  /** Who last saved them from this page, or null (e.g. the CLI). */
++  updated_by: string | null;
++}
++
++const DEFAULT_HOST = "github.com";
++const SEGMENT = /^[a-z0-9._-]+$/;
++const SCP_URL = /^(?:[^@/]+@)?([^:/]+):([^/].*)$/;
++const VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
++const RESERVED_NAMES = new Set(["HOME", "PATH", "SHELL", "USER", "LOGNAME", "PWD", "TMPDIR"]);
++const RESERVED_PREFIXES = ["OMNIGENT_", "CLAUDE_", "CODEX_", "MISE_", "TAILSCALE_"];
++
++/**
++ * Normalise a repository to ``host/owner/repo``, as the server does.
++ *
++ * @returns e.g. ``"github.com/kunlabora/roadpass"``, or null when the text
++ *   isn't a clone URL or ``owner/repo``.
++ */
++export function repoKey(repository: string): string | null {
++  const text = repository.trim();
++  let host: string;
++  let path: string;
++  if (text.includes("://")) {
++    let url: URL;
++    try {
++      url = new URL(text);
++    } catch {
++      return null;
++    }
++    if (!["http:", "https:", "ssh:", "git:"].includes(url.protocol)) return null;
++    host = url.hostname;
++    path = url.pathname;
++  } else {
++    const scp = SCP_URL.exec(text);
++    if (scp) {
++      host = scp[1];
++      path = scp[2];
++    } else {
++      const segments = text.replace(/^\/+|\/+$/g, "").split("/");
++      if (segments.length >= 3 && segments[0].includes(".")) {
++        host = segments[0];
++        path = segments.slice(1).join("/");
++      } else {
++        host = DEFAULT_HOST;
++        path = text;
++      }
++    }
++  }
++  path = path.replace(/^\/+|\/+$/g, "").toLowerCase();
++  if (path.endsWith(".git")) path = path.slice(0, -".git".length);
++  host = host.toLowerCase();
++  const segments = path.split("/");
++  if (!host || !SEGMENT.test(host)) return null;
++  if (segments.length < 2 || !segments.every((s) => SEGMENT.test(s) && s !== "." && s !== "..")) {
++    return null;
++  }
++  return `${host}/${segments.join("/")}`;
++}
++
++/** Why a variable name can't be used, or null when it can. */
++export function variableNameError(name: string): string | null {
++  if (!VARIABLE_NAME.test(name)) {
++    return "Use letters, digits and underscores, not starting with a digit.";
++  }
++  if (RESERVED_NAMES.has(name) || RESERVED_PREFIXES.some((p) => name.startsWith(p))) {
++    return `${name} is reserved for the runner.`;
++  }
++  return null;
++}
++
++/**
++ * Parse ``NAME=value`` lines, as in a ``.env`` file, like the CLI does.
++ * Blank lines and ``#`` comments are skipped, ``export`` is allowed and one
++ * pair of matching quotes around a value is removed. Nothing is expanded.
++ *
++ * @returns The pairs in order, and the lines that aren't ``NAME=value``.
++ */
++export function parseEnv(text: string): {
++  variables: { name: string; value: string }[];
++  badLines: number[];
++} {
++  const variables: { name: string; value: string }[] = [];
++  const badLines: number[] = [];
++  text.split(/\r?\n/).forEach((raw, index) => {
++    let line = raw.trim();
++    if (!line || line.startsWith("#")) return;
++    if (line.startsWith("export ")) line = line.slice("export ".length).trimStart();
++    const sep = line.indexOf("=");
++    if (sep < 1) {
++      badLines.push(index + 1);
++      return;
++    }
++    const name = line.slice(0, sep).trim();
++    let value = line.slice(sep + 1).trim();
++    if (value.length >= 2 && value[0] === value[value.length - 1] && `'"`.includes(value[0])) {
++      value = value.slice(1, -1);
++    }
++    variables.push({ name, value });
++  });
++  return { variables, badLines };
++}
++
++async function errorMessage(res: Response): Promise<string> {
++  const body = await res.json().catch(() => ({}));
++  return body?.error?.message ?? `${res.status} ${res.statusText}`;
++}
++
++/** Every repository with variables (admin only). */
++export async function fetchRepoEnv(): Promise<RepoEnvEntry[]> {
++  const res = await authenticatedFetch("/v1/repo-env");
++  if (!res.ok) throw new Error(await errorMessage(res));
++  return ((await res.json()) as { data: RepoEnvEntry[] }).data;
++}
++
++/** The names of one repository's variables, for anyone signed in. */
++export async function fetchRepoEnvNames(repository: string): Promise<string[]> {
++  const res = await authenticatedFetch(
++    `/v1/repo-env/names?repository=${encodeURIComponent(repository)}`,
++  );
++  if (!res.ok) throw new Error(await errorMessage(res));
++  return ((await res.json()) as { names: string[] }).names;
++}
++
++/**
++ * Store a repository's variables, replacing what it had (admin only).
++ *
++ * @param variables Each name's new value, or null to keep the current one.
++ *   Names left out are removed.
++ */
++export async function saveRepoEnv(
++  repository: string,
++  variables: Record<string, string | null>,
++): Promise<RepoEnvEntry> {
++  const res = await authenticatedFetch("/v1/repo-env", {
++    method: "PUT",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify({ repository, variables }),
++  });
++  if (!res.ok) throw new Error(await errorMessage(res));
++  return (await res.json()) as RepoEnvEntry;
++}
++
++/** Remove a repository's variables (admin only). */
++export async function deleteRepoEnv(repository: string): Promise<void> {
++  const res = await authenticatedFetch(
++    `/v1/repo-env?repository=${encodeURIComponent(repository)}`,
++    { method: "DELETE" },
++  );
++  if (!res.ok) throw new Error(await errorMessage(res));
++}
+diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
+new file mode 100644
+index 0000000..1cbaeaa
+--- /dev/null
++++ b/web/src/pages/RepoVariablesPage.test.tsx
+@@ -0,0 +1,194 @@
++// Tests for the admin Repository variables page. The identity module's
++// authenticatedFetch is replaced by an in-memory /v1/repo-env, so the page,
++// its react-query hooks and the fetch helpers run as they do in the browser.
++
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { RepoVariablesPage } from "./RepoVariablesPage";
++import * as identity from "@/lib/identity";
++
++vi.mock("@/lib/CapabilitiesContext", () => ({
++  useServerInfo: () => ({ login_url: "/login", single_user: false, enabled_connections: [] }),
++}));
++vi.mock("@/lib/identity", () => ({
++  resolveIdentity: vi.fn(),
++  getCurrentIsAdmin: vi.fn(),
++  authenticatedFetch: vi.fn(),
++}));
++vi.mock("@/components/ui/toast", () => ({ showToast: vi.fn() }));
++
++const ROADPASS = "github.com/kunlabora/roadpass";
++
++// What the fake server holds: repository → name → value.
++let stored: Record<string, Record<string, string>>;
++let requests: { method: string; url: string; body?: unknown }[];
++
++function json(status: number, body: unknown): Response {
++  return new Response(JSON.stringify(body), {
++    status,
++    headers: { "Content-Type": "application/json" },
++  });
++}
++
++function entry(repository: string) {
++  return {
++    repository,
++    names: Object.keys(stored[repository]).sort(),
++    updated_at: new Date(Date.now() - 3 * 86_400_000).toISOString(),
++    updated_by: "levi",
++  };
++}
++
++async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
++  const url = String(input);
++  const method = init?.method ?? "GET";
++  const body = init?.body ? JSON.parse(String(init.body)) : undefined;
++  requests.push({ method, url, body });
++  if (method === "GET" && url === "/v1/repo-env") {
++    return json(200, { object: "list", data: Object.keys(stored).sort().map(entry) });
++  }
++  if (method === "PUT") {
++    const current = stored[body.repository] ?? {};
++    const next: Record<string, string> = {};
++    for (const [name, value] of Object.entries(body.variables as Record<string, string | null>)) {
++      if (value === null && !(name in current)) {
++        return json(400, { error: { message: `${name} has no value yet` } });
++      }
++      next[name] = value ?? current[name];
++    }
++    stored[body.repository] = next;
++    return json(200, entry(body.repository));
++  }
++  if (method === "DELETE") {
++    const repository = new URL(url, "http://x").searchParams.get("repository")!;
++    stored = Object.fromEntries(Object.entries(stored).filter(([key]) => key !== repository));
++    return json(200, { repository, deleted: true });
++  }
++  return json(404, { error: { message: "not found" } });
++}
++
++function renderPage() {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(
++    <QueryClientProvider client={client}>
++      <RepoVariablesPage />
++    </QueryClientProvider>,
++  );
++}
++
++beforeEach(() => {
++  stored = {
++    [ROADPASS]: { GOVFLANDERS_NPM_TOKEN: "secret-token", NPM_CONFIG_REGISTRY: "https://r" },
++  };
++  requests = [];
++  vi.mocked(identity.resolveIdentity).mockResolvedValue("levi");
++  vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(true);
++  vi.mocked(identity.authenticatedFetch).mockImplementation(fakeFetch);
++});
++
++afterEach(cleanup);
++
++describe("RepoVariablesPage", () => {
++  it("lists repositories and variable names, never values", async () => {
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    expect(within(card).getByText("GOVFLANDERS_NPM_TOKEN")).toBeInTheDocument();
++    expect(within(card).getByText(/2 variables · updated 3d ago by levi/)).toBeInTheDocument();
++    expect(document.body.textContent).not.toContain("secret-token");
++  });
++
++  it("tells a non-admin they can't manage it", async () => {
++    vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(false);
++    renderPage();
++    expect(
++      await screen.findByText("You don't have permission to manage repository variables."),
++    ).toBeInTheDocument();
++    expect(requests).toEqual([]);
++  });
++
++  it("keeps blank values and replaces typed ones when editing", async () => {
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
++    fireEvent.change(within(card).getByLabelText("Value for NPM_CONFIG_REGISTRY"), {
++      target: { value: "https://new" },
++    });
++    fireEvent.click(within(card).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true));
++    expect(requests.find((r) => r.method === "PUT")!.body).toEqual({
++      repository: ROADPASS,
++      variables: { GOVFLANDERS_NPM_TOKEN: null, NPM_CONFIG_REGISTRY: "https://new" },
++    });
++    expect(stored[ROADPASS]).toEqual({
++      GOVFLANDERS_NPM_TOKEN: "secret-token",
++      NPM_CONFIG_REGISTRY: "https://new",
++    });
++  });
++
++  it("adds a repository from a clone URL and a pasted .env", async () => {
++    renderPage();
++    await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
++    const editor = screen.getByTestId("repo-env-editor");
++    fireEvent.change(within(editor).getByLabelText("Repository"), {
++      target: { value: "git@github.com:N3bby/Omnigent.git" },
++    });
++    expect(within(editor).getByText("github.com/n3bby/omnigent")).toBeInTheDocument();
++    fireEvent.click(within(editor).getByRole("button", { name: "Paste .env" }));
++    fireEvent.change(within(editor).getByLabelText("Paste NAME=value lines"), {
++      target: { value: "# zone\nexport CLOUDFLARE_ZONE_ID='abc'\n" },
++    });
++    fireEvent.click(within(editor).getByRole("button", { name: "Add these lines" }));
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(stored["github.com/n3bby/omnigent"]).toBeDefined());
++    expect(stored["github.com/n3bby/omnigent"]).toEqual({ CLOUDFLARE_ZONE_ID: "abc" });
++    expect(
++      await screen.findByRole("article", { name: "github.com/n3bby/omnigent" }),
++    ).toBeInTheDocument();
++  });
++
++  it("won't save reserved names, missing values or a repository twice", async () => {
++    renderPage();
++    await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
++    const editor = screen.getByTestId("repo-env-editor");
++    const save = within(editor).getByRole("button", { name: "Save" });
++    fireEvent.change(within(editor).getByLabelText("Repository"), {
++      target: { value: "https://github.com/Kunlabora/RoadPass" },
++    });
++    expect(within(editor).getByText(/already has variables/)).toBeInTheDocument();
++    fireEvent.change(within(editor).getByLabelText("Repository"), {
++      target: { value: "kunlabora/other" },
++    });
++    fireEvent.change(within(editor).getByLabelText("Variable name"), {
++      target: { value: "PATH" },
++    });
++    expect(within(editor).getByText("PATH is reserved for the runner.")).toBeInTheDocument();
++    expect(save).toBeDisabled();
++    fireEvent.change(within(editor).getByLabelText("Variable name"), {
++      target: { value: "TOKEN" },
++    });
++    expect(within(editor).getByText("Give every new variable a value.")).toBeInTheDocument();
++    expect(save).toBeDisabled();
++    fireEvent.change(within(editor).getByLabelText("Value for TOKEN"), {
++      target: { value: "x" },
++    });
++    expect(save).toBeEnabled();
++  });
++
++  it("removes a repository after confirming", async () => {
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Remove variables for kunlabora/roadpass" }),
++    );
++    expect(within(card).getByText(/New sessions on it start without them/)).toBeInTheDocument();
++    fireEvent.click(within(card).getByRole("button", { name: "Remove" }));
++    await waitFor(() => expect(stored).toEqual({}));
++    expect(requests.find((r) => r.method === "DELETE")!.url).toBe(
++      "/v1/repo-env?repository=github.com%2Fkunlabora%2Froadpass",
++    );
++    expect(await screen.findByText(/No repository has variables yet/)).toBeInTheDocument();
++  });
++});
+diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
+new file mode 100644
+index 0000000..7a8fb5c
+--- /dev/null
++++ b/web/src/pages/RepoVariablesPage.tsx
+@@ -0,0 +1,650 @@
++/**
++ * Admin page for repository variables (``/settings/repo-env``), added by this
++ * deployment. Rendered as a Settings sub-category, next to Members and
++ * Policies.
++ *
++ * Sessions started on a repository get its variables in their agent's
++ * environment. Values are write-only: the server lists names, and editing
++ * keeps a value whose field is left blank. The server stores each repository
++ * as the Kubernetes Secret that ``mise run setup-repo-env`` writes, so the two
++ * are interchangeable.
++ *
++ * Gated on the client by an admin check AND on the server by the routes.
++ */
++
++import { useEffect, useState } from "react";
++import { useQuery } from "@tanstack/react-query";
++import {
++  ClipboardPasteIcon,
++  FolderGit2Icon,
++  PencilIcon,
++  PlusIcon,
++  SearchIcon,
++  Trash2Icon,
++  XIcon,
++} from "lucide-react";
++import { PageScroll } from "@/components/PageScroll";
++import { Button } from "@/components/ui/button";
++import { Input } from "@/components/ui/input";
++import { Textarea } from "@/components/ui/textarea";
++import { showToast } from "@/components/ui/toast";
++import { useDeleteRepoEnv, useRepoEnv, useSaveRepoEnv } from "@/hooks/useRepoEnv";
++import { useServerInfo } from "@/lib/CapabilitiesContext";
++import { isSingleUserMode } from "@/lib/capabilities";
++import { fetchGithubRepos } from "@/lib/githubIntegration";
++import { getCurrentIsAdmin, resolveIdentity } from "@/lib/identity";
++import { absoluteTime, relativeTime } from "@/lib/relativeTime";
++import { type RepoEnvEntry, parseEnv, repoKey, variableNameError } from "@/lib/repoEnv";
++import { cn } from "@/lib/utils";
++
++/** ``github.com/kunlabora/roadpass`` → ``["github.com", "kunlabora/roadpass"]``. */
++function splitKey(key: string): [string, string] {
++  const slash = key.indexOf("/");
++  return [key.slice(0, slash), key.slice(slash + 1)];
++}
++
++function plural(count: number, word: string): string {
++  return `${count} ${word}${count === 1 ? "" : "s"}`;
++}
++
++export function RepoVariablesPage() {
++  const info = useServerInfo();
++  const isSingleUser = isSingleUserMode(info);
++  const [meIsAdmin, setMeIsAdmin] = useState<boolean | null>(null);
++
++  // Admin probe via the mode-agnostic `/v1/me` identity, as on the Sharing
++  // page. Skipped in single-user mode, where no auth endpoints exist.
++  useEffect(() => {
++    if (isSingleUser) return;
++    void (async () => {
++      const userId = await resolveIdentity();
++      if (userId === null) return;
++      setMeIsAdmin(getCurrentIsAdmin());
++    })();
++  }, [isSingleUser]);
++
++  if (!isSingleUser && meIsAdmin === null) {
++    return (
++      <div className="flex min-h-full items-center justify-center text-ui text-muted-foreground">
++        Loading...
++      </div>
++    );
++  }
++
++  if (!isSingleUser && meIsAdmin === false) {
++    return (
++      <PageScroll contentClassName="px-8" extraBottom="2.5rem">
++        <h1 className="mb-2 text-2xl font-semibold">Repository variables</h1>
++        <p className="text-ui text-muted-foreground">
++          You don't have permission to manage repository variables.
++        </p>
++      </PageScroll>
++    );
++  }
++
++  return <RepoVariables />;
++}
++
++function RepoVariables() {
++  const { data: entries, isLoading, error } = useRepoEnv();
++  const remove = useDeleteRepoEnv();
++  const [filter, setFilter] = useState("");
++  const [adding, setAdding] = useState(false);
++  const [editing, setEditing] = useState<string | null>(null);
++  const [confirming, setConfirming] = useState<string | null>(null);
++
++  const list = entries ?? [];
++  const needle = filter.trim().toLowerCase();
++  const shown = needle ? list.filter((e) => e.repository.includes(needle)) : list;
++
++  function edit(repository: string) {
++    setAdding(false);
++    setConfirming(null);
++    setEditing(repository);
++  }
++
++  function confirmRemove(entry: RepoEnvEntry) {
++    remove.mutate(entry.repository, {
++      onSuccess: () => {
++        setConfirming(null);
++        showToast(`Removed the variables for ${splitKey(entry.repository)[1]}.`);
++      },
++      onError: (err) => showToast(`Couldn't remove them: ${err.message}`),
++    });
++  }
++
++  return (
++    <PageScroll contentClassName="px-8" extraBottom="2.5rem">
++      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
++        <div className="min-w-0 max-w-xl">
++          <h1 className="text-2xl font-semibold">Repository variables</h1>
++          <p className="mt-1 text-ui text-muted-foreground">
++            Environment variables for sessions started on a repository, such as a private registry
++            token. Once saved, a value can be replaced but not shown again.
++          </p>
++        </div>
++        {!adding && (
++          <Button
++            onClick={() => {
++              setEditing(null);
++              setConfirming(null);
++              setAdding(true);
++            }}
++            componentId="settings.repo_env.add"
++          >
++            <PlusIcon className="ui-icon" />
++            Add repository
++          </Button>
++        )}
++      </div>
++
++      {adding && (
++        <div className="mb-6 rounded-lg border border-border p-4">
++          <VariablesEditor
++            known={list.map((e) => e.repository)}
++            onClose={() => setAdding(false)}
++            onEditExisting={edit}
++          />
++        </div>
++      )}
++
++      {error ? (
++        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui text-destructive">
++          Couldn't load the repository variables: {error.message}
++        </p>
++      ) : isLoading ? (
++        <p className="text-ui text-muted-foreground">Loading…</p>
++      ) : (
++        <>
++          {list.length > 0 && (
++            <label className="relative mb-3 block max-w-xs">
++              <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
++              <Input
++                value={filter}
++                onChange={(e) => setFilter(e.target.value)}
++                placeholder="Filter repositories"
++                aria-label="Filter repositories"
++                className="pl-8"
++              />
++            </label>
++          )}
++          <div className="flex flex-col gap-3" data-testid="repo-env-list">
++            {shown.map((entry) => (
++              <RepositoryCard
++                key={entry.repository}
++                entry={entry}
++                editing={editing === entry.repository}
++                confirming={confirming === entry.repository}
++                removing={remove.isPending}
++                onEdit={() => edit(entry.repository)}
++                onCloseEditor={() => setEditing(null)}
++                onAskRemove={() => {
++                  setEditing(null);
++                  setConfirming(entry.repository);
++                }}
++                onCancelRemove={() => setConfirming(null)}
++                onRemove={() => confirmRemove(entry)}
++              />
++            ))}
++            {shown.length === 0 && (
++              <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-ui text-muted-foreground">
++                {list.length
++                  ? "No repository matches that filter."
++                  : "No repository has variables yet. Add one to give its sessions a token or setting."}
++              </p>
++            )}
++          </div>
++        </>
++      )}
++
++      <p className="mt-6 max-w-xl text-sm text-muted-foreground">
++        New sessions on a repository get its variables. A running session gets changes the next time
++        it wakes from being idle. Sessions on other repositories never see them.
++      </p>
++    </PageScroll>
++  );
++}
++
++function RepositoryCard({
++  entry,
++  editing,
++  confirming,
++  removing,
++  onEdit,
++  onCloseEditor,
++  onAskRemove,
++  onCancelRemove,
++  onRemove,
++}: {
++  entry: RepoEnvEntry;
++  editing: boolean;
++  confirming: boolean;
++  removing: boolean;
++  onEdit: () => void;
++  onCloseEditor: () => void;
++  onAskRemove: () => void;
++  onCancelRemove: () => void;
++  onRemove: () => void;
++}) {
++  const [host, path] = splitKey(entry.repository);
++  const updated = entry.updated_at ? Date.parse(entry.updated_at) : NaN;
++  const ago = relativeTime(updated);
++  return (
++    <article
++      className="rounded-lg border border-border"
++      data-testid="repo-env-repository"
++      aria-label={entry.repository}
++    >
++      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
++        <FolderGit2Icon className="ui-icon shrink-0 text-muted-foreground" />
++        <span className="min-w-0 flex-1 truncate text-ui font-medium" title={entry.repository}>
++          <span className="font-normal text-muted-foreground">{host}/</span>
++          {path}
++        </span>
++        <span className="text-sm text-muted-foreground" title={absoluteTime(updated)}>
++          {plural(entry.names.length, "variable")}
++          {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
++          {entry.updated_by && ` by ${entry.updated_by}`}
++        </span>
++        {!editing && (
++          <div className="flex gap-1">
++            <Button variant="ghost" size="sm" onClick={onEdit} componentId="settings.repo_env.edit">
++              <PencilIcon className="ui-icon" />
++              Edit
++            </Button>
++            <Button
++              variant="ghost"
++              size="icon-sm"
++              onClick={onAskRemove}
++              aria-label={`Remove variables for ${path}`}
++              title="Remove"
++              componentId="settings.repo_env.remove"
++            >
++              <Trash2Icon className="ui-icon" />
++            </Button>
++          </div>
++        )}
++      </div>
++      <div className="border-t border-border px-3 py-2">
++        {editing ? (
++          <VariablesEditor entry={entry} onClose={onCloseEditor} />
++        ) : confirming ? (
++          <div className="flex flex-wrap items-center justify-between gap-3">
++            <p className="text-ui">
++              Remove all {plural(entry.names.length, "variable")} for{" "}
++              <span className="font-medium">{path}</span>? New sessions on it start without them.
++            </p>
++            <div className="flex gap-2">
++              <Button variant="outline" onClick={onCancelRemove} disabled={removing}>
++                Cancel
++              </Button>
++              <Button variant="destructive" onClick={onRemove} loading={removing}>
++                Remove
++              </Button>
++            </div>
++          </div>
++        ) : (
++          <ul className="flex flex-col">
++            {entry.names.map((name) => (
++              <li key={name} className="flex items-center gap-3 py-0.5 text-ui">
++                <span className="min-w-0 truncate font-mono text-sm">{name}</span>
++                <span className="text-muted-foreground" aria-label="hidden value">
++                  ••••••••
++                </span>
++              </li>
++            ))}
++          </ul>
++        )}
++      </div>
++    </article>
++  );
++}
++
++const NO_REPOSITORIES: string[] = [];
++
++interface Row {
++  id: number;
++  name: string;
++  value: string;
++  /** Already stored: the name is fixed and a blank value keeps it. */
++  existing: boolean;
++}
++
++let nextRowId = 0;
++function newRow(name = "", value = "", existing = false): Row {
++  nextRowId += 1;
++  return { id: nextRowId, name, value, existing };
++}
++
++function rowError(row: Row, rows: Row[], index: number): string | null {
++  if (!row.name) return row.value ? "Give this value a name." : null;
++  const nameError = variableNameError(row.name);
++  if (nameError) return nameError;
++  if (rows.findIndex((r) => r.name === row.name) !== index) {
++    return `${row.name} is already in this list.`;
++  }
++  return null;
++}
++
++/**
++ * Edits one repository's variables. Without ``entry`` it adds a repository,
++ * starting with picking it.
++ */
++function VariablesEditor({
++  entry,
++  known = NO_REPOSITORIES,
++  onClose,
++  onEditExisting,
++}: {
++  entry?: RepoEnvEntry;
++  known?: string[];
++  onClose: () => void;
++  onEditExisting?: (repository: string) => void;
++}) {
++  const save = useSaveRepoEnv();
++  const [query, setQuery] = useState("");
++  const [rows, setRows] = useState<Row[]>(() =>
++    entry ? entry.names.map((name) => newRow(name, "", true)) : [newRow()],
++  );
++  const [pasting, setPasting] = useState(false);
++  const [pasteText, setPasteText] = useState("");
++  const [pasteError, setPasteError] = useState<string | null>(null);
++  const [saveError, setSaveError] = useState<string | null>(null);
++
++  const key = entry ? entry.repository : repoKey(query);
++  const alreadyThere = !entry && key !== null && known.includes(key);
++  const errors = rows.map((row, i) => rowError(row, rows, i));
++  const named = rows.filter((r) => r.name);
++  const missingValue = named.some((r) => !r.existing && !r.value);
++  const canSave =
++    key !== null &&
++    !alreadyThere &&
++    named.length > 0 &&
++    errors.every((e) => e === null) &&
++    !missingValue &&
++    !save.isPending;
++
++  function update(id: number, patch: Partial<Row>) {
++    setRows((current) => current.map((r) => (r.id === id ? { ...r, ...patch } : r)));
++  }
++
++  function removeRow(id: number) {
++    setRows((current) => {
++      const left = current.filter((r) => r.id !== id);
++      return left.length ? left : [newRow()];
++    });
++  }
++
++  function applyPaste() {
++    const { variables, badLines } = parseEnv(pasteText);
++    if (badLines.length) {
++      setPasteError(
++        `${badLines.length === 1 ? "Line" : "Lines"} ${badLines.join(", ")} ${
++          badLines.length === 1 ? "isn't" : "aren't"
++        } NAME=value.`,
++      );
++      return;
++    }
++    setRows((current) => {
++      const merged = current.filter((r) => r.name || r.value);
++      for (const v of variables) {
++        const same = merged.findIndex((r) => r.name === v.name);
++        if (same >= 0) merged[same] = { ...merged[same], value: v.value };
++        else merged.push(newRow(v.name, v.value));
++      }
++      return merged.length ? merged : [newRow()];
++    });
++    setPasting(false);
++    setPasteText("");
++    setPasteError(null);
++  }
++
++  function submit() {
++    if (!canSave || key === null) return;
++    const variables: Record<string, string | null> = {};
++    for (const row of named) variables[row.name] = row.existing && !row.value ? null : row.value;
++    setSaveError(null);
++    save.mutate(
++      { repository: key, variables },
++      {
++        onSuccess: (saved) => {
++          const path = splitKey(saved.repository)[1];
++          showToast(
++            entry
++              ? `Saved the variables for ${path}.`
++              : `Saved ${plural(saved.names.length, "variable")} for ${path}. New sessions on it get them.`,
++          );
++          onClose();
++        },
++        onError: (err) => setSaveError(err.message),
++      },
++    );
++  }
++
++  return (
++    <form
++      className="flex flex-col gap-3"
++      onSubmit={(e) => {
++        e.preventDefault();
++        submit();
++      }}
++      data-testid="repo-env-editor"
++    >
++      {!entry && (
++        <RepositoryPicker
++          query={query}
++          onQuery={setQuery}
++          repoKey={key}
++          known={known}
++          alreadyThere={alreadyThere}
++          onEditExisting={onEditExisting}
++        />
++      )}
++
++      <div className="flex flex-col gap-2">
++        <span className="text-sm font-medium text-muted-foreground">Variables</span>
++        {pasting ? (
++          <>
++            <Textarea
++              value={pasteText}
++              onChange={(e) => setPasteText(e.target.value)}
++              rows={5}
++              placeholder={"GOVFLANDERS_NPM_TOKEN=…\nNPM_CONFIG_REGISTRY=https://…"}
++              aria-label="Paste NAME=value lines"
++              className="font-mono text-sm"
++              autoFocus
++              spellCheck={false}
++            />
++            {pasteError && <p className="text-sm text-destructive">{pasteError}</p>}
++            <div className="flex gap-2">
++              <Button type="button" variant="outline" onClick={applyPaste}>
++                Add these lines
++              </Button>
++              <Button
++                type="button"
++                variant="ghost"
++                onClick={() => {
++                  setPasting(false);
++                  setPasteError(null);
++                }}
++              >
++                Cancel
++              </Button>
++            </div>
++          </>
++        ) : (
++          rows.map((row, i) => (
++            <div key={row.id} className="flex flex-col gap-1">
++              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
++                <Input
++                  value={row.name}
++                  onChange={(e) => update(row.id, { name: e.target.value.trim() })}
++                  readOnly={row.existing}
++                  placeholder="NAME"
++                  aria-label="Variable name"
++                  aria-invalid={errors[i] ? true : undefined}
++                  autoComplete="off"
++                  autoCapitalize="off"
++                  spellCheck={false}
++                  className={cn(
++                    "font-mono text-sm sm:w-64 sm:flex-none",
++                    row.existing && "bg-muted/40",
++                  )}
++                />
++                <Input
++                  type="password"
++                  value={row.value}
++                  onChange={(e) => update(row.id, { value: e.target.value })}
++                  placeholder={row.existing ? "Leave blank to keep the current value" : "Value"}
++                  aria-label={`Value for ${row.name || "new variable"}`}
++                  autoComplete="new-password"
++                  className="min-w-0 flex-1"
++                />
++                <Button
++                  type="button"
++                  variant="ghost"
++                  size="icon-sm"
++                  onClick={() => removeRow(row.id)}
++                  aria-label={`Remove ${row.name || "row"}`}
++                >
++                  <XIcon className="ui-icon" />
++                </Button>
++              </div>
++              {errors[i] && <p className="text-sm text-destructive">{errors[i]}</p>}
++            </div>
++          ))
++        )}
++      </div>
++
++      {!pasting && (
++        <div className="flex flex-wrap items-center justify-between gap-2">
++          <div className="flex gap-1">
++            <Button
++              type="button"
++              variant="ghost"
++              size="sm"
++              onClick={() => setRows((r) => [...r, newRow()])}
++            >
++              <PlusIcon className="ui-icon" />
++              Add variable
++            </Button>
++            <Button type="button" variant="ghost" size="sm" onClick={() => setPasting(true)}>
++              <ClipboardPasteIcon className="ui-icon" />
++              Paste .env
++            </Button>
++          </div>
++          <div className="flex items-center gap-2">
++            {missingValue && (
++              <span className="text-sm text-muted-foreground">
++                Give every new variable a value.
++              </span>
++            )}
++            <Button type="button" variant="outline" onClick={onClose} disabled={save.isPending}>
++              Cancel
++            </Button>
++            <Button type="submit" disabled={!canSave} loading={save.isPending}>
++              Save
++            </Button>
++          </div>
++        </div>
++      )}
++      {saveError && (
++        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui text-destructive">
++          {saveError}
++        </p>
++      )}
++    </form>
++  );
++}
++
++/** Pick the repository: a GitHub repository of yours, or any clone URL. */
++function RepositoryPicker({
++  query,
++  onQuery,
++  repoKey: key,
++  known,
++  alreadyThere,
++  onEditExisting,
++}: {
++  query: string;
++  onQuery: (query: string) => void;
++  repoKey: string | null;
++  known: string[];
++  alreadyThere: boolean;
++  onEditExisting?: (repository: string) => void;
++}) {
++  const info = useServerInfo();
++  const githubEnabled = info !== "loading" && (info.enabled_connections ?? []).includes("github");
++  // Same query as the new-session form's picker, so the list is shared.
++  const { data } = useQuery({
++    queryKey: ["github-repos"],
++    queryFn: fetchGithubRepos,
++    enabled: githubEnabled,
++    staleTime: 5 * 60_000,
++  });
++  const repos = data?.connected ? data.repos : [];
++  const needle = query.trim().toLowerCase();
++  const suggestions = repos
++    .filter(
++      (r) => r.full_name.toLowerCase().includes(needle) && r.full_name.toLowerCase() !== needle,
++    )
++    .slice(0, 6);
++
++  return (
++    <div className="flex flex-col gap-2">
++      <label className="text-sm font-medium text-muted-foreground" htmlFor="repo-env-repository">
++        Repository
++      </label>
++      <Input
++        id="repo-env-repository"
++        value={query}
++        onChange={(e) => onQuery(e.target.value)}
++        placeholder={
++          repos.length
++            ? "Search your GitHub repositories, or paste a clone URL"
++            : "owner/repo, or a clone URL"
++        }
++        autoComplete="off"
++        spellCheck={false}
++        autoFocus
++      />
++      {suggestions.length > 0 && (
++        <div className="flex flex-col overflow-hidden rounded-md border border-border">
++          {suggestions.map((repo) => {
++            const has = known.includes(`github.com/${repo.full_name.toLowerCase()}`);
++            return (
++              <button
++                key={repo.full_name}
++                type="button"
++                onClick={() => onQuery(repo.full_name)}
++                className="flex items-center gap-2 px-3 py-1.5 text-left text-ui hover:bg-muted"
++              >
++                <FolderGit2Icon className="ui-icon shrink-0 text-muted-foreground" />
++                <span className="min-w-0 flex-1 truncate">{repo.full_name}</span>
++                {has && <span className="text-sm text-muted-foreground">has variables</span>}
++              </button>
++            );
++          })}
++        </div>
++      )}
++      {key &&
++        (alreadyThere ? (
++          <p className="text-sm text-destructive">
++            {key} already has variables.{" "}
++            {onEditExisting && (
++              <button type="button" className="underline" onClick={() => onEditExisting(key)}>
++                Edit them instead
++              </button>
++            )}
++          </p>
++        ) : (
++          <p className="text-sm text-muted-foreground">
++            Matches sessions on <span className="font-mono">{key}</span>
++          </p>
++        ))}
++      {query.trim() && !key && (
++        <p className="text-sm text-muted-foreground">Enter owner/repo or a clone URL.</p>
++      )}
++    </div>
++  );
++}
+diff --git a/web/src/pages/SettingsPage.tsx b/web/src/pages/SettingsPage.tsx
+index 5f052b0..2f63959 100644
+--- a/web/src/pages/SettingsPage.tsx
++++ b/web/src/pages/SettingsPage.tsx
+@@ -268,6 +268,9 @@ const PoliciesPage = lazy(() =>
+ const SharingPage = lazy(() =>
+   import("@/pages/SharingPage").then((m) => ({ default: m.SharingPage })),
+ );
++const RepoVariablesPage = lazy(() =>
++  import("@/pages/RepoVariablesPage").then((m) => ({ default: m.RepoVariablesPage })),
++);
+ 
+ /**
+  * Settings content panel. The section nav lives in the sidebar card
+@@ -294,15 +297,22 @@ export function SettingsPage() {
+   // Rendered in ANY multi-user mode (accounts AND OIDC), not gated on
+   // `accountsEnabled` — the nav + pages handle admin gating, and Members runs
+   // read-only under OIDC (no password actions).
+-  if (section === "members" || section === "policies" || section === "sharing") {
++  if (
++    section === "members" ||
++    section === "policies" ||
++    section === "sharing" ||
++    section === "repo-env"
++  ) {
+     return (
+       <Suspense fallback={null}>
+         {section === "members" ? (
+           <MembersPage />
+         ) : section === "policies" ? (
+           <PoliciesPage />
+-        ) : (
++        ) : section === "sharing" ? (
+           <SharingPage />
++        ) : (
++          <RepoVariablesPage />
+         )}
+       </Suspense>
+     );
+diff --git a/web/src/shell/NewChatDialog.projectPrefill.test.tsx b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
+index 8c524e8..b7f93a1 100644
+--- a/web/src/shell/NewChatDialog.projectPrefill.test.tsx
++++ b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
+@@ -23,6 +23,9 @@ import {
+ } from "@/hooks/useConversations";
+ 
+ vi.mock("@/hooks/useSidebarData", () => ({ useLoadedConversations: () => useTestConversations() }));
++// The repository variables badge fetches names; stub it so it doesn't
++// skew the create-POST call assertions.
++vi.mock("@/components/RepoEnvBadge", () => ({ RepoEnvBadge: () => null }));
+ 
+ vi.mock("@/hooks/useSkills", () => ({
+   useSkills: () => ({ skills: [], skillsStatus: "ready", refetch: vi.fn() }),
+diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
+index a423f5f..43c57e5 100644
+--- a/web/src/shell/NewChatDialog.test.tsx
++++ b/web/src/shell/NewChatDialog.test.tsx
+@@ -226,6 +226,9 @@ vi.mock("@/hooks/useHostWorktrees", async (importOriginal) => ({
+ vi.mock("@/hooks/useDirectorySessions", () => ({
+   useDirectorySessions: vi.fn(),
+ }));
++// The repository variables badge fetches names; stub it so it doesn't
++// skew the create-POST call assertions.
++vi.mock("@/components/RepoEnvBadge", () => ({ RepoEnvBadge: () => null }));
+ vi.mock("@/hooks/RunnerHealthProvider", () => ({
+   useRunnerHealthRegistration: vi.fn(),
+ }));
+diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
+index 109a552..a9fec1e 100644
+--- a/web/src/shell/NewChatDialog.tsx
++++ b/web/src/shell/NewChatDialog.tsx
+@@ -315,6 +315,7 @@ import {
+   KeyboardShortcutTooltipContent,
+ } from "@/components/KeyboardShortcut";
+ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
++import { RepoEnvBadge } from "@/components/RepoEnvBadge";
+ import { CreateAgentDialog } from "./CreateAgentDialog";
+ import { buildAgentBundle, type AgentBundleInput } from "@/lib/agentBundle";
+ import { createBundledSession, launchRunner } from "@/lib/sessionsApi";
+@@ -5937,6 +5938,7 @@ export function NewChatLandingScreen() {
+                           <span className="min-w-0 flex-1 truncate text-sm" title={sel.url}>
+                             {name}
+                           </span>
++                          <RepoEnvBadge url={sel.url} />
+                           {repo ? (
+                             <div className="w-36 shrink-0">
+                               <SandboxRepoBranchSelect
+diff --git a/web/src/shell/settingsNav.test.tsx b/web/src/shell/settingsNav.test.tsx
+index f21c8dd..7421b18 100644
+--- a/web/src/shell/settingsNav.test.tsx
++++ b/web/src/shell/settingsNav.test.tsx
+@@ -121,11 +121,21 @@ describe("settingsNavGroups", () => {
+     expect(ids(false, false)).not.toContain("members");
+     // Admin on an accounts deploy → all appear, grouped under "Admin".
+     const accountsAdmin = settingsNavGroups(true, false, true).find((g) => g.title === "Admin");
+-    expect(accountsAdmin?.items.map((i) => i.id)).toEqual(["members", "policies", "sharing"]);
++    expect(accountsAdmin?.items.map((i) => i.id)).toEqual([
++      "members",
++      "policies",
++      "sharing",
++      "repo-env",
++    ]);
+     // Admin under OIDC (accountsEnabled false) → still appears. This is the
+     // #1489 fix: OIDC previously had no admin chrome at all.
+     const oidcAdmin = settingsNavGroups(false, false, true).find((g) => g.title === "Admin");
+-    expect(oidcAdmin?.items.map((i) => i.id)).toEqual(["members", "policies", "sharing"]);
++    expect(oidcAdmin?.items.map((i) => i.id)).toEqual([
++      "members",
++      "policies",
++      "sharing",
++      "repo-env",
++    ]);
+   });
+ 
+   it("drops Members and Sharing from the Admin group in single-user mode, keeping Policies", () => {
+@@ -135,7 +145,7 @@ describe("settingsNavGroups", () => {
+     const singleUserAdmin = settingsNavGroups(false, false, true, true).find(
+       (g) => g.title === "Admin",
+     );
+-    expect(singleUserAdmin?.items.map((i) => i.id)).toEqual(["policies"]);
++    expect(singleUserAdmin?.items.map((i) => i.id)).toEqual(["policies", "repo-env"]);
+   });
+ 
+   it("includes the Sandbox Integrations item only when a connection is enabled", () => {
+diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
+index 5a18747..45f0dc1 100644
+--- a/web/src/shell/settingsNav.tsx
++++ b/web/src/shell/settingsNav.tsx
+@@ -21,6 +21,7 @@ import {
+   TerminalIcon,
+   UserCogIcon,
+   UsersIcon,
++  VariableIcon,
+ } from "lucide-react";
+ import { Link, useLocation } from "@/lib/routing";
+ import { Button } from "@/components/ui/button";
+@@ -42,6 +43,7 @@ export type SettingsSectionId =
+   | "members"
+   | "policies"
+   | "sharing"
++  | "repo-env"
+   | "archived"
+   | "cli"
+   | "updates";
+@@ -57,6 +59,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
+   "members",
+   "policies",
+   "sharing",
++  "repo-env",
+   "archived",
+   "cli",
+   "updates",
+@@ -141,6 +144,8 @@ export function settingsNavGroups(
+     if (!isSingleUser) adminItems.push({ id: "members", label: "Members", icon: UsersIcon });
+     adminItems.push({ id: "policies", label: "Policies", icon: ShieldCheckIcon });
+     if (!isSingleUser) adminItems.push({ id: "sharing", label: "Sharing", icon: Share2Icon });
++    // This deployment's environment variables per repository.
++    adminItems.push({ id: "repo-env", label: "Repository variables", icon: VariableIcon });
+     groups.push({ title: "Admin", items: adminItems });
+   }
+   groups.push({

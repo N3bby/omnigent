@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import importlib.machinery
 import importlib.util
 import json
@@ -9,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
@@ -122,11 +125,135 @@ class PodVolumeTests(unittest.TestCase):
 
     def test_server_installs_the_module_and_the_patch_uses_it(self) -> None:
         dockerfile = (ROOT / "images" / "server" / "Dockerfile").read_text()
-        self.assertIn("COPY omnigent_repo_env.py /tmp/omnigent_repo_env.py\n", dockerfile)
-        self.assertIn('install -m 0644 /tmp/omnigent_repo_env.py "$purelib/omnigent_repo_env.py"', dockerfile)
+        self.assertIn("COPY omnigent_repo_env.py omnigent_repo_env_api.py /tmp/omnigent-modules/\n", dockerfile)
+        self.assertIn('install -m 0644 /tmp/omnigent-modules/*.py "$purelib/"', dockerfile)
         patch = (ROOT / "images" / "server" / "patches" / "0004-repo-env.patch").read_text()
         self.assertIn("+from omnigent_repo_env import pod_volumes as _repo_env_volumes\n", patch)
         self.assertIn("repo_env_volumes", patch)
+
+
+class FakeApiException(Exception):
+    def __init__(self, status: int) -> None:
+        super().__init__(status)
+        self.status = status
+
+
+class FakeCore:
+    """The CoreV1Api calls the store makes, on Secrets kept in memory."""
+
+    def __init__(self) -> None:
+        self.secrets: dict[str, dict] = {}
+        self.versions = 0
+
+    def _object(self, body: dict) -> SimpleNamespace:
+        meta = body["metadata"]
+        return SimpleNamespace(
+            data=dict(body.get("data") or {}),
+            metadata=SimpleNamespace(
+                name=meta["name"],
+                annotations=dict(meta.get("annotations") or {}),
+                resource_version=meta["resourceVersion"],
+                creation_timestamp=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                managed_fields=[SimpleNamespace(time=datetime(2026, 10, 8, 12, 0))],
+            ),
+        )
+
+    def _store(self, body: dict) -> SimpleNamespace:
+        self.versions += 1
+        body = json.loads(json.dumps(body))
+        body["metadata"]["resourceVersion"] = str(self.versions)
+        self.secrets[body["metadata"]["name"]] = body
+        return self._object(body)
+
+    def list_namespaced_secret(self, namespace: str, label_selector: str) -> SimpleNamespace:
+        assert (namespace, label_selector) == (repo_env.NAMESPACE, repo_env.LABEL)
+        return SimpleNamespace(items=[self._object(b) for b in self.secrets.values()])
+
+    def read_namespaced_secret(self, name: str, namespace: str) -> SimpleNamespace:
+        if name not in self.secrets:
+            raise FakeApiException(404)
+        return self._object(self.secrets[name])
+
+    def create_namespaced_secret(self, namespace: str, body: dict) -> SimpleNamespace:
+        if body["metadata"]["name"] in self.secrets:
+            raise FakeApiException(409)
+        return self._store(body)
+
+    def replace_namespaced_secret(self, name: str, namespace: str, body: dict) -> SimpleNamespace:
+        if self.secrets[name]["metadata"]["resourceVersion"] != body["metadata"].get("resourceVersion"):
+            raise FakeApiException(409)
+        return self._store(body)
+
+    def delete_namespaced_secret(self, name: str, namespace: str) -> None:
+        if self.secrets.pop(name, None) is None:
+            raise FakeApiException(404)
+
+
+ROADPASS = "github.com/kunlabora/roadpass"
+
+
+def decoded(core: FakeCore, key: str = ROADPASS) -> dict[str, str]:
+    data = core.secrets[repo_env.secret_name(key)]["data"]
+    return {name: base64.b64decode(value).decode() for name, value in data.items()}
+
+
+class StoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.core = FakeCore()
+
+    def test_saves_a_secret_the_pod_and_the_cli_agree_on(self) -> None:
+        entry = repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc\n", "URL": "https://x"}, updated_by="levi")
+        secret = self.core.secrets[repo_env.secret_name(ROADPASS)]
+        self.assertEqual(secret["metadata"]["namespace"], "omnigent-sandboxes")
+        self.assertEqual(secret["metadata"]["labels"], {"omnigent.dev/repo-env": "true"})
+        self.assertEqual(secret["metadata"]["annotations"], {
+            "omnigent.dev/repository": ROADPASS, "omnigent.dev/updated-by": "levi",
+        })
+        self.assertEqual(decoded(self.core), {"TOKEN": "abc\n", "URL": "https://x"})
+        self.assertEqual(entry, {
+            "repository": ROADPASS, "names": ["TOKEN", "URL"],
+            "updated_at": "2026-10-08T12:00:00+00:00", "updated_by": "levi",
+        })
+
+    def test_a_name_without_a_value_keeps_it_and_left_out_names_go(self) -> None:
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc", "OLD": "x", "URL": "u"})
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None, "URL": "new", "ADDED": ""})
+        self.assertEqual(decoded(self.core), {"TOKEN": "abc", "URL": "new", "ADDED": ""})
+
+    def test_rejects_unknown_kept_names_bad_names_and_nothing(self) -> None:
+        with self.assertRaisesRegex(ValueError, "TOKEN has no value yet"):
+            repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None})
+        with self.assertRaisesRegex(ValueError, "reserved"):
+            repo_env.save_repository(self.core, ROADPASS, {"PATH": "/bin"})
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            repo_env.save_repository(self.core, ROADPASS, {})
+        self.assertEqual(self.core.secrets, {})
+
+    def test_a_save_based_on_an_older_read_conflicts(self) -> None:
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc"})
+        stale = self.core.read_namespaced_secret
+        old = stale(repo_env.secret_name(ROADPASS), repo_env.NAMESPACE)
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "newer"})
+        with mock.patch.object(self.core, "read_namespaced_secret", return_value=old):
+            with self.assertRaises(FakeApiException) as raised:
+                repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "older"})
+        self.assertEqual(raised.exception.status, 409)
+        self.assertEqual(decoded(self.core), {"TOKEN": "newer"})
+
+    def test_lists_names_never_values(self) -> None:
+        repo_env.save_repository(self.core, "github.com/n3bby/omnigent", {"ZONE": "z"})
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc"})
+        listed = repo_env.list_repositories(self.core)
+        self.assertEqual([e["repository"] for e in listed], [ROADPASS, "github.com/n3bby/omnigent"])
+        self.assertNotIn("abc", json.dumps(listed))
+        self.assertEqual(repo_env.variable_names(self.core, ROADPASS), ["TOKEN"])
+        self.assertEqual(repo_env.variable_names(self.core, "github.com/a/b"), [])
+
+    def test_delete_is_fine_when_nothing_is_there(self) -> None:
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc"})
+        repo_env.delete_repository(self.core, ROADPASS)
+        repo_env.delete_repository(self.core, ROADPASS)
+        self.assertEqual(self.core.secrets, {})
 
 
 class LoaderTests(unittest.TestCase):

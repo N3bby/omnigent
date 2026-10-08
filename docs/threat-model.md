@@ -46,9 +46,8 @@ reach as reachable by an attacker.
 | Resource limits | Scratch disk and the number of pods and jobs are capped. CPU and memory limits are above the VM's size, so runners share whatever is free, and the server, database and Vault have a higher priority than runners. The home volume is not capped; see below. |
 | Separate namespace | PostgreSQL and the server's secrets live in a different namespace. Runners only get the runner credentials. |
 
-The server itself can only manage sandboxes, jobs, pods, logs and launch
-secrets in the runner namespace, which limits what a compromised server could
-do there.
+The server itself can only manage sandboxes, jobs, pods, logs and secrets in
+the runner namespace, which limits what a compromised server could do there.
 
 ## Trade-offs worth knowing
 
@@ -71,6 +70,12 @@ do there.
   session on a repository gets its variables. Sessions on other repositories
   don't, because a Pod only mounts the Secrets of the repositories it starts
   with, and runners can't read Secrets themselves.
+- **The server can read the runner namespace's Secrets.** Settings →
+  Repository variables needs to list and update them, and Kubernetes can't
+  limit that to the repository variables, so the server can also read the
+  runner credentials there. It could already hand those to any runner Pod it
+  starts, so a compromised server gains little. The page itself never sends a
+  value back to the browser, and only admins can change variables.
 - **Agent logins are shared.** Every runner uses the same Claude token and
   Codex login, so one compromised runner can use them.
 - **Agents skip permission prompts** by default (`claude_bypass_permissions`
