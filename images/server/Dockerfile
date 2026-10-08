@@ -45,8 +45,8 @@ RUN set -eu; \
     done; \
     apt-get purge -y --auto-remove patch; \
     rm -rf /var/lib/apt/lists/* /tmp/omnigent-patches; \
-    python -m compileall -q -f "$site/omnigent/server"; \
-    python -c 'import omnigent.server.sandbox_catalog_fallback, omnigent.server.routes.sessions'
+    python -m compileall -q -f "$site/omnigent/server" "$site/omnigent/onboarding/sandboxes"; \
+    python -c 'import omnigent.server.sandbox_catalog_fallback, omnigent.server.routes.sessions, omnigent.onboarding.sandboxes.agent_sandbox'
 
 # The server serves the SPA from OMNIGENT_WEB_UI_DIST instead of its package data.
 COPY --from=web /src/omnigent/server/static/web-ui /opt/omnigent-web-ui
