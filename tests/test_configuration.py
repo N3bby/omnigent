@@ -207,6 +207,24 @@ class ConfigurationTests(unittest.TestCase):
             values, _ = validate("ci")
         self.assertNotIn("tailscale_tailnet", values)
 
+    def test_stopping_runners_log_out_of_the_tailnet(self) -> None:
+        # Never run the script here: on a Linux machine with Tailscale, the
+        # socket it logs out through is the machine's own.
+        subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
+        platform = (ROOT / ".generated" / "ci" / "platform.yaml").read_text()
+        self.assertIn('indexOf("host")) + "/lifecycle"', platform)
+        self.assertIn('command: ["/usr/local/bin/omnigent-tailscale-logout"]', platform)
+        dockerfile = (ROOT / "images" / "runner" / "Dockerfile").read_text()
+        self.assertIn("tailscale/tailscale-logout.sh /usr/local/bin/omnigent-tailscale-logout", dockerfile)
+        tailscale = ROOT / "images" / "runner" / "tailscale"
+        service = (tailscale / "tailscale-service.sh").read_text()
+        logout = (tailscale / "tailscale-logout.sh").read_text()
+        self.assertIn("socket=/run/tailscale/tailscaled.sock\n", service)
+        self.assertIn("socket=/run/tailscale/tailscaled.sock\n", logout)
+        # The hook must finish inside the Pod's 30-second grace period.
+        self.assertIn("timeout 10 tailscale", logout)
+        self.assertTrue(logout.rstrip().endswith("exit 0"))
+
     def test_production_contains_no_secret_values(self) -> None:
         text = (ROOT / "environments" / "production.toml").read_text().lower()
         for forbidden in ("password", "oauth_token", "client_secret", "git_token"):

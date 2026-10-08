@@ -53,6 +53,17 @@ You can't.
   - Omnigent itself calls its venv's Python by full path, and the `codex`
     wrapper runs Codex with the image's Node. A project's pins don't affect
     them.
+  - Two places in upstream used bare `python3`, and are patched to use the
+    venv's Python by full path:
+    - **git's GitHub credential helper**, which Omnigent writes to
+      `~/.gitconfig` when you've connected GitHub. In a project that pins
+      Python, git pushes and fetches failed
+      (`images/runner/patches/0002-git-helper-python.patch`).
+    - **Pod startup**, which runs in a login shell from the home directory.
+      With Python pinned there (`mise use -g python@…`), writing Omnigent's
+      config failed on `import yaml`, so the session couldn't start or wake
+      (`images/server/patches/0005-runner-python.patch`). The runner image
+      checks at build time that `/opt/venv/bin/python3` can import Omnigent.
 - **Home directory:** the script sets `MISE_DATA_DIR`, `MISE_CONFIG_DIR` and
   `MISE_STATE_DIR` under `/home/omnigent`. Agents have
   `HOME=/home/omnigent`, but root's home in `/etc/passwd`, which Tailscale

@@ -16,8 +16,9 @@ flock -n 9 || exit 0
 
 name="omnigent-$(printf '%.8s' "$host_id" | tr '[:upper:]' '[:lower:]')"
 tags=${OMNIGENT_TAILSCALE_TAGS:-tag:omnigent-runner}
-# The node's identity lives in the session's home volume, so a woken Pod
-# rejoins as the same node, under the same name and SSH host keys.
+# The node's state lives in the session's home volume, so a woken Pod keeps
+# its SSH host keys. It rejoins as the same node only if it stopped without
+# running its logout hook (tailscale-logout.sh) and the node is still listed.
 state=${HOME:-/home/omnigent}/.local/state/omnigent-tailscale
 socket=/run/tailscale/tailscaled.sock
 mkdir -p "$state" /run/tailscale
