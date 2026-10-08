@@ -35,9 +35,15 @@ RUN python -m pip install --no-cache-dir "hvac==${HVAC_VERSION}" \
     && python -c 'import hvac; print("Vault client ready")'
 
 # --fuzz=0 fails the build when upstream code under a patch has moved.
+# omnigent_repo_env is ours, not upstream's: 0004-repo-env.patch imports it,
+# and scripts/setup-repo-env uses the same file to name the Secrets.
 COPY patches/ /tmp/omnigent-patches/
+COPY omnigent_repo_env.py /tmp/omnigent_repo_env.py
 RUN set -eu; \
     site="$(python -c 'import omnigent, pathlib; print(pathlib.Path(omnigent.__file__).parents[1])')"; \
+    purelib="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
+    install -m 0644 /tmp/omnigent_repo_env.py "$purelib/omnigent_repo_env.py"; \
+    rm /tmp/omnigent_repo_env.py; \
     apt-get update; \
     apt-get install -y --no-install-recommends patch; \
     for p in /tmp/omnigent-patches/*.patch; do \
@@ -45,7 +51,7 @@ RUN set -eu; \
     done; \
     apt-get purge -y --auto-remove patch; \
     rm -rf /var/lib/apt/lists/* /tmp/omnigent-patches; \
-    python -m compileall -q -f "$site/omnigent/server" "$site/omnigent/onboarding/sandboxes"; \
+    python -m compileall -q -f "$site/omnigent/server" "$site/omnigent/onboarding/sandboxes" "$purelib/omnigent_repo_env.py"; \
     python -c 'import omnigent.server.sandbox_catalog_fallback, omnigent.server.routes.sessions, omnigent.onboarding.sandboxes.agent_sandbox'
 
 # The server serves the SPA from OMNIGENT_WEB_UI_DIST instead of its package data.

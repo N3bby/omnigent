@@ -48,6 +48,8 @@ COPY --chmod=0755 tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailsca
 COPY --chmod=0755 tailscale/tailscale-logout.sh /usr/local/bin/omnigent-tailscale-logout
 COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
 COPY mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh
+COPY repo-env/repo-env.sh /usr/local/lib/omnigent/repo-env.sh
+COPY repo-env/repo-env.sh /etc/profile.d/omnigent-repo-env.sh
 # Claude Code's managed instructions; Codex gets the same file as AGENTS.md.
 COPY --chmod=0644 agent-instructions.md /etc/claude-code/CLAUDE.md
 

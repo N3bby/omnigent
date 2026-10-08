@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, and the runner description agents get. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the runner description agents get, and repository variables. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -188,6 +188,12 @@ PASS  backend is IntelliJ IDEA Ultimate 263.6259.32
 PASS  /etc/claude-code/CLAUDE.md matches images/runner/agent-instructions.md
 PASS  /opt/codex-home/AGENTS.md matches images/runner/agent-instructions.md
 SKIP  a Codex session's CODEX_HOME has the AGENTS.md (no Codex session in this Pod)
+== Repository variables
+PASS  loader matches images/runner/repo-env/repo-env.sh
+PASS  login shells load repository variables
+PASS  claude wrapper loads repository variables
+PASS  codex wrapper loads repository variables
+SKIP  the agent has this session's repository variables (none stored for this session's repository)
 
 runner checks: passed
 ```
@@ -214,6 +220,8 @@ What a failure usually means:
 | `git's GitHub helper runs Omnigent's Python` | `images/runner/patches/0002-git-helper-python.patch` was dropped, or this session predates the deploy; `runs python3` means git uses whichever Python mise picks, so pushes fail in projects that pin Python |
 | `… is told to use mise` | `images/runner/agent-instructions.md` lost its mise advice, or isn't installed; see the agent-instructions rows |
 | `… matches images/runner/agent-instructions.md` | the file changed in this checkout after the image was built, so deploy it, or this session started before the deploy; `missing` means `images/runner/Dockerfile` no longer copies it |
+| repository variables loader or wrappers | `images/runner/Dockerfile` no longer installs `images/runner/repo-env/repo-env.sh`, or a wrapper lost its `. /usr/local/lib/omnigent/repo-env.sh` line |
+| `the agent has this session's repository variables` | the Secret is mounted, but the agent didn't load it: the agent started before the Secret was stored, or the wrapper isn't the `claude`/`codex` Omnigent runs |
 | `a Codex session's CODEX_HOME has the AGENTS.md` | upstream stopped linking `AGENTS.md` into each session's private `CODEX_HOME` (`_CODEX_HOME_GLOBAL_INSTRUCTION_FILES` in `omnigent/inner/codex_executor.py`) |
 
 ## 5. Live checks
@@ -327,6 +335,13 @@ Hand these to the user; they need their own devices or VM access:
    published-port lines as `PASS`.
 6. **Model picker on a fresh install:** empty until the first session has run,
    then filled.
+7. **Repository variables:** pick a repository with no variables yet
+   (`mise run credential-status` lists those that have them), because storing
+   replaces them all. From your machine, run `echo FEATURE_CHECK=ok | mise run
+   setup-repo-env <owner/repo>` and start a session on that repository: its
+   agent prints `ok` for `echo $FEATURE_CHECK`, and a session on another
+   repository prints nothing. Then `mise run setup-repo-env --delete
+   <owner/repo>`.
 
 ## 7. Clean up
 

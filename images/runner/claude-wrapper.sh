@@ -14,4 +14,8 @@ if [ "${OMNIGENT_CLAUDE_BYPASS_PERMISSIONS:-0}" = "1" ] && [ ! -e "$managed" ]; 
     fi
 fi
 
+# The variables of the repositories this session started with.
+# shellcheck source=SCRIPTDIR/repo-env/repo-env.sh
+. /usr/local/lib/omnigent/repo-env.sh
+
 exec /usr/local/bin/claude-real "$@"

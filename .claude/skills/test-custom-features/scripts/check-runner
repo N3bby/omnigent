@@ -239,6 +239,25 @@ else
   skip "a Codex session's CODEX_HOME has the AGENTS.md" "no Codex session in this Pod"
 fi
 
+echo "== Repository variables"
+check "loader matches images/runner/repo-env/repo-env.sh" cmp -s "$root/images/runner/repo-env/repo-env.sh" /usr/local/lib/omnigent/repo-env.sh
+check "login shells load repository variables" cmp -s "$root/images/runner/repo-env/repo-env.sh" /etc/profile.d/omnigent-repo-env.sh
+check "claude wrapper loads repository variables" grep -q '^\. /usr/local/lib/omnigent/repo-env.sh$' /usr/local/bin/claude
+check "codex wrapper loads repository variables" grep -q '^\. /usr/local/lib/omnigent/repo-env.sh$' /usr/local/bin/codex
+# Only names: the values are secrets.
+mapfile -t repo_env_names < <(find /run/omnigent/repo-env -mindepth 2 -maxdepth 2 -name '[A-Za-z_]*' -printf '%f\n' 2>/dev/null | sort -u)
+if ((${#repo_env_names[@]})); then
+  missing=()
+  for name in "${repo_env_names[@]}"; do [[ -v "$name" ]] || missing+=("$name"); done
+  if ((${#missing[@]})); then
+    fail "the agent has this session's repository variables" "missing ${missing[*]}; the session may predate the deploy"
+  else
+    pass "the agent has this session's repository variables: ${repo_env_names[*]}"
+  fi
+else
+  skip "the agent has this session's repository variables" "none stored for this session's repository"
+fi
+
 echo
 if ((failed)); then echo "runner checks: FAILED"; else echo "runner checks: passed"; fi
 exit "$failed"
