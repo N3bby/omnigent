@@ -4,6 +4,8 @@ Give a repository its own environment variables, such as the token for a
 private npm registry. Sessions started on that repository get them in their
 agent's environment. Sessions on other repositories don't.
 
+![Settings → Repository variables, listing two repositories with their variable names and hidden values](../images/repo-env-settings.png)
+
 ## Set it up
 
 In Omnigent, go to **Settings → Repository variables** (admins only) and
@@ -16,9 +18,13 @@ choose **Add repository**:
    lines at once.
 3. **Save.**
 
+![Adding a repository: the clone URL, the repository it matches, and two variables with hidden values](../images/repo-env-add.png)
+
 Values are write-only. The page shows the names, never the values. To change
 a value, **Edit** the repository and type a new one; a value left blank
 keeps what it was. **Remove** deletes all of the repository's variables.
+
+![Editing a repository: a blank value keeps the current one, a typed value replaces it](../images/repo-env-edit.png)
 
 ### From the command line
 
@@ -52,9 +58,13 @@ mise run setup-repo-env kunlabora/roadpass
 
 Start a session on the repository with the repository picker. Once picked,
 the repository shows **2 variables** (or however many it has); click it to see
-their names. The agent has the variables in every command it runs, and so does anything those commands
-start, like `npm install`, `mise run dev` or `mise exec`. Tailscale SSH
-logins into the session get them too.
+their names.
+
+![The new-session form's repository list, with "2 variables" next to roadpass](../images/repo-env-new-session.png)
+
+The agent has the variables in every command it runs, and so does anything
+those commands start, like `npm install`, `mise run dev` or `mise exec`.
+Tailscale SSH logins into the session get them too.
 
 For an npm registry, keep the token out of `.npmrc` and refer to the
 variable instead:
