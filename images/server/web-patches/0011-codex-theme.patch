@@ -1,0 +1,543 @@
+Add a Codex palette that makes the web UI look like the Codex desktop app.
+
+Codex sits next to the other palettes in Settings -> Appearance and works in
+light and dark mode. themePalette.ts adds its colour tokens (neutral greys,
+black or white primary, a blue accent) and themePalettes.generated.css is
+regenerated from them. codexTheme.css changes the layout under
+[data-theme="codex"]: the native system font, a flat grey sidebar with
+compact rows, user messages in a borderless grey bubble, "Worked" folds
+followed by a hairline, flat code blocks without line numbers, a rounder
+composer with a round send button and the workspace bar beneath it, a
+terminal mark instead of the mascot on the new-session screen, and rounder
+menus. The other palettes are unchanged. Applies after
+0010-fast-mode-command-lifecycle.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/codexTheme.css b/web/src/codexTheme.css
+new file mode 100644
+index 0000000..34a26c4
+--- /dev/null
++++ b/web/src/codexTheme.css
+@@ -0,0 +1,323 @@
++/* Codex palette: the layout and type changes that go beyond colour.
++ *
++ * themePalette.ts sets the colour tokens for `data-theme="codex"`; this file
++ * makes the rest of the app feel like the Codex desktop app. Every rule is
++ * scoped to that attribute, so the other palettes are untouched. These rules
++ * aren't in a cascade layer, so they win over Tailwind's utilities. */
++
++[data-theme="codex"] {
++  --codex-font:
++    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Inter,
++    ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
++  --codex-mono:
++    ui-monospace, "SF Mono", SFMono-Regular, Menlo, "Cascadia Code", "Geist Mono Variable",
++    monospace;
++  --codex-user-bubble: #f3f3f3;
++  --codex-composer-border: rgba(0, 0, 0, 0.1);
++  --codex-composer-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px -4px rgba(0, 0, 0, 0.08);
++  --radius-otto-button: 8px;
++  --composer-shadow: var(--codex-composer-shadow);
++  --composer-shadow-focus: 0 1px 2px rgba(0, 0, 0, 0.05), 0 6px 20px -4px rgba(0, 0, 0, 0.12);
++  --tooltip-bg: #0d0d0d;
++}
++
++.dark[data-theme="codex"] {
++  --codex-user-bubble: #303030;
++  --codex-composer-border: rgba(255, 255, 255, 0.08);
++  --codex-composer-shadow: 0 4px 20px -6px rgba(0, 0, 0, 0.5);
++  --composer-shadow-focus: 0 6px 24px -6px rgba(0, 0, 0, 0.6);
++  --tooltip-bg: #3a3a3a;
++}
++
++/* ---- Type ---------------------------------------------------------------
++ * The native system font (San Francisco on a Mac), smoothed like a macOS app.
++ * The Appearance font setting still wins when it's set. */
++html[data-theme="codex"] {
++  font-family: var(--ui-font-family, var(--codex-font));
++  -webkit-font-smoothing: antialiased;
++  -moz-osx-font-smoothing: grayscale;
++  text-rendering: optimizeLegibility;
++}
++
++[data-theme="codex"] :is(code, pre, kbd, samp, .font-mono) {
++  font-family: var(--codex-mono);
++}
++
++/* ---- Sidebar ------------------------------------------------------------
++ * A flat grey rail with a hairline edge, compact rows and a neutral
++ * selection, instead of the gradient and pink highlight. */
++[data-theme="codex"] .conversations-sidebar {
++  border-right: 1px solid var(--sidebar-border);
++}
++
++[data-theme="codex"] .sidebar-brand {
++  opacity: 0.85;
++  transform: scale(0.86);
++  transform-origin: left center;
++}
++
++[data-theme="codex"] .sidebar-row {
++  border-radius: 8px;
++}
++
++[data-theme="codex"] .conversations-sidebar .sidebar-compact-text {
++  letter-spacing: -0.003em;
++}
++
++/* Section headings ("Projects", "Sessions") read as small labels. */
++[data-theme="codex"] .conversations-sidebar section h2 > button:not(.sidebar-row) {
++  font-size: calc(var(--text-ui) * 0.92);
++  font-weight: 500;
++  color: color-mix(in srgb, var(--sidebar-foreground) 45%, transparent);
++}
++
++[data-theme="codex"] .conversations-sidebar [data-testid="session-state-badge"] {
++  border-radius: 999px;
++}
++
++/* ---- Header -------------------------------------------------------------
++ * The thread title in a medium weight, like Codex's toolbar. */
++[data-theme="codex"] [data-testid="header-title"] {
++  font-weight: 500;
++  letter-spacing: -0.005em;
++}
++
++/* ---- Transcript ---------------------------------------------------------
++ * Assistant replies stay plain text. Your own messages sit in a soft grey
++ * bubble without an outline. */
++[data-theme="codex"]
++  [data-testid="message-bubble"][data-role="user"]
++  .group-\[\.is-user\]\:bg-muted {
++  background: var(--codex-user-bubble);
++  border-radius: 18px;
++  padding: 0.5rem 0.875rem;
++  box-shadow: none;
++  --tw-ring-shadow: 0 0 #0000;
++}
++
++[data-theme="codex"] [data-testid="assistant-text-section"] {
++  line-height: 1.65;
++}
++
++/* "Worked" folds become a quiet label followed by a hairline, the way Codex
++ * marks where a turn's work ends. */
++[data-theme="codex"] .turn-fold-row {
++  display: flex;
++  align-items: center;
++  gap: 0.75rem;
++}
++
++[data-theme="codex"] .turn-fold-row::after {
++  content: "";
++  flex: 1;
++  height: 1px;
++  background: var(--border);
++}
++
++[data-theme="codex"] [data-testid="turn-worked-fold"][data-state="open"] .turn-fold-row::after {
++  display: none;
++}
++
++/* Code blocks: one flat card with a small language label, and no line
++ * numbers, instead of a card nested in a card. */
++[data-theme="codex"] [data-streamdown="code-block"] {
++  gap: 0;
++  padding: 0;
++  overflow: hidden;
++  border-radius: 12px;
++  border-color: var(--border);
++  background: var(--code-bg);
++}
++
++[data-theme="codex"] [data-streamdown="code-block-header"] {
++  height: 2.5rem;
++  padding: 0 0.75rem;
++  border-bottom: 1px solid var(--border);
++  font-size: 12px;
++}
++
++[data-theme="codex"] [data-streamdown="code-block-header"] > span {
++  margin-left: 0;
++}
++
++/* The header grew, so re-centre its floating buttons on it. */
++[data-theme="codex"]
++  [data-streamdown="code-block"]
++  > div:has(> [data-streamdown="code-block-actions"]) {
++  margin-top: -2.25rem;
++}
++
++[data-theme="codex"] [data-streamdown="code-block-actions"] {
++  border-color: transparent;
++  background: transparent;
++  backdrop-filter: none;
++}
++
++[data-theme="codex"] [data-streamdown="code-block-body"] {
++  border: 0;
++  border-radius: 0;
++  background: transparent;
++  padding: 0.75rem 1rem;
++  font-size: 12.5px;
++  line-height: 1.6;
++}
++
++[data-theme="codex"] [data-streamdown="code-block-body"] code > span::before {
++  display: none;
++}
++
++[data-theme="codex"] :not(pre) > code {
++  border-radius: 5px;
++}
++
++/* ---- Composer -----------------------------------------------------------
++ * A single rounded card with a soft shadow and a round send button. The
++ * workspace bar moves underneath it as a plain row, where Codex shows the
++ * environment and branch. */
++/* `.dark[data-theme]` outranks the base `.dark .composer-reference-surface`. */
++[data-theme="codex"] .composer-reference-surface,
++.dark[data-theme="codex"] .composer-reference-surface {
++  border: 1px solid var(--codex-composer-border);
++  border-radius: 22px;
++  background: var(--card-solid);
++  box-shadow: var(--codex-composer-shadow);
++}
++
++[data-theme="codex"] .composer-reference-surface:has(textarea:focus) {
++  box-shadow: var(--composer-shadow-focus);
++}
++
++[data-theme="codex"] .composer-reference-surface textarea::placeholder {
++  color: color-mix(in srgb, var(--muted-foreground) 85%, transparent);
++}
++
++[data-theme="codex"] .composer-reference-surface > .composer-input-text {
++  padding: 0.875rem 1rem 0.25rem;
++}
++
++[data-theme="codex"] [data-testid="composer-action-row"],
++[data-theme="codex"] [data-testid="new-chat-landing-actions"] {
++  padding: 0.25rem 0.625rem 0.625rem;
++}
++
++[data-theme="codex"] .composer-reference-surface button[type="submit"] {
++  border-radius: 999px;
++}
++
++[data-theme="codex"] .composer-reference-surface button[type="submit"]:disabled {
++  background: color-mix(in srgb, var(--foreground) 22%, transparent);
++  color: var(--background);
++}
++
++.dark[data-theme="codex"] .composer-reference-surface button[type="submit"]:disabled {
++  background: rgba(255, 255, 255, 0.1);
++  color: rgba(255, 255, 255, 0.45);
++}
++
++/* Move the workspace bar below the card. Only when nothing is docked above
++ * it: queued messages and the sub-agent tray share its wrapper and belong on
++ * top. */
++[data-theme="codex"] .chat-composer-form {
++  display: flex;
++  flex-direction: column;
++}
++
++[data-theme="codex"]
++  .chat-composer-form
++  > div:has(> [data-testid="composer-workspace-controls"]):not(
++    :has(.composer-queued-surface, .composer-subagent-surface)
++  ) {
++  order: 2;
++}
++
++[data-theme="codex"]
++  [data-testid="new-chat-landing-composer-surface"]
++  > .composer-workspace-surface {
++  order: 2;
++}
++
++/* `:root:not(.dark)[data-theme]` outranks the base light-mode tray rule. */
++[data-theme="codex"] .composer-workspace-surface,
++:root:not(.dark)[data-theme="codex"] .composer-workspace-surface {
++  height: 2rem;
++  margin: 0.25rem 0.5rem 0;
++  padding: 0 0.25rem;
++  border: 0;
++  border-radius: 0;
++  background: transparent;
++}
++
++[data-theme="codex"] .composer-workspace-surface * {
++  font-size: 12px;
++}
++
++/* Except when it docks under queued messages, as in the default layout. */
++:root[data-theme="codex"] :has(> .composer-queued-surface) > .composer-workspace-surface,
++:root[data-theme="codex"] :has(> .composer-subagent-surface) > .composer-workspace-surface,
++.dark[data-theme="codex"] :has(> .composer-queued-surface) > .composer-workspace-surface,
++.dark[data-theme="codex"] :has(> .composer-subagent-surface) > .composer-workspace-surface {
++  height: 37px;
++  margin: 0 0.75rem -1px;
++  border: 1px solid var(--border);
++  border-bottom: 0;
++  background: var(--muted);
++}
++
++/* ---- New session --------------------------------------------------------
++ * A small monochrome terminal mark and a tighter heading instead of the
++ * mascot. */
++[data-theme="codex"] [data-testid="new-chat-landing"] h1 {
++  font-weight: 600;
++  letter-spacing: -0.025em;
++  font-size: 1.5em;
++}
++
++@media (width >= 48rem) {
++  [data-theme="codex"] [data-testid="new-chat-landing"] h1 {
++    font-size: 1.75em;
++  }
++}
++
++[data-theme="codex"] [data-testid="new-chat-landing"] div:has(> h1) > svg {
++  display: none;
++}
++
++[data-theme="codex"] [data-testid="new-chat-landing"] div:has(> h1)::before {
++  content: "";
++  width: 40px;
++  height: 40px;
++  background: currentColor;
++  color: var(--foreground);
++  -webkit-mask: var(--codex-mark) center / contain no-repeat;
++  mask: var(--codex-mark) center / contain no-repeat;
++  --codex-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='5' width='34' height='30' rx='9'/%3E%3Cpath d='M12 16l5 4-5 4M21 25h7'/%3E%3C/svg%3E");
++}
++
++/* ---- Menus, dialogs and tooltips ----------------------------------------
++ * Rounder, lighter popovers with a hairline edge. */
++[data-theme="codex"]
++  :is(
++    [data-slot="dropdown-menu-content"],
++    [data-slot="popover-content"],
++    [data-slot="select-content"],
++    [data-slot="context-menu-content"]
++  ) {
++  border-radius: 12px;
++  border: 1px solid var(--border);
++  box-shadow:
++    0 2px 4px rgba(0, 0, 0, 0.04),
++    0 12px 32px -8px rgba(0, 0, 0, 0.16);
++}
++
++[data-theme="codex"]
++  :is(
++    [data-slot="dropdown-menu-item"],
++    [data-slot="context-menu-item"],
++    [data-slot="select-item"]
++  ) {
++  border-radius: 7px;
++}
++
++[data-theme="codex"] [data-slot="dialog-content"] {
++  border-radius: 16px;
++}
+diff --git a/web/src/index.css b/web/src/index.css
+index 5ae9a88..e30e86a 100644
+--- a/web/src/index.css
++++ b/web/src/index.css
+@@ -4,6 +4,7 @@
+ @import "shadcn/tailwind.css";
+ @import "@fontsource-variable/geist-mono";
+ @import "./themePalettes.generated.css";
++@import "./codexTheme.css";
+ 
+ /* Streamdown ships utility classes pre-compiled in its dist; this @source
+  * pragma tells Tailwind v4 to scan those files so the classes survive the
+diff --git a/web/src/lib/themePalette.ts b/web/src/lib/themePalette.ts
+index 9da72d1..3e5be74 100644
+--- a/web/src/lib/themePalette.ts
++++ b/web/src/lib/themePalette.ts
+@@ -29,6 +29,7 @@ const STORAGE_KEY = "omnigent:ui-theme-palette";
+ /** Selectable color palettes. The first entry is the default (brand) look. */
+ export const themePalettes = [
+   "omni",
++  "codex",
+   "dracula",
+   "github",
+   "catppuccin",
+@@ -295,6 +296,72 @@ export const PALETTES: readonly PaletteMeta[] = [
+       }),
+     },
+   },
++  {
++    id: "codex",
++    label: "Codex",
++    blurb: "Quiet greys and a native feel, like the Codex app.",
++    light: {
++      bg: "#f7f7f7",
++      card: "#ffffff",
++      accent: "#0d0d0d",
++      border: "#e5e5e5",
++      text: "#0d0d0d",
++    },
++    dark: { bg: "#181818", card: "#212121", accent: "#ececec", border: "#2f2f2f", text: "#ececec" },
++    tokens: {
++      // Layout and type changes beyond these colours live in codexTheme.css.
++      light: paletteTokens({
++        background: "#ffffff",
++        foreground: "#0d0d0d",
++        card: "#ffffff",
++        cardSolid: "#ffffff",
++        primary: "#0d0d0d",
++        primaryForeground: "#ffffff",
++        selectionBackground: "rgba(2, 133, 255, 0.16)",
++        secondary: "#f3f3f3",
++        muted: "rgba(0, 0, 0, 0.05)",
++        mutedForeground: "#6b6b6b",
++        codeBackground: "#f7f7f7",
++        accent: "#f3f3f3",
++        accentForeground: "#0d0d0d",
++        border: "#e8e8e8",
++        borderStrong: "#c4c4c4",
++        ring: "#0285ff",
++        brandAccent: "#0285ff",
++        sidebar: "#f7f7f7",
++        sidebarPrimary: "#0d0d0d",
++        sidebarActive: "rgba(0, 0, 0, 0.06)",
++        sidebarBorder: "#ebebeb",
++        shellBackground: "#ffffff",
++      }),
++      dark: paletteTokens({
++        background: "#212121",
++        foreground: "#ececec",
++        card: "#2a2a2a",
++        cardSolid: "#262626",
++        popover: "#2a2a2a",
++        primary: "#ececec",
++        primaryForeground: "#0d0d0d",
++        selectionBackground: "rgba(51, 156, 255, 0.3)",
++        secondary: "#2a2a2a",
++        muted: "rgba(255, 255, 255, 0.07)",
++        mutedForeground: "#a3a3a3",
++        codeBackground: "#1a1a1a",
++        accent: "#303030",
++        accentForeground: "#ececec",
++        border: "#303030",
++        borderStrong: "#4a4a4a",
++        ring: "#339cff",
++        brandAccent: "#339cff",
++        sidebar: "#181818",
++        sidebarPrimary: "#ececec",
++        sidebarPrimaryForeground: "#0d0d0d",
++        sidebarActive: "rgba(255, 255, 255, 0.08)",
++        sidebarBorder: "#262626",
++        shellBackground: "#212121",
++      }),
++    },
++  },
+   {
+     id: "dracula",
+     label: "Dracula",
+diff --git a/web/src/themePalettes.generated.css b/web/src/themePalettes.generated.css
+index dbc1096..69bfd44 100644
+--- a/web/src/themePalettes.generated.css
++++ b/web/src/themePalettes.generated.css
+@@ -97,6 +97,98 @@
+     linear-gradient(135deg, rgba(255, 255, 255, 0.04), transparent 60%);
+ }
+ 
++:root:not(.dark)[data-theme="codex"] {
++  --background: #ffffff;
++  --foreground: #0d0d0d;
++  --card: #ffffff;
++  --card-solid: #ffffff;
++  --card-foreground: #0d0d0d;
++  --tray: #ffffff;
++  --popover: #ffffff;
++  --popover-foreground: #0d0d0d;
++  --primary: #0d0d0d;
++  --primary-foreground: #ffffff;
++  --selection-background: rgba(2, 133, 255, 0.16);
++  --selection-foreground: #0d0d0d;
++  --secondary: #f3f3f3;
++  --secondary-foreground: #0d0d0d;
++  --muted: rgba(0, 0, 0, 0.05);
++  --muted-foreground: #6b6b6b;
++  --code-bg: #f7f7f7;
++  --accent: #f3f3f3;
++  --accent-foreground: #0d0d0d;
++  --border: #e8e8e8;
++  --border-strong: #c4c4c4;
++  --button-border: #e8e8e8;
++  --input: #e8e8e8;
++  --ring: #0285ff;
++  --brand-accent: #0285ff;
++  --sidebar: #f7f7f7;
++  --sidebar-foreground: #0d0d0d;
++  --sidebar-primary: #0d0d0d;
++  --sidebar-primary-foreground: #ffffff;
++  --sidebar-accent: #f3f3f3;
++  --sidebar-accent-foreground: #0d0d0d;
++  --sidebar-border: #ebebeb;
++  --sidebar-ring: #0285ff;
++  --sidebar-active: rgba(0, 0, 0, 0.06);
++  --sidebar-active-foreground: var(--sidebar-foreground);
++}
++
++:root:not(.dark)[data-theme="codex"] .app-shell {
++  background: #ffffff;
++}
++
++:root:not(.dark)[data-theme="codex"] .conversations-sidebar {
++  background: var(--sidebar);
++}
++
++.dark[data-theme="codex"] {
++  --background: #212121;
++  --foreground: #ececec;
++  --card: #2a2a2a;
++  --card-solid: #262626;
++  --card-foreground: #ececec;
++  --tray: #2a2a2a;
++  --popover: #2a2a2a;
++  --popover-foreground: #ececec;
++  --primary: #ececec;
++  --primary-foreground: #0d0d0d;
++  --selection-background: rgba(51, 156, 255, 0.3);
++  --selection-foreground: #ececec;
++  --secondary: #2a2a2a;
++  --secondary-foreground: #ececec;
++  --muted: rgba(255, 255, 255, 0.07);
++  --muted-foreground: #a3a3a3;
++  --code-bg: #1a1a1a;
++  --accent: #303030;
++  --accent-foreground: #ececec;
++  --border: #303030;
++  --border-strong: #4a4a4a;
++  --button-border: #303030;
++  --input: #303030;
++  --ring: #339cff;
++  --brand-accent: #339cff;
++  --sidebar: #181818;
++  --sidebar-foreground: #ececec;
++  --sidebar-primary: #ececec;
++  --sidebar-primary-foreground: #0d0d0d;
++  --sidebar-accent: #303030;
++  --sidebar-accent-foreground: #ececec;
++  --sidebar-border: #262626;
++  --sidebar-ring: #339cff;
++  --sidebar-active: rgba(255, 255, 255, 0.08);
++  --sidebar-active-foreground: var(--sidebar-foreground);
++}
++
++.dark[data-theme="codex"] .app-shell {
++  background: #212121;
++}
++
++.dark[data-theme="codex"] .conversations-sidebar {
++  background: var(--sidebar);
++}
++
+ :root:not(.dark)[data-theme="dracula"] {
+   --background: #f7f5fd;
+   --foreground: #1e1a2b;
