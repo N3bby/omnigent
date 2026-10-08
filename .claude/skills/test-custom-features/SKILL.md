@@ -171,10 +171,13 @@ PASS  name matches this Pod's host id (omnigent-managed-<8 hex>-<suffix>)
 PASS  advertises tags tag:omnigent-runner
 PASS  Tailscale SSH enabled
 PASS  node state is on the home volume
+PASS  logs out when the Pod stops
 == Runtimes from mise
 PASS  login shells put mise shims first on PATH
 PASS  Claude is told to use mise
 PASS  Codex is told to use mise
+PASS  the Pod starts with Omnigent's Python: /opt/venv/bin/python3
+PASS  git's GitHub helper runs Omnigent's Python: /opt/venv/bin/python
 PASS  a project's .mise.toml pins node 20.18.0
 PASS  outside a project, node is the image's
 PASS  codex still runs in that project
@@ -213,6 +216,8 @@ What a failure usually means:
 | user namespace / Podman / compose | k3s, containerd or the admission policies changed; run `scripts/check-userns` on the VM |
 | tailnet | see `/run/omnigent-tailscale.log`; the key may have expired (`mise run credential-status`) |
 | mise shims, pinned Node | `images/runner/Dockerfile` no longer installs `images/runner/mise/mise-profile.sh`, or a newer mise changed its settings or shims; `mise doctor` in a login shell shows what it sees |
+| `the Pod starts with Omnigent's Python` | `images/server/patches/0005-runner-python.patch` was dropped, or this session's Pod started before the deploy; `PID 1 is python3` means a Python pinned for the home directory (`mise use -g python@…`) stops the Pod from starting |
+| `git's GitHub helper runs Omnigent's Python` | `images/runner/patches/0002-git-helper-python.patch` was dropped, or this session predates the deploy; `runs python3` means git uses whichever Python mise picks, so pushes fail in projects that pin Python |
 | `… is told to use mise` | `images/runner/agent-instructions.md` lost its mise advice, or isn't installed; see the agent-instructions rows |
 | `… matches images/runner/agent-instructions.md` | the file changed in this checkout after the image was built, so deploy it, or this session started before the deploy; `missing` means `images/runner/Dockerfile` no longer copies it |
 | repository variables loader or wrappers | `images/runner/Dockerfile` no longer installs `images/runner/repo-env/repo-env.sh`, or a wrapper lost its `. /usr/local/lib/omnigent/repo-env.sh` line |
@@ -321,7 +326,10 @@ Hand these to the user; they need their own devices or VM access:
    tapping the usage numbers opens the bars.
 4. **Idle stop and wake:** after 1 idle hour, `mise run status` shows the
    session `Ready=False`, `SandboxExpired`. Sending a message wakes it with
-   its repository, uncommitted changes and Tailscale name intact.
+   its repository, uncommitted changes and Tailscale name intact. The
+   session's node leaves the
+   [Tailscale machine list](https://login.tailscale.com/admin/machines) as
+   the Pod stops, not up to an hour later.
 5. **After a k3s upgrade:** `scripts/check-userns` on the VM. Its summary
    should show `user namespace active`, `apt install`, `podman run` and the
    published-port lines as `PASS`.

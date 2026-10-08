@@ -1,0 +1,86 @@
+Start runner Pods with the runner image's own Python.
+
+The init container (config.yaml writer, clone credential wiring) and the
+main container (the PID-1 reaper) run in a login shell, where mise's shims
+come first on PATH, and called bare python3 from /home/omnigent. With Python
+pinned for the home directory (mise use -g python@..., or ~/.tool-versions),
+python3 was mise's interpreter, which lacks yaml, so the config writer failed,
+the init container failed, and the session could never start or wake again:
+the pin lives on its home volume. These commands now run RUNNER_PYTHON,
+/opt/venv/bin/python3, which the runner image checks at build time.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/onboarding/sandboxes/base.py b/omnigent/onboarding/sandboxes/base.py
+index 33623af..605e38c 100644
+--- a/omnigent/onboarding/sandboxes/base.py
++++ b/omnigent/onboarding/sandboxes/base.py
+@@ -263,6 +263,12 @@ def foreground_kill_command(pidfile: str) -> str:
+ # ``default`` scope. User-created entries under OTHER names are never in the
+ # marker and so are never touched. A missing or corrupt marker skips removal
+ # entirely — never delete without evidence of what was injected.
++# The runner image's own Python, which has omnigent and its dependencies. Pod
++# startup runs in a login shell, where mise's shims come before it on PATH, so
++# a Python pinned for the home directory (``mise use -g python@...``) would
++# otherwise run these commands without them.
++RUNNER_PYTHON: str = "/opt/venv/bin/python3"
++
+ _HOST_CONFIG_WRITE_SCRIPT: str = """\
+ import base64, json, os, tempfile, yaml
+ 
+@@ -376,7 +382,7 @@ def render_host_config_write_command(host_config: dict[str, object]) -> str:
+     """
+     payload = base64.b64encode(json.dumps(host_config).encode()).decode()
+     script = _HOST_CONFIG_WRITE_SCRIPT.replace("__PAYLOAD__", repr(payload))
+-    return f"python3 -c {shlex.quote(script)}"
++    return f"{RUNNER_PYTHON} -c {shlex.quote(script)}"
+ 
+ 
+ class SandboxCapabilityError(click.ClickException, _sandbox_types.SandboxError):
+diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
+index 2b3b3f4..7b1336e 100644
+--- a/omnigent/onboarding/sandboxes/kubernetes.py
++++ b/omnigent/onboarding/sandboxes/kubernetes.py
+@@ -66,6 +66,7 @@ from omnigent.host.identity import (
+ )
+ from omnigent.onboarding.sandboxes.base import (
+     DEFAULT_HOST_IMAGE,
++    RUNNER_PYTHON,
+     SandboxHostLauncher,
+     render_host_config_write_command,
+ )
+@@ -506,7 +507,7 @@ def _render_workspace_prep_command(
+             f"sys.exit(main(['--server',{server_url!r},'--host-id',{host_id!r},"
+             f"'--host-token',os.environ[{HOST_TOKEN_ENV_VAR!r}],*sys.argv[1:]]))"
+         )
+-        helper = f"!python3 -Ic {shlex.quote(helper_source)}"
++        helper = f"!{RUNNER_PYTHON} -Ic {shlex.quote(helper_source)}"
+         helper_key = "credential.https://github.com.helper"
+         expected_helpers = ["", helper]
+         wire = (
+@@ -546,7 +547,7 @@ def _render_workspace_prep_command(
+             "  credential_config=$(mktemp)\n"
+             "  wire_rc=0\n"
+             f'  GIT_CONFIG_GLOBAL="$credential_config" PYTHONSAFEPATH=1 '
+-            f"PYTHONNOUSERSITE=1 PYTHONPATH= python3 -c {shlex.quote(wire)} || wire_rc=$?\n"
++            f"PYTHONNOUSERSITE=1 PYTHONPATH= {RUNNER_PYTHON} -c {shlex.quote(wire)} || wire_rc=$?\n"
+             '  if [ "$wire_rc" -eq 0 ]; then\n'
+             '    export GIT_CONFIG_GLOBAL="$credential_config"\n'
+             '  elif [ "$wire_rc" -eq 10 ]; then\n'
+@@ -561,7 +562,7 @@ def _render_workspace_prep_command(
+         # anything to it makes os.rename fail instead of nesting the clone.
+         script += (
+             "replace_empty_dir() {\n"
+-            '  python3 - "$1" "$2" <<\'PY\'\n'
++            f'  {RUNNER_PYTHON} - "$1" "$2" <<\'PY\'\n'
+             "import os\n"
+             "import sys\n"
+             "os.rename(sys.argv[1], sys.argv[2])\n"
+@@ -656,7 +657,7 @@ def _render_host_command(server_url: str) -> list[str]:
+     :returns: The ``["bash", "-lc", script]`` command.
+     """
+     script = (
+-        f"exec python3 -c {shlex.quote(_REAPER_SRC)} "
++        f"exec {RUNNER_PYTHON} -c {shlex.quote(_REAPER_SRC)} "
+         f"omnigent host --server {shlex.quote(server_url)}"
+     )
+     return ["bash", "-lc", script]

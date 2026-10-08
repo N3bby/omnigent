@@ -114,8 +114,12 @@ in `images/runner/shell/`:
 ## Good to know
 
 - **Stopped sessions don't pile up** in your machine list. Each Pod joins as
-  an ephemeral node, which Tailscale removes soon after it goes offline. A
-  woken Pod joins again under the same name.
+  an ephemeral node and logs out as it stops, so Tailscale removes it straight
+  away. A woken Pod joins again under the same name.
+- **Ephemeral nodes use up minutes.** Tailscale's plans include a monthly pool
+  of minutes for ephemeral nodes, 1,000 on the free plan, counted for as long
+  as each node is in the tailnet. See
+  [Tailscale's pricing](https://tailscale.com/pricing).
 - **No name in the composer, or the name doesn't connect?** Check
   `/run/omnigent-tailscale.log` in the Pod, or `mise run credential-status`
   for the key. The server works the name out itself rather than asking the
@@ -136,12 +140,22 @@ a key.
     `OMNIGENT_HOST_ID`, with `--ssh` and the tags in
     `OMNIGENT_TAILSCALE_TAGS`.
   - The Pod has no TUN device, so `tailscaled` uses userspace networking.
+- **Leaving:** the admission policy in
+  `kubernetes/platform/runner-userns.yaml` gives the Pod a `preStop` hook,
+  `images/runner/tailscale/tailscale-logout.sh`.
+  - It runs `tailscale logout`, which removes an ephemeral node at once.
+    Otherwise Tailscale removes it 30 to 60 minutes after it goes offline,
+    which is still what happens when a Pod stops without running the hook.
+  - It gives up after 10 seconds and never fails, so the Pod still stops.
 - **Key:** `TAILSCALE_AUTHKEY` in the `omnigent-creds` Secret. An OAuth client
   secret gets `?ephemeral=true&preauthorized=true`, so each Pod creates its
   own ephemeral, pre-approved key.
 - **Same name after a wake:** the node's state is kept in
-  `~/.local/state/omnigent-tailscale` in the session's home directory. A
-  woken Pod rejoins as the same node, with the same SSH host keys.
+  `~/.local/state/omnigent-tailscale` in the session's home directory.
+  - A Pod that logged out as it stopped wakes as a new node, under the same
+    name and with the same SSH host keys, which stay in that directory.
+  - A Pod that stopped without logging out, and wakes before Tailscale
+    removes its node, rejoins as the same node.
   - If Omnigent has to rebuild a lost sandbox from scratch while the old node
     is still listed, Tailscale names the new node `omnigent-e1dcab9b-1`. The
     Pod logs that to `/run/omnigent-tailscale.log`. The name in the composer

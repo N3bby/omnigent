@@ -45,6 +45,7 @@ COPY --chmod=0755 containers/podman-service.sh /usr/local/bin/omnigent-podman-se
 COPY --chmod=0755 containers/docker-compose.sh /usr/local/bin/docker-compose
 COPY containers/podman-service-profile.sh /etc/profile.d/omnigent-podman-service.sh
 COPY --chmod=0755 tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailscale
+COPY --chmod=0755 tailscale/tailscale-logout.sh /usr/local/bin/omnigent-tailscale-logout
 COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
 COPY mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh
 COPY repo-env/repo-env.sh /usr/local/lib/omnigent/repo-env.sh
@@ -81,8 +82,11 @@ RUN set -eu; \
     done; \
     apt-get purge -y --auto-remove patch; \
     rm -rf /var/lib/apt/lists/* /tmp/omnigent-patches; \
-    python -m compileall -q -f "$site/omnigent/harnesses"; \
-    python -c 'import omnigent.harnesses.claude_native.forwarder, omnigent.harnesses.codex_native.forwarder'
+    python -m compileall -q -f "$site/omnigent/harnesses" "$site/omnigent/git_credential_github.py"; \
+    python -c 'import omnigent.harnesses.claude_native.forwarder, omnigent.harnesses.codex_native.forwarder, omnigent.git_credential_github'
+# The server starts runner Pods with this Python by full path, past mise's
+# shims (images/server/patches/0005-runner-python.patch).
+RUN /opt/venv/bin/python3 -c 'import omnigent.host, yaml'
 
 # Shell setup for Tailscale SSH logins. It's personal taste: change
 # images/runner/shell/ to make it your own (see docs/features/tailscale.md).
