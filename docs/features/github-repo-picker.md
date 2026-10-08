@@ -21,6 +21,11 @@ access.
   small Vault service inside the cluster before they're stored in the
   database. See the [threat model](../threat-model.md#github-tokens-and-vault)
   for what that protects against.
+- **It works on phones.** Upstream's picker ran off the top of a phone's
+  screen. It's patched to fit the screen, with the list scrolling inside it,
+  and the keyboard only opens when you tap the search field.
+
+  ![The repository picker open on a phone](../images/repo-picker-mobile.webp)
 
 ## Turning it off
 
@@ -34,3 +39,6 @@ It's an optional setup step. Without it, there's no picker.
   back by itself after a restart.
 - The server image adds the `hvac` Python client, so the server can talk to
   Vault.
+- `images/server/web-patches/0006-mobile-repo-picker.patch` keeps the picker
+  on a phone's screen. The same fix applies to the branch picker next to a
+  picked repository.

@@ -6,6 +6,8 @@ lists names, and editing keeps a value whose field is left blank. The page
 calls /v1/repo-env (images/server/omnigent_repo_env_api.py, mounted by
 0006-repo-env-routes.patch). A repository picked in the new-session form shows
 "N variables", which lists the names on click.
+On a phone, a long repository wraps at its slashes, each name sits above its
+value, buttons are 40px for touch, and the badge shows only the count.
 Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0004.
 
 diff --git a/web/src/components/RepoEnvBadge.test.tsx b/web/src/components/RepoEnvBadge.test.tsx
@@ -61,10 +63,10 @@ index 0000000..e62b78f
 +});
 diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
 new file mode 100644
-index 0000000..829300f
+index 0000000..12239ea
 --- /dev/null
 +++ b/web/src/components/RepoEnvBadge.tsx
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,50 @@
 +/**
 + * "2 variables" next to a repository in the new-session form, when the
 + * repository has variables (added by this deployment). Clicking it lists
@@ -85,15 +87,22 @@ index 0000000..829300f
 +      <PopoverTrigger asChild>
 +        <button
 +          type="button"
-+          className="flex shrink-0 items-center gap-1 rounded-sm px-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
++          className="flex shrink-0 items-center justify-center gap-1 rounded-sm px-1 text-sm text-muted-foreground transition-colors hover:text-foreground max-md:pointer-coarse:min-h-9 max-md:pointer-coarse:min-w-9"
 +          aria-label={`${label} for this repository`}
 +          data-testid="repo-env-badge"
 +        >
 +          <VariableIcon className="size-3.5" />
-+          {label}
++          {/* Phones show only the count, leaving the row's room to the
++          repository's name. */}
++          <span className="max-sm:hidden">{label}</span>
++          <span className="sm:hidden">{names.length}</span>
 +        </button>
 +      </PopoverTrigger>
-+      <PopoverContent align="end" className="w-64 p-3">
++      <PopoverContent
++        align="end"
++        collisionPadding={8}
++        className="w-64 max-w-[calc(100vw-1rem)] p-3"
++      >
 +        <p className="mb-2 text-sm text-muted-foreground">
 +          The agent gets these in its environment:
 +        </p>
@@ -420,10 +429,10 @@ index 0000000..d44da2d
 +}
 diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
 new file mode 100644
-index 0000000..bac8071
+index 0000000..a01644e
 --- /dev/null
 +++ b/web/src/pages/RepoVariablesPage.test.tsx
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,204 @@
 +// Tests for the admin Repository variables page. The identity module's
 +// authenticatedFetch is replaced by an in-memory /v1/repo-env, so the page,
 +// its react-query hooks and the fetch helpers run as they do in the browser.
@@ -524,6 +533,14 @@ index 0000000..bac8071
 +    expect(document.body.textContent).not.toContain("secret-token");
 +  });
 +
++  it("lets a long repository wrap at its slashes on a phone", async () => {
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    const name = within(card).getByTitle(ROADPASS);
++    expect(name).toHaveTextContent(ROADPASS);
++    expect(name.querySelectorAll("wbr")).toHaveLength(2);
++  });
++
 +  it("tells a non-admin they can't manage it", async () => {
 +    vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(false);
 +    renderPage();
@@ -622,10 +639,10 @@ index 0000000..bac8071
 +});
 diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
 new file mode 100644
-index 0000000..f11db85
+index 0000000..de0fb80
 --- /dev/null
 +++ b/web/src/pages/RepoVariablesPage.tsx
-@@ -0,0 +1,656 @@
+@@ -0,0 +1,726 @@
 +/**
 + * Admin page for repository variables (``/settings/repo-env``), added by this
 + * deployment. Rendered as a Settings sub-category, next to Members and
@@ -640,7 +657,7 @@ index 0000000..f11db85
 + * Gated on the client by an admin check AND on the server by the routes.
 + */
 +
-+import { useEffect, useState } from "react";
++import { type ReactNode, useEffect, useState } from "react";
 +import { useQuery } from "@tanstack/react-query";
 +import {
 +  ClipboardPasteIcon,
@@ -675,6 +692,28 @@ index 0000000..f11db85
 +  return `${count} ${word}${count === 1 ? "" : "s"}`;
 +}
 +
++/**
++ * ``kunlabora/roadpass`` with a line-break opportunity after each slash, on
++ * narrow screens. Hidden from sm, where the name truncates instead: Chrome
++ * breaks at a ``<wbr>`` even in ``white-space: nowrap``.
++ */
++function breakAtSlashes(text: string): ReactNode[] {
++  const nodes: ReactNode[] = [];
++  let start = 0;
++  for (let slash = text.indexOf("/"); slash >= 0; slash = text.indexOf("/", start)) {
++    nodes.push(text.slice(start, slash + 1), <wbr key={slash} className="sm:hidden" />);
++    start = slash + 1;
++  }
++  nodes.push(text.slice(start));
++  return nodes;
++}
++
++// Phones: page gutters like the new-session form, and 40px tap targets on
++// touch screens.
++const PAGE_PADDING = "px-4 sm:px-8";
++const TOUCH_ICON_BUTTON = "max-md:pointer-coarse:size-10";
++const TOUCH_HEIGHT = "max-md:pointer-coarse:h-10";
++
 +export function RepoVariablesPage() {
 +  const info = useServerInfo();
 +  const isSingleUser = isSingleUserMode(info);
@@ -701,7 +740,7 @@ index 0000000..f11db85
 +
 +  if (!isSingleUser && meIsAdmin === false) {
 +    return (
-+      <PageScroll contentClassName="px-8" extraBottom="2.5rem">
++      <PageScroll contentClassName={PAGE_PADDING} extraBottom="2.5rem">
 +        <h1 className="mb-2 text-2xl font-semibold">Repository variables</h1>
 +        <p className="text-ui text-muted-foreground">
 +          You don't have permission to manage repository variables.
@@ -742,8 +781,8 @@ index 0000000..f11db85
 +  }
 +
 +  return (
-+    <PageScroll contentClassName="px-8" extraBottom="2.5rem">
-+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
++    <PageScroll contentClassName={PAGE_PADDING} extraBottom="2.5rem">
++      <div className="mb-4 flex flex-wrap items-start justify-between gap-3 sm:mb-6">
 +        <div className="min-w-0 max-w-xl">
 +          <h1 className="text-2xl font-semibold">Repository variables</h1>
 +          <p className="mt-1 text-ui text-muted-foreground">
@@ -759,6 +798,7 @@ index 0000000..f11db85
 +              setAdding(true);
 +            }}
 +            componentId="settings.repo_env.add"
++            className={TOUCH_HEIGHT}
 +          >
 +            <PlusIcon className="ui-icon" />
 +            Add repository
@@ -767,7 +807,7 @@ index 0000000..f11db85
 +      </div>
 +
 +      {adding && (
-+        <div className="mb-6 rounded-lg border border-border p-4">
++        <div className="mb-4 rounded-lg border border-border p-3 sm:mb-6 sm:p-4">
 +          <VariablesEditor
 +            known={list.map((e) => e.repository)}
 +            onClose={() => setAdding(false)}
@@ -785,14 +825,14 @@ index 0000000..f11db85
 +      ) : (
 +        <>
 +          {list.length > 0 && (
-+            <label className="relative mb-3 block max-w-xs">
++            <label className="relative mb-3 block sm:max-w-xs">
 +              <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
 +              <Input
 +                value={filter}
 +                onChange={(e) => setFilter(e.target.value)}
 +                placeholder="Filter repositories"
 +                aria-label="Filter repositories"
-+                className="pl-8"
++                className={cn("pl-8", TOUCH_HEIGHT)}
 +              />
 +            </label>
 +          )}
@@ -863,19 +903,30 @@ index 0000000..f11db85
 +      data-testid="repo-env-repository"
 +      aria-label={entry.repository}
 +    >
-+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2">
-+        <FolderGit2Icon className="ui-icon shrink-0 text-muted-foreground" />
-+        <span className="min-w-0 flex-1 truncate text-ui font-medium" title={entry.repository}>
-+          <span className="font-normal text-muted-foreground">{host}/</span>
-+          {path}
++      {/* Narrow screens: the repository wraps at its slashes, the buttons sit
++      top right and the details go below at full width. From sm, one line. */}
++      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 px-3 py-2 sm:flex sm:items-center">
++        <span className="flex h-[1lh] shrink-0 items-center text-ui">
++          <FolderGit2Icon className="ui-icon shrink-0 text-muted-foreground" />
 +        </span>
-+        <span className="text-sm text-muted-foreground" title={absoluteTime(updated)}>
++        <span
++          className="min-w-0 text-ui font-medium wrap-anywhere sm:flex-1 sm:truncate"
++          title={entry.repository}
++        >
++          <span className="font-normal text-muted-foreground">{host}/</span>
++          <wbr className="sm:hidden" />
++          {breakAtSlashes(path)}
++        </span>
++        <span
++          className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
++          title={absoluteTime(updated)}
++        >
 +          {plural(entry.names.length, "variable")}
 +          {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
 +          {entry.updated_by && ` by ${entry.updated_by}`}
 +        </span>
 +        {!editing && (
-+          <div className="flex gap-1">
++          <div className="col-start-3 row-start-1 flex shrink-0 gap-1 max-md:pointer-coarse:-my-2 max-md:pointer-coarse:-mr-1.5 max-md:pointer-coarse:gap-0">
 +            <Button
 +              variant="ghost"
 +              size="icon-sm"
@@ -883,6 +934,7 @@ index 0000000..f11db85
 +              aria-label={`Edit variables for ${path}`}
 +              title="Edit"
 +              componentId="settings.repo_env.edit"
++              className={TOUCH_ICON_BUTTON}
 +            >
 +              <PencilIcon className="ui-icon" />
 +            </Button>
@@ -893,6 +945,7 @@ index 0000000..f11db85
 +              aria-label={`Remove variables for ${path}`}
 +              title="Remove"
 +              componentId="settings.repo_env.remove"
++              className={TOUCH_ICON_BUTTON}
 +            >
 +              <Trash2Icon className="ui-icon" />
 +            </Button>
@@ -908,11 +961,21 @@ index 0000000..f11db85
 +              Remove all {plural(entry.names.length, "variable")} for{" "}
 +              <span className="font-medium">{path}</span>? New sessions on it start without them.
 +            </p>
-+            <div className="flex gap-2">
-+              <Button variant="outline" onClick={onCancelRemove} disabled={removing}>
++            <div className="ml-auto flex gap-2">
++              <Button
++                variant="outline"
++                onClick={onCancelRemove}
++                disabled={removing}
++                className={TOUCH_HEIGHT}
++              >
 +                Cancel
 +              </Button>
-+              <Button variant="destructive" onClick={onRemove} loading={removing}>
++              <Button
++                variant="destructive"
++                onClick={onRemove}
++                loading={removing}
++                className={TOUCH_HEIGHT}
++              >
 +                Remove
 +              </Button>
 +            </div>
@@ -1085,18 +1148,19 @@ index 0000000..f11db85
 +              rows={5}
 +              placeholder={"GOVFLANDERS_NPM_TOKEN=…\nNPM_CONFIG_REGISTRY=https://…"}
 +              aria-label="Paste NAME=value lines"
-+              className="font-mono text-sm"
++              className="font-mono"
 +              autoFocus
 +              spellCheck={false}
 +            />
 +            {pasteError && <p className="text-sm text-destructive">{pasteError}</p>}
 +            <div className="flex gap-2">
-+              <Button type="button" variant="outline" onClick={applyPaste}>
++              <Button type="button" variant="outline" onClick={applyPaste} className={TOUCH_HEIGHT}>
 +                Add these lines
 +              </Button>
 +              <Button
 +                type="button"
 +                variant="ghost"
++                className={TOUCH_HEIGHT}
 +                onClick={() => {
 +                  setPasting(false);
 +                  setPasteError(null);
@@ -1108,8 +1172,10 @@ index 0000000..f11db85
 +          </>
 +        ) : (
 +          rows.map((row, i) => (
-+            <div key={row.id} className="flex flex-col gap-1">
-+              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
++            <div key={row.id} className="flex flex-col gap-1 not-first:max-sm:mt-1">
++              {/* Narrow screens: the name and its remove button, with the
++              value below at full width. From sm, one line. */}
++              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5 sm:flex">
 +                <Input
 +                  value={row.name}
 +                  onChange={(e) => update(row.id, { name: e.target.value.trim() })}
@@ -1121,7 +1187,8 @@ index 0000000..f11db85
 +                  autoCapitalize="off"
 +                  spellCheck={false}
 +                  className={cn(
-+                    "font-mono text-sm sm:w-64 sm:flex-none",
++                    "font-mono sm:w-64 sm:flex-none",
++                    TOUCH_HEIGHT,
 +                    row.existing && "bg-muted/40",
 +                  )}
 +                />
@@ -1132,7 +1199,7 @@ index 0000000..f11db85
 +                  placeholder={row.existing ? "Leave blank to keep the current value" : "Value"}
 +                  aria-label={`Value for ${row.name || "new variable"}`}
 +                  autoComplete="new-password"
-+                  className="min-w-0 flex-1"
++                  className={cn("col-span-2 min-w-0 sm:flex-1", TOUCH_HEIGHT)}
 +                />
 +                <Button
 +                  type="button"
@@ -1140,6 +1207,7 @@ index 0000000..f11db85
 +                  size="icon-sm"
 +                  onClick={() => removeRow(row.id)}
 +                  aria-label={`Remove ${row.name || "row"}`}
++                  className={cn("col-start-2 row-start-1", TOUCH_ICON_BUTTON)}
 +                >
 +                  <XIcon className="ui-icon" />
 +                </Button>
@@ -1158,25 +1226,43 @@ index 0000000..f11db85
 +              variant="ghost"
 +              size="sm"
 +              onClick={() => setRows((r) => [...r, newRow()])}
++              className={TOUCH_HEIGHT}
 +            >
 +              <PlusIcon className="ui-icon" />
 +              Add variable
 +            </Button>
-+            <Button type="button" variant="ghost" size="sm" onClick={() => setPasting(true)}>
++            <Button
++              type="button"
++              variant="ghost"
++              size="sm"
++              onClick={() => setPasting(true)}
++              className={TOUCH_HEIGHT}
++            >
 +              <ClipboardPasteIcon className="ui-icon" />
 +              Paste .env
 +            </Button>
 +          </div>
-+          <div className="flex items-center gap-2">
++          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
 +            {missingValue && (
 +              <span className="text-sm text-muted-foreground">
 +                Give every new variable a value.
 +              </span>
 +            )}
-+            <Button type="button" variant="outline" onClick={onClose} disabled={save.isPending}>
++            <Button
++              type="button"
++              variant="outline"
++              onClick={onClose}
++              disabled={save.isPending}
++              className={TOUCH_HEIGHT}
++            >
 +              Cancel
 +            </Button>
-+            <Button type="submit" disabled={!canSave} loading={save.isPending}>
++            <Button
++              type="submit"
++              disabled={!canSave}
++              loading={save.isPending}
++              className={TOUCH_HEIGHT}
++            >
 +              Save
 +            </Button>
 +          </div>
@@ -1241,6 +1327,7 @@ index 0000000..f11db85
 +        autoComplete="off"
 +        spellCheck={false}
 +        autoFocus
++        className={TOUCH_HEIGHT}
 +      />
 +      {suggestions.length > 0 && (
 +        <div className="flex flex-col overflow-hidden rounded-md border border-border">
@@ -1251,7 +1338,7 @@ index 0000000..f11db85
 +                key={repo.full_name}
 +                type="button"
 +                onClick={() => onQuery(repo.full_name)}
-+                className="flex items-center gap-2 px-3 py-1.5 text-left text-ui hover:bg-muted"
++                className="flex items-center gap-2 px-3 py-1.5 text-left text-ui hover:bg-muted max-md:pointer-coarse:py-2.5"
 +              >
 +                <FolderGit2Icon className="ui-icon shrink-0 text-muted-foreground" />
 +                <span className="min-w-0 flex-1 truncate">{repo.full_name}</span>
@@ -1272,7 +1359,7 @@ index 0000000..f11db85
 +            )}
 +          </p>
 +        ) : (
-+          <p className="text-sm text-muted-foreground">
++          <p className="text-sm text-muted-foreground wrap-anywhere">
 +            Matches sessions on <span className="font-mono">{key}</span>
 +          </p>
 +        ))}

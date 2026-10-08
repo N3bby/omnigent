@@ -40,7 +40,7 @@ its Pod, so it could change the setting back itself.
   Claude Code shows a one-time consent dialog that Omnigent can't answer.
   It also adds `--allow-dangerously-skip-permissions`, so bypass stays in
   Claude's shift+tab cycle whatever mode a session starts in. Three patches
-  let the web picker use it: `images/server/web-patches/0006` lists it,
+  let the web picker use it: `images/server/web-patches/0008` lists it,
   `images/server/patches/0007` accepts it, and `images/runner/patches/0003`
   lets the runner cycle to it.
   The wrapper also turns off Claude Code's auto-updater

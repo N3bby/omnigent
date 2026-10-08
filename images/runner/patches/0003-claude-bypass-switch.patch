@@ -6,7 +6,7 @@ bypass (approving a plan in the web UI switches to auto or manual) it could
 not get back. The runner's claude wrapper now launches Claude with
 --allow-dangerously-skip-permissions while claude_bypass_permissions is on, so
 bypass is always in the cycle and the cycler may target it. Pairs with images/server/patches/0007 and
-images/server/web-patches/0006.
+images/server/web-patches/0008.
 Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/omnigent/harnesses/claude_native/bridge.py b/omnigent/harnesses/claude_native/bridge.py
