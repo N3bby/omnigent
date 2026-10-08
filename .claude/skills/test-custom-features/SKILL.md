@@ -79,6 +79,7 @@ PASS  images/server/web-patches/0002-composer-tailscale-host.patch
 PASS  images/server/web-patches/0003-composer-gateway-link.patch
 PASS  images/server/web-patches/0004-remove-share-button.patch
 PASS  images/server/web-patches/0005-repo-variables-page.patch
+PASS  images/server/web-patches/0006-mobile-repo-picker.patch
 PASS  images/server/web-patches/0007-sidebar-swipe-menu.patch
 ```
 
@@ -363,6 +364,10 @@ Hand these to the user; they need their own devices or VM access:
    the page fits the screen without sideways scrolling, a long repository
    wraps instead of being cut off, and editing shows each name above its
    value.
+9. **Repository picker on a phone:** in a new session, open the repository
+   chip, then **Choose a repository…**. The whole picker, search field
+   included, is on screen and the keyboard stays closed. Tapping the search
+   field opens the keyboard, and typing filters the list.
 
 ## 7. Clean up
 
