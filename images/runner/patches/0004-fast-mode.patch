@@ -1,0 +1,525 @@
+Turn fast mode on and off from the web chat, and report whether it is on.
+
+claude-native: /fast is no longer escaped into plain text. /fast on and
+/fast off reach Claude Code as typed and show as a command in the chat; a bare
+/fast becomes /fast on or /fast off from the last statusLine capture, since a
+bare /fast may open a picker. The statusLine's fast_mode is kept in
+context.json and posted as external_session_usage data.fast_mode whenever it
+changes.
+
+codex-native: /fast, /fast on and /fast off switch the thread to Codex's Fast
+service tier (priority) or back with thread/settings/update, and record it as
+service_tier in the session's config.toml, instead of starting a turn. The
+forwarder posts data.fast_mode from thread start/resume and every
+thread/settings/updated, so /fast typed in the terminal shows too.
+
+Pairs with the server patch 0008-fast-mode.patch and the web patch
+0009-composer-fast-mode.patch. Applies after 0001-rate-limits.patch. Base:
+omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/harnesses/claude_native/bridge.py b/omnigent/harnesses/claude_native/bridge.py
+index 413cdae..7efc305 100644
+--- a/omnigent/harnesses/claude_native/bridge.py
++++ b/omnigent/harnesses/claude_native/bridge.py
+@@ -7688,7 +7688,6 @@ _CLAUDE_CLI_DROPPED_COMMANDS: frozenset[str] = frozenset(
+         "cost",
+         "doctor",
+         "exit",
+-        "fast",
+         "feedback",
+         "help",
+         "hooks",
+@@ -7716,6 +7715,9 @@ _CLAUDE_CLI_SURFACED_COMMANDS: frozenset[str] = frozenset(
+         "clear",
+         "compact",
+         "effort",
++        # ``/fast on|off`` runs without a dialog; a bare ``/fast`` is resolved
++        # to one of them before it is typed (see ``resolve_fast_command``).
++        "fast",
+         "model",
+         "ultrareview",
+     }
+@@ -7783,6 +7785,28 @@ def _escape_unsupported_slash_command(content: str) -> str:
+     return _escape_slash_command_text(content)
+ 
+ 
++def resolve_fast_command(content: str, bridge_dir: Path) -> str:
++    """
++    Turn a bare ``/fast`` into an explicit ``/fast on`` or ``/fast off``.
++
++    Claude Code's ``/fast`` toggles fast mode; given ``on`` or ``off`` it
++    applies the change at once, while a bare ``/fast`` may open a picker
++    Omnigent cannot drive. The current state comes from the latest
++    statusLine capture; when no render has reported it yet, ``/fast``
++    turns fast mode on.
++
++    :param content: User text from the Omnigent web UI, e.g. ``"/fast"``.
++    :param bridge_dir: Bridge directory holding the statusLine capture.
++    :returns: ``"/fast on"`` or ``"/fast off"`` for a bare ``/fast``;
++        *content* unchanged otherwise.
++    """
++    if content.strip() != "/fast":
++        return content
++    status_state = read_claude_context_state(bridge_dir)
++    fast_mode = status_state.get("fast_mode") if status_state is not None else None
++    return "/fast off" if fast_mode is True else "/fast on"
++
++
+ def is_auth_slash_command(content: str) -> bool:
+     """
+     Return whether *content* is Claude Code's ``/login`` or ``/logout``.
+diff --git a/omnigent/harnesses/claude_native/forwarder.py b/omnigent/harnesses/claude_native/forwarder.py
+index 8c4e4a9..9aaa4bd 100644
+--- a/omnigent/harnesses/claude_native/forwarder.py
++++ b/omnigent/harnesses/claude_native/forwarder.py
+@@ -800,6 +800,8 @@ class _ForwardDedupeState:
+     context_window: int | None = None
+     # Last subscription ``rate_limits`` POSTed from the statusLine capture.
+     posted_rate_limits: dict[str, object] | None = None
++    # Last ``/fast`` state POSTed from the statusLine capture.
++    posted_fast_mode: bool | None = None
+     recorded_token_usage: dict[str, int] | None = None
+     observed_model: str | None = None
+     posted_model: str | None = None
+@@ -1373,6 +1375,12 @@ async def forward_claude_transcript_to_session(
+                             bridge_dir=bridge_dir,
+                             dedupe=dedupe,
+                         )
++                        await _forward_fast_mode(
++                            client,
++                            session_id=current_session_id,
++                            bridge_dir=bridge_dir,
++                            dedupe=dedupe,
++                        )
+                     transcript_path = read_transcript_path(bridge_dir)
+                     _observe_transcript_discovery(
+                         bridge_dir=bridge_dir,
+@@ -5328,6 +5336,47 @@ async def _forward_rate_limits(
+     dedupe.posted_rate_limits = rate_limits
+ 
+ 
++async def _forward_fast_mode(
++    client: httpx.AsyncClient,
++    *,
++    session_id: str,
++    bridge_dir: Path,
++    dedupe: _ForwardDedupeState,
++) -> None:
++    """
++    Mirror whether Claude Code's ``/fast`` is on to the web composer.
++
++    Runs once per statusLine render, which follows every ``/fast`` toggle,
++    whether it was typed in the terminal or sent from the web UI.
++    Best-effort and not retried: the next render posts again.
++
++    :param client: Omnigent HTTP client.
++    :param session_id: Omnigent session/conversation id.
++    :param bridge_dir: Native Claude bridge directory.
++    :param dedupe: Per-session baseline; ``posted_fast_mode`` suppresses
++        re-posting an unchanged state.
++    """
++    status_state = await asyncio.to_thread(read_claude_context_state, bridge_dir)
++    fast_mode = status_state.get("fast_mode") if status_state is not None else None
++    if not isinstance(fast_mode, bool) or fast_mode == dedupe.posted_fast_mode:
++        return
++    try:
++        resp = await client.post(
++            f"/v1/sessions/{session_id}/events",
++            json={"type": "external_session_usage", "data": {"fast_mode": fast_mode}},
++        )
++        resp.raise_for_status()
++    except httpx.HTTPError as exc:
++        _logger.debug(
++            "Failed to forward Claude fast mode; session=%s http_status=%s",
++            session_id,
++            _http_status_for_log(exc),
++            extra={"session_id": session_id},
++        )
++        return
++    dedupe.posted_fast_mode = fast_mode
++
++
+ # Usage keys that carry token counts, in the spelling ``record_llm_usage``
+ # expects. ``context_tokens`` is deliberately absent: it is a derived
+ # input+cache total for the context-window gauge, not a GenAI usage counter.
+diff --git a/omnigent/harnesses/claude_native/status.py b/omnigent/harnesses/claude_native/status.py
+index aa4b4f1..9bdcdf5 100644
+--- a/omnigent/harnesses/claude_native/status.py
++++ b/omnigent/harnesses/claude_native/status.py
+@@ -74,6 +74,10 @@ def normalize_status_payload(payload: dict[str, object]) -> dict[str, object] |
+     rate_limits = rate_limits_from_status_payload(payload)
+     if rate_limits is not None:
+         record["rate_limits"] = rate_limits
++    # Whether ``/fast`` is on, rewritten on every render like the model.
++    fast_mode = payload.get("fast_mode")
++    if isinstance(fast_mode, bool):
++        record["fast_mode"] = fast_mode
+     return record
+ 
+ 
+diff --git a/omnigent/harnesses/codex_native/bridge.py b/omnigent/harnesses/codex_native/bridge.py
+index fc9c51e..8818f91 100644
+--- a/omnigent/harnesses/codex_native/bridge.py
++++ b/omnigent/harnesses/codex_native/bridge.py
+@@ -747,6 +747,81 @@ def write_codex_config_effort(bridge_dir: Path, effort: str) -> bool:
+     )
+ 
+ 
++# Codex's Fast service tier. Its model catalog lists Fast as ``priority``;
++# ``fast`` is the older spelling, which Codex still accepts and reports as
++# ``priority``.
++CODEX_FAST_SERVICE_TIER = "priority"
++_CODEX_FAST_SERVICE_TIERS = frozenset({CODEX_FAST_SERVICE_TIER, "fast"})
++
++
++def is_codex_fast_service_tier(service_tier: object) -> bool:
++    """
++    Return whether a Codex service tier is the Fast tier.
++
++    :param service_tier: A ``serviceTier`` from the app-server or the
++        ``service_tier`` key of ``config.toml``, e.g. ``"priority"``,
++        ``"default"`` or ``None``.
++    :returns: ``True`` for ``"priority"`` and ``"fast"``.
++    """
++    return service_tier in _CODEX_FAST_SERVICE_TIERS
++
++
++def read_codex_config_fast_mode(bridge_dir: Path) -> bool:
++    """
++    Read whether this session's Codex ``config.toml`` selects the Fast tier.
++
++    :param bridge_dir: The session's native-Codex bridge directory.
++    :returns: ``True`` when the top-level ``service_tier`` is Fast; ``False``
++        when it is anything else, absent, or the file is unreadable.
++    """
++    try:
++        data = tomllib.loads((codex_home_for_bridge_dir(bridge_dir) / "config.toml").read_text())
++    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
++        return False
++    return is_codex_fast_service_tier(data.get("service_tier"))
++
++
++def write_codex_config_fast_mode(bridge_dir: Path, enabled: bool) -> bool:
++    """
++    Record a ``/fast`` switch in this session's Codex ``config.toml``.
++
++    ``thread/settings/update`` changes the live thread's service tier but not
++    ``config.toml``, which a resumed thread starts from. On sets the
++    top-level ``service_tier`` to Fast; off removes the key so Codex uses
++    its standard tier.
++
++    Best-effort, like :func:`write_codex_config_model`.
++
++    :param bridge_dir: The session's native-Codex bridge directory.
++    :param enabled: Whether fast mode is now on.
++    :returns: ``True`` when the file was updated.
++    """
++    config_path = codex_home_for_bridge_dir(bridge_dir) / "config.toml"
++    if enabled:
++        return _upsert_top_level_config_key(config_path, "service_tier", CODEX_FAST_SERVICE_TIER)
++    if not config_path.exists():
++        return True
++    import tomlkit
++    from tomlkit.exceptions import TOMLKitError
++
++    try:
++        document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
++        if "service_tier" not in document:
++            return True
++        del document["service_tier"]
++        fd, tmp_name = tempfile.mkstemp(prefix="config.toml.", dir=str(config_path.parent))
++        try:
++            with os.fdopen(fd, "w", encoding="utf-8") as handle:
++                handle.write(tomlkit.dumps(document))
++            os.replace(tmp_name, config_path)
++        finally:
++            if os.path.exists(tmp_name):
++                os.unlink(tmp_name)
++    except (OSError, UnicodeDecodeError, TOMLKitError):
++        return False
++    return True
++
++
+ def _upsert_top_level_config_key(
+     config_path: Path,
+     key: str,
+diff --git a/omnigent/harnesses/codex_native/forwarder.py b/omnigent/harnesses/codex_native/forwarder.py
+index 0f7da99..83b1493 100644
+--- a/omnigent/harnesses/codex_native/forwarder.py
++++ b/omnigent/harnesses/codex_native/forwarder.py
+@@ -33,6 +33,7 @@ from omnigent.harnesses.codex_native.bridge import (
+     DeveloperInstructionsReadState,
+     clear_active_turn_id_if_matches,
+     codex_home_for_bridge_dir,
++    is_codex_fast_service_tier,
+     pending_mcp_servers,
+     read_bridge_state,
+     read_codex_config_developer_instructions_state,
+@@ -441,6 +442,10 @@ class _CodexForwarderState:
+     # Last subscription ``rate_limits`` POSTed, and the in-flight
+     # ``account/rateLimits/read`` refresh (at most one at a time).
+     posted_rate_limits: _JsonObject | None = None
++    # Whether the thread runs on Codex's Fast service tier (``/fast``), and
++    # the last value POSTed; ``None`` until a thread reports its tier.
++    fast_mode: bool | None = None
++    posted_fast_mode: bool | None = None
+     rate_limits_task: asyncio.Task[None] | None = field(default=None, repr=False)
+     subagents_by_thread: dict[str, str] = field(default_factory=dict)
+     pending_child_threads: dict[str, str | None] = field(default_factory=dict)
+@@ -489,6 +494,7 @@ class _CodexForwarderState:
+             return
+         self._note_model_fields(result)
+         self._note_approval_mode_fields(result)
++        self._note_fast_mode_fields(result)
+         # Do NOT seed ``posted_model`` here. Omnigent must learn the session's
+         # ACTUAL model — including the spawn default — because the cost-budget
+         # gate resolves the model as ``conv.model_override or spec.llm.model``,
+@@ -515,6 +521,7 @@ class _CodexForwarderState:
+             self._note_effort_fields(settings)
+             self._note_collaboration_mode_fields(settings)
+             self._note_approval_mode_fields(settings)
++            self._note_fast_mode_fields(settings)
+             # Live thread settings are the running process's truth: remember
+             # the model so a stale config.toml re-read at the next
+             # turn/started cannot roll the mirror back (see
+@@ -911,6 +918,11 @@ class _CodexForwarderState:
+         if isinstance(mode, str) and mode:
+             self.collaboration_mode = mode
+ 
++    def _note_fast_mode_fields(self, payload: _JsonObject) -> None:
++        """Record whether ``serviceTier`` is Codex's Fast tier, when reported."""
++        if "serviceTier" in payload:
++            self.fast_mode = is_codex_fast_service_tier(payload["serviceTier"])
++
+     def _note_approval_mode_fields(self, payload: _JsonObject) -> None:
+         """Record Codex approval/sandbox settings as launch args + a runtime preset."""
+         args = _codex_terminal_launch_args_from_settings(payload)
+@@ -2647,6 +2659,9 @@ async def _subscribe_until_ready_inner(
+             await _sync_codex_approval_mode_change(
+                 ap_client, session_id=session_id, forwarder_state=forwarder_state
+             )
++            await _sync_fast_mode_change(
++                ap_client, session_id=session_id, forwarder_state=forwarder_state
++            )
+         await _replay_resume_response(
+             ap_client,
+             session_id=session_id,
+@@ -3398,6 +3413,40 @@ async def _sync_model_change(
+         forwarder_state.posted_model = model
+ 
+ 
++async def _sync_fast_mode_change(
++    client: httpx.AsyncClient,
++    *,
++    session_id: str,
++    forwarder_state: _CodexForwarderState,
++) -> None:
++    """
++    Mirror whether the thread is on Codex's Fast tier to the web composer.
++
++    Covers ``/fast`` from the TUI and from the web UI alike, since both change
++    the thread settings. Posted directly, like the subscription windows, so a
++    failure neither dead-letters nor counts against forward-sync health; the
++    baseline stays unchanged so the next settings update retries.
++
++    :param client: HTTP client for Omnigent event posts.
++    :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
++    :param forwarder_state: Mutable forwarder state carrying the current
++        tier and the last-mirrored baseline.
++    """
++    fast_mode = forwarder_state.fast_mode
++    if fast_mode is None or fast_mode == forwarder_state.posted_fast_mode:
++        return
++    try:
++        resp = await client.post(
++            f"/v1/sessions/{url_component(session_id)}/events",
++            json={"type": "external_session_usage", "data": {"fast_mode": fast_mode}},
++        )
++        resp.raise_for_status()
++    except httpx.HTTPError as exc:
++        _logger.debug("Failed to forward Codex fast mode; session=%s error=%s", session_id, exc)
++        return
++    forwarder_state.posted_fast_mode = fast_mode
++
++
+ async def _sync_reasoning_effort_change(
+     client: httpx.AsyncClient,
+     *,
+@@ -3631,6 +3680,9 @@ async def _maybe_handle_turn_event(
+             await _sync_codex_approval_mode_change(
+                 client, session_id=session_id, forwarder_state=forwarder_state
+             )
++            await _sync_fast_mode_change(
++                client, session_id=session_id, forwarder_state=forwarder_state
++            )
+         return True
+     if method == "turn/plan/updated":
+         if delta_coalescer is not None:
+diff --git a/omnigent/inner/claude_native_executor.py b/omnigent/inner/claude_native_executor.py
+index c32fe3e..4964bf1 100644
+--- a/omnigent/inner/claude_native_executor.py
++++ b/omnigent/inner/claude_native_executor.py
+@@ -29,6 +29,7 @@ from omnigent.harnesses.claude_native.bridge import (
+     read_launch_model,
+     read_model_env,
+     read_model_picker_values,
++    resolve_fast_command,
+ )
+ from omnigent.inner.executor import (
+     EnqueuedContent,
+@@ -128,6 +129,7 @@ class ClaudeNativeExecutor(Executor):
+ 
+     async def _inject_prompt(self, text: str, notices: list[str]) -> None:
+         """Inject user text with one-shot context while holding the injection lock."""
++        text = resolve_fast_command(text, self._bridge_dir)
+         context_path = self._bridge_dir / CLAUDE_FRAMEWORK_CONTEXT_FILE
+         context_path.unlink(missing_ok=True)
+         if notices:
+diff --git a/omnigent/inner/codex_native_executor.py b/omnigent/inner/codex_native_executor.py
+index 69de7c7..728ceb3 100644
+--- a/omnigent/inner/codex_native_executor.py
++++ b/omnigent/inner/codex_native_executor.py
+@@ -21,6 +21,7 @@ from omnigent.harnesses.codex_native.app_server import (
+     client_for_transport,
+ )
+ from omnigent.harnesses.codex_native.bridge import (
++    CODEX_FAST_SERVICE_TIER,
+     CODEX_NATIVE_BRIDGE_DIR_ENV_VAR,
+     CODEX_NATIVE_REQUEST_SESSION_ID_ENV_VAR,
+     CODEX_NATIVE_STARTUP_PUBLICATION_GRACE_SECONDS,
+@@ -31,9 +32,11 @@ from omnigent.harnesses.codex_native.bridge import (
+     read_bridge_startup_error,
+     read_bridge_startup_timeout,
+     read_bridge_state,
++    read_codex_config_fast_mode,
+     read_mcp_startup,
+     update_active_turn_id,
+     write_codex_config_effort,
++    write_codex_config_fast_mode,
+     write_codex_config_model,
+ )
+ from omnigent.inner.codex_goal_command import (
+@@ -175,6 +178,67 @@ async def _start_codex_turn(
+         _logger.info("Codex native started turn: turn_id=%s", turn_id)
+ 
+ 
++def _fast_command_from_content(content: object) -> str | None:
++    """
++    Parse a standalone ``/fast`` command, like Codex's own ``/fast``.
++
++    :param content: Latest user content, a string or text blocks.
++    :returns: ``"on"``, ``"off"``, or ``"toggle"`` for a bare ``/fast``;
++        ``None`` when the message is anything else.
++    """
++    if isinstance(content, list):
++        if not all(
++            isinstance(block, dict)
++            and block.get("type") in {"input_text", "text"}
++            and isinstance(block.get("text"), str)
++            for block in content
++        ):
++            return None
++        content = "".join(block["text"] for block in content)
++    if not isinstance(content, str):
++        return None
++    words = content.split()
++    if not words or words[0] != "/fast" or len(words) > 2:
++        return None
++    if len(words) == 1:
++        return "toggle"
++    return words[1] if words[1] in {"on", "off"} else None
++
++
++async def _set_codex_fast_mode(
++    client: CodexAppServerClient,
++    *,
++    bridge_dir: Path,
++    state: CodexNativeBridgeState,
++    command: str,
++) -> None:
++    """
++    Switch the thread's Fast service tier for ``/fast`` instead of starting a turn.
++
++    The change applies from the next turn. The forwarder sees the resulting
++    ``thread/settings/updated`` and shows the state in the web composer.
++
++    :param client: Connected app-server client.
++    :param bridge_dir: The session's native-Codex bridge directory.
++    :param state: Bridge state naming the thread.
++    :param command: ``"on"``, ``"off"`` or ``"toggle"``.
++    """
++    if command == "toggle":
++        enabled = not read_codex_config_fast_mode(bridge_dir)
++    else:
++        enabled = command == "on"
++    await client.request(
++        "thread/settings/update",
++        {
++            "threadId": state.thread_id,
++            "serviceTier": CODEX_FAST_SERVICE_TIER if enabled else None,
++        },
++    )
++    if not write_codex_config_fast_mode(bridge_dir, enabled):
++        _logger.warning("Failed to mirror codex fast mode into config.toml: enabled=%s", enabled)
++    _logger.info("Codex native fast mode %s", "on" if enabled else "off")
++
++
+ async def _steer_codex_turn(
+     client: CodexAppServerClient,
+     *,
+@@ -304,6 +368,7 @@ class CodexNativeExecutor(Executor):
+         input_items = _content_to_input_items(content, self._bridge_dir)
+         if not input_items:
+             return False
++        fast_command = _fast_command_from_content(content)
+         # Serialized against run_turn so the read-decide-RPC-write below
+         # is atomic with respect to the initiating-message injection.
+         async with self._inject_lock:
+@@ -311,7 +376,7 @@ class CodexNativeExecutor(Executor):
+             if state is None or not _session_is_active(state.session_id, self._request_session_id):
+                 _logger.info("Codex native injection skipped: bridge state missing or inactive")
+                 return False
+-            if state.active_turn_id is None:
++            if state.active_turn_id is None and fast_command is None:
+                 _logger.info("Codex native injection skipped: no active turn")
+                 return False
+             client = client_for_transport(
+@@ -320,6 +385,13 @@ class CodexNativeExecutor(Executor):
+             )
+             await client.connect()
+             try:
++                if fast_command is not None:
++                    # /fast mid-turn switches the tier for later turns
++                    # rather than steering the running one.
++                    await _set_codex_fast_mode(
++                        client, bridge_dir=self._bridge_dir, state=state, command=fast_command
++                    )
++                    return True
+                 await _inject_codex_turn(
+                     client,
+                     bridge_dir=self._bridge_dir,
+@@ -433,6 +505,7 @@ class CodexNativeExecutor(Executor):
+         del tools, system_prompt
+         settings_overrides = _model_effort_overrides(config)
+         latest_user_content = _latest_user_content(messages)
++        fast_command = _fast_command_from_content(latest_user_content)
+         goal_objective = goal_objective_from_content(latest_user_content)
+         if goal_objective is not None:
+             # Reject over-long objectives here so the app-server's raw
+@@ -551,7 +624,15 @@ class CodexNativeExecutor(Executor):
+                     await client.connect()
+                     try:
+                         side_question = side_chat.side_chat_question(input_items)
+-                        if side_question is not None:
++                        if fast_command is not None:
++                            # /fast switches the service tier; it starts no turn.
++                            await _set_codex_fast_mode(
++                                client,
++                                bridge_dir=self._bridge_dir,
++                                state=state,
++                                command=fast_command,
++                            )
++                        elif side_question is not None:
+                             # /side opens an ephemeral fork as its own sub-agent chat.
+                             # The fork must happen on the forwarder's connection —
+                             # it owns the fork's event stream, while this client

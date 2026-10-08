@@ -1,0 +1,479 @@
+Add /fast to the composer for Claude and Codex sessions, and show when fast
+mode is on.
+
+/fast is listed in the slash menu of claude-native and codex-native sessions
+and is sent to the runner as plaintext. A bare /fast becomes /fast on or
+/fast off from the state the composer shows, so it can't open the CLI's
+picker; any other argument is refused with a usage hint. The fast_mode of
+session.usage events and the omnigent.fast_mode session label drive a small,
+filled lightning bolt left of the model selector, with a tooltip. Pairs with
+the runner patch 0004-fast-mode.patch and the server patch
+0008-fast-mode.patch. Applies after 0002-composer-tailscale-host.patch. Base:
+omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/components/SlashCommandMenu.tsx b/web/src/components/SlashCommandMenu.tsx
+index 24b78a4..aa2ae2d 100644
+--- a/web/src/components/SlashCommandMenu.tsx
++++ b/web/src/components/SlashCommandMenu.tsx
+@@ -22,6 +22,7 @@ export const BUILTIN_SLASH_COMMANDS: Record<string, string> = {
+   "/btw": "Ask a side question — answered in a dismissable overlay, not saved to the conversation",
+   "/side":
+     "Start a side chat: an ephemeral fork opened as its own sub-agent chat, kept out of this conversation",
++  "/fast": "Turn fast mode on or off: /fast | on | off",
+   "/help": "Show available slash commands",
+ };
+ 
+diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
+index 85196d5..7fb0470 100644
+--- a/web/src/lib/events.ts
++++ b/web/src/lib/events.ts
+@@ -558,6 +558,8 @@ export interface SessionStatusEvent {
+  * - `usageByModel`: per-model breakdown of the subtree usage, keyed by
+  *   raw harness model id; absent on a broadcast carrying no per-model
+  *   change (the client keeps its cached map).
++ * - `fastMode`: whether the native harness runs in fast mode (`/fast`);
++ *   absent on a broadcast that doesn't report it.
+  * - `rateLimits`: the login's subscription usage windows, reported by a
+  *   native harness; absent on a broadcast that doesn't refresh them.
+  */
+@@ -569,6 +571,7 @@ export interface SessionUsageEvent {
+   totalCostUsd?: number;
+   usageByModel?: Record<string, ModelUsage>;
+   rateLimits?: RateLimits;
++  fastMode?: boolean;
+ }
+ 
+ /**
+diff --git a/web/src/lib/fastMode.test.ts b/web/src/lib/fastMode.test.ts
+new file mode 100644
+index 0000000..5b54916
+--- /dev/null
++++ b/web/src/lib/fastMode.test.ts
+@@ -0,0 +1,43 @@
++import { describe, expect, it } from "vitest";
++
++import { fastCommandText, fastModeFromLabels, parseFastMode } from "./fastMode";
++
++describe("fastModeFromLabels", () => {
++  it("reads the session label", () => {
++    expect(fastModeFromLabels({ "omnigent.fast_mode": "true" })).toBe(true);
++    expect(fastModeFromLabels({ "omnigent.fast_mode": "false" })).toBe(false);
++  });
++
++  it("is null when the harness hasn't reported it", () => {
++    expect(fastModeFromLabels(undefined)).toBeNull();
++    expect(fastModeFromLabels({})).toBeNull();
++    expect(fastModeFromLabels({ "omnigent.fast_mode": "yes" })).toBeNull();
++  });
++});
++
++describe("parseFastMode", () => {
++  it("separates absent, valid and malformed values", () => {
++    expect(parseFastMode(undefined)).toBeUndefined();
++    expect(parseFastMode(null)).toBeUndefined();
++    expect(parseFastMode(true)).toBe(true);
++    expect(parseFastMode(false)).toBe(false);
++    expect(parseFastMode("true")).toBeNull();
++  });
++});
++
++describe("fastCommandText", () => {
++  it("keeps an explicit on or off", () => {
++    expect(fastCommandText("on", true)).toBe("/fast on");
++    expect(fastCommandText("OFF", null)).toBe("/fast off");
++  });
++
++  it("turns a bare /fast around from the state the composer shows", () => {
++    expect(fastCommandText("", true)).toBe("/fast off");
++    expect(fastCommandText("", false)).toBe("/fast on");
++    expect(fastCommandText("", null)).toBe("/fast");
++  });
++
++  it("rejects any other argument", () => {
++    expect(fastCommandText("maybe", false)).toBeNull();
++  });
++});
+diff --git a/web/src/lib/fastMode.ts b/web/src/lib/fastMode.ts
+new file mode 100644
+index 0000000..9feec31
+--- /dev/null
++++ b/web/src/lib/fastMode.ts
+@@ -0,0 +1,42 @@
++/**
++ * Whether a native harness runs in fast mode: Claude Code's `/fast`, or
++ * Codex's Fast service tier. Reported by the session's runner.
++ */
++
++/** Session label holding `"true"` or `"false"`, for a reload before any update. */
++export const FAST_MODE_LABEL_KEY = "omnigent.fast_mode";
++
++/** Read the session label; `null` when the harness hasn't reported it. */
++export function fastModeFromLabels(labels: Record<string, string> | undefined): boolean | null {
++  const raw = labels?.[FAST_MODE_LABEL_KEY];
++  if (raw === "true") return true;
++  if (raw === "false") return false;
++  return null;
++}
++
++/**
++ * Parse the wire `fast_mode` of a `session.usage` event.
++ *
++ * @returns The flag, `undefined` when absent, or `null` when malformed.
++ */
++export function parseFastMode(raw: unknown): boolean | null | undefined {
++  if (raw === undefined || raw === null) return undefined;
++  return typeof raw === "boolean" ? raw : null;
++}
++
++/**
++ * The `/fast` message to send for what the user typed: a bare `/fast` turns
++ * the state the composer shows around, so it can't open the CLI's picker.
++ *
++ * @param arg - The argument typed after `/fast`, or `""`.
++ * @param fastMode - The state the composer shows, or `null` when unknown.
++ * @returns `"/fast on"`, `"/fast off"`, or a bare `"/fast"` when the state
++ *   is unknown (the runner then decides); `null` for an unknown argument.
++ */
++export function fastCommandText(arg: string, fastMode: boolean | null): string | null {
++  const value = arg.toLowerCase();
++  if (value === "on" || value === "off") return `/fast ${value}`;
++  if (value !== "") return null;
++  if (fastMode === null) return "/fast";
++  return fastMode ? "/fast off" : "/fast on";
++}
+diff --git a/web/src/lib/sse.ts b/web/src/lib/sse.ts
+index a463da4..0553407 100644
+--- a/web/src/lib/sse.ts
++++ b/web/src/lib/sse.ts
+@@ -73,6 +73,7 @@ import type {
+ } from "./events";
+ import { NATIVE_TOOL_TYPES } from "./events";
+ import { parseRateLimits } from "./rateLimits";
++import { parseFastMode } from "./fastMode";
+ import { parseTailscaleHost } from "./tailscale";
+ import { routingExtrasFromWire } from "./routingDecision";
+ import type {
+@@ -639,12 +640,17 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+     if (rateLimits === null) {
+       return null;
+     }
++    const fastMode = parseFastMode(raw.fast_mode);
++    if (fastMode === null) {
++      return null;
++    }
+     if (
+       contextTokens === undefined &&
+       contextWindow === undefined &&
+       totalCostUsd === undefined &&
+       usageByModel === undefined &&
+-      rateLimits === undefined
++      rateLimits === undefined &&
++      fastMode === undefined
+     ) {
+       return null;
+     }
+@@ -656,6 +662,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+       ...(totalCostUsd !== undefined ? { totalCostUsd } : {}),
+       ...(usageByModel !== undefined ? { usageByModel } : {}),
+       ...(rateLimits !== undefined ? { rateLimits } : {}),
++      ...(fastMode !== undefined ? { fastMode } : {}),
+     } satisfies SessionUsageEvent;
+   }
+   if (eventType === "session.model") {
+diff --git a/web/src/pages/ChatPage.test.ts b/web/src/pages/ChatPage.test.ts
+index 69d76e7..7fcc681 100644
+--- a/web/src/pages/ChatPage.test.ts
++++ b/web/src/pages/ChatPage.test.ts
+@@ -1345,10 +1345,12 @@ describe("buildSlashCommandMap", () => {
+   it("returns the built-ins unchanged when no skills are loaded", () => {
+     const map = buildSlashCommandMap([], true, true);
+     // Insertion-order: built-ins come from the static record verbatim.
+-    // /btw (claude-native) and /side (codex-native) are gated off by default,
+-    // so both are excluded here.
++    // /btw (claude-native), /side (codex-native) and /fast (both) are gated
++    // off by default, so all three are excluded here.
+     expect(Object.keys(map)).toEqual(
+-      Object.keys(BUILTIN_SLASH_COMMANDS).filter((name) => name !== "/btw" && name !== "/side"),
++      Object.keys(BUILTIN_SLASH_COMMANDS).filter(
++        (name) => name !== "/btw" && name !== "/side" && name !== "/fast",
++      ),
+     );
+     // Spot-check a built-in description survives the spread.
+     expect(map["/help"]).toBe(BUILTIN_SLASH_COMMANDS["/help"]);
+@@ -1364,6 +1366,17 @@ describe("buildSlashCommandMap", () => {
+     );
+   });
+ 
++  it("includes /fast only when showFast is true (claude-native, codex-native)", () => {
++    expect(buildSlashCommandMap([], true, true)["/fast"]).toBeUndefined();
++    expect(
++      buildSlashCommandMap([], true, true, true, false, false, "/", false, true)["/fast"],
++    ).toBe(BUILTIN_SLASH_COMMANDS["/fast"]);
++    expect(buildSlashCommandWithArgsSet([], false, false).has("/fast")).toBe(false);
++    expect(
++      buildSlashCommandWithArgsSet([], false, false, false, false, "/", true).has("/fast"),
++    ).toBe(true);
++  });
++
+   it("includes /btw only when showBtw is true (claude-native)", () => {
+     // Off by default and when explicitly false.
+     expect(buildSlashCommandMap([], true, true)["/btw"]).toBeUndefined();
+@@ -1421,9 +1434,11 @@ describe("buildSlashCommandMap", () => {
+       true,
+     );
+     // Built-ins first, then skills in their input order — the menu
+-    // surfaces built-ins above user skills. /btw and /side are gated off.
++    // surfaces built-ins above user skills. /btw, /side and /fast are gated off.
+     expect(Object.keys(map)).toEqual([
+-      ...Object.keys(BUILTIN_SLASH_COMMANDS).filter((name) => name !== "/btw" && name !== "/side"),
++      ...Object.keys(BUILTIN_SLASH_COMMANDS).filter(
++        (name) => name !== "/btw" && name !== "/side" && name !== "/fast",
++      ),
+       "/triage-issues",
+       "/mlflow-bug",
+     ]);
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index 7632c5e..90e218b 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -226,6 +226,7 @@ import { ComposerWorkspaceStatus } from "@/components/composer/ComposerWorkspace
+ import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
+ import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
+ import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
++import { fastCommandText } from "@/lib/fastMode";
+ import { ComposerTailscaleHost } from "@/components/composer/ComposerTailscaleHost";
+ import { ComposerGatewayLink } from "@/components/composer/ComposerGatewayLink";
+ import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
+@@ -2137,6 +2138,7 @@ export function buildSlashCommandMap(
+   showSide = false,
+   skillPrefix: "/" | "$" = "/",
+   supportsModelReset = false,
++  showFast = false,
+ ): Record<string, string> {
+   const m: Record<string, string> = {};
+   for (const [name, description] of Object.entries(BUILTIN_SLASH_COMMANDS)) {
+@@ -2147,6 +2149,8 @@ export function buildSlashCommandMap(
+     if (name === "/btw" && !showBtw) continue;
+     // /side is a Codex CLI built-in (ephemeral fork) — only offer it on codex-native.
+     if (name === "/side" && !showSide) continue;
++    // /fast is a Claude Code and Codex CLI built-in.
++    if (name === "/fast" && !showFast) continue;
+     m[name] = name === "/model" && supportsModelReset ? `${description} | default` : description;
+   }
+   for (const skill of skills) {
+@@ -2177,6 +2181,7 @@ export function buildSlashCommandWithArgsSet(
+   showBtw = false,
+   showSide = false,
+   skillPrefix: "/" | "$" = "/",
++  showFast = false,
+ ): Set<string> {
+   const s = new Set<string>();
+   if (showEffort) s.add("/effort");
+@@ -2185,6 +2190,8 @@ export function buildSlashCommandWithArgsSet(
+   if (showBtw) s.add("/btw");
+   // Selecting /side fills "/side " so the user types the side question after it.
+   if (showSide) s.add("/side");
++  // Selecting /fast fills "/fast " so the user can add on/off or just send it.
++  if (showFast) s.add("/fast");
+   for (const skill of skills) s.add(`${skillPrefix}${skill.name}`);
+   return s;
+ }
+@@ -2238,6 +2245,18 @@ export function composerHarnessLabel(
+   return display ?? harness;
+ }
+ 
++/**
++ * Fast-mode marker beside the model selector: a filled, upright lightning
++ * bolt, smaller than the composer's outline icons so it stays out of the way.
++ */
++function FastModeIcon() {
++  return (
++    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className="size-3 shrink-0">
++      <path d="M13.6 1.6a.6.6 0 0 1 1 .5L13 10h5.2a.6.6 0 0 1 .5.95l-8.3 11.5a.6.6 0 0 1-1.05-.5L11 14H5.8a.6.6 0 0 1-.5-.95z" />
++    </svg>
++  );
++}
++
+ /**
+  * Status tray under the composer: branch left, model/context right.
+  * Pulled up behind the card so a shelf peeks below; skips render when empty.
+@@ -2782,6 +2801,9 @@ function ComposerImpl(
+   // only on codex-native sessions. Selected/typed, it sends as plaintext to the
+   // vendor turn path (see submit); the runner opens the fork as a sub-agent chat.
+   const showSide = supportsSideChat(sessionHarness);
++  // /fast is a Claude Code and Codex CLI built-in; the runner applies it.
++  const showFast = sessionHarness === "claude-native" || sessionHarness === "codex-native";
++  const composerFastMode = useChatStore((s) => s.fastMode);
+   const slashCommands = useMemo(
+     () =>
+       buildSlashCommandMap(
+@@ -2793,6 +2815,7 @@ function ComposerImpl(
+         showSide,
+         skillPrefix,
+         supportsModelReset,
++        showFast,
+       ),
+     [
+       skills,
+@@ -2803,6 +2826,7 @@ function ComposerImpl(
+       showSide,
+       skillPrefix,
+       supportsModelReset,
++      showFast,
+     ],
+   );
+   // Skills always need an optional argument fill-in so the user can
+@@ -2810,8 +2834,16 @@ function ComposerImpl(
+   // existing fill/execute split.
+   const slashCommandsWithArgs = useMemo(
+     () =>
+-      buildSlashCommandWithArgsSet(skills, showEffort, showModel, showBtw, showSide, skillPrefix),
+-    [skills, showEffort, showModel, showBtw, showSide, skillPrefix],
++      buildSlashCommandWithArgsSet(
++        skills,
++        showEffort,
++        showModel,
++        showBtw,
++        showSide,
++        skillPrefix,
++        showFast,
++      ),
++    [skills, showEffort, showModel, showBtw, showSide, skillPrefix, showFast],
+   );
+ 
+   // Suggest names until a space starts the arguments; exclude file paths.
+@@ -3342,6 +3374,21 @@ function ComposerImpl(
+       // executed locally. It must reach the vendor TUI as plaintext so Claude
+       // Code opens its side chat and the forwarder relays the answer to the
+       // web overlay; fall through to the plaintext send path below.
++      // /fast reaches the vendor CLI as plaintext. A bare /fast turns around
++      // the state the composer shows, so it never opens the CLI's picker.
++      if (cmd === "/fast" && cmd in slashCommands) {
++        const fastText = parts.length <= 2 ? fastCommandText(arg, composerFastMode) : null;
++        if (fastText === null) {
++          setCommandError("Usage: /fast, /fast on or /fast off");
++          return;
++        }
++        appendEntry(trimmed);
++        onSend(fastText);
++        dirtyRef.current = true;
++        setValue("");
++        setCommandError(null);
++        return;
++      }
+       if (
+         cmd !== "/btw" &&
+         cmd !== "/side" &&
+@@ -4026,6 +4073,23 @@ function ComposerImpl(
+           ),
+           trailing: (
+             <>
++              {composerFastMode === true && (
++                <TooltipProvider>
++                  <Tooltip>
++                    <TooltipTrigger asChild>
++                      <span
++                        data-testid="composer-fast-mode"
++                        role="img"
++                        aria-label="Fast mode is on"
++                        className="flex shrink-0 items-center text-muted-foreground"
++                      >
++                        <FastModeIcon />
++                      </span>
++                    </TooltipTrigger>
++                    <TooltipContent>Fast mode is on. Send /fast to turn it off.</TooltipContent>
++                  </Tooltip>
++                </TooltipProvider>
++              )}
+               <div className="flex min-w-0 items-center rounded-lg">
+                 <SessionHarnessPicker
+                   busy={configBusy}
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index 9c4364b..77dc4a8 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -148,6 +148,7 @@ import { isSystemUserContent, taskNotificationMarkerContent } from "@/lib/system
+ import { isNativeTerminalSession as isNativeTerminalSessionFn } from "@/lib/nativeCodingAgents";
+ import type { StoredReplyDraft } from "@/lib/replyDraft";
+ import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
++import { fastModeFromLabels } from "@/lib/fastMode";
+ import { tailscaleHostFromLabels } from "@/lib/tailscale";
+ 
+ export interface SendOptions {
+@@ -863,6 +864,13 @@ export interface ConversationState {
+    * ``session.usage`` events that carry them. ``null`` until reported.
+    */
+   rateLimits: RateLimits | null;
++  /**
++   * Whether the session's native harness runs in fast mode (Claude Code's or
++   * Codex's `/fast`). Seeded from the session's ``omnigent.fast_mode`` label
++   * on bind and replaced by ``session.usage`` events that carry it. ``null``
++   * until reported.
++   */
++  fastMode: boolean | null;
+   /**
+    * Tailnet name of the session's managed runner Pod, e.g.
+    * ``omnigent-e1dcab9b.tail1234.ts.net``. Seeded from the session's
+@@ -1749,6 +1757,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+   sessionCostUsd: null,
+   sessionUsageByModel: null,
+   rateLimits: null,
++  fastMode: null,
+   tailscaleHost: null,
+   gitBranch: null,
+   todos: [],
+@@ -4059,6 +4068,7 @@ async function bindStream(
+         sessionReasoningEffort: effectiveEffort,
+         tokensUsed: session.lastTotalTokens ?? null,
+         rateLimits: rateLimitsFromLabels(session.labels),
++        fastMode: fastModeFromLabels(session.labels),
+         tailscaleHost: tailscaleHostFromLabels(session.labels),
+         sessionCostUsd:
+           state.sessionCostUsd !== stateBeforeFetch.sessionCostUsd
+@@ -4262,6 +4272,8 @@ function reconnectStatusPatch(
+   if (session.usageByModel != null) patch.sessionUsageByModel = session.usageByModel;
+   const rateLimits = rateLimitsFromLabels(session.labels);
+   if (rateLimits !== null) patch.rateLimits = rateLimits;
++  const fastMode = fastModeFromLabels(session.labels);
++  if (fastMode !== null) patch.fastMode = fastMode;
+   const tailscaleHost = tailscaleHostFromLabels(session.labels);
+   if (tailscaleHost !== null) patch.tailscaleHost = tailscaleHost;
+   // `waiting` is a TURN-END snapshot (the turn finished; only background work
+@@ -6192,6 +6204,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+         sessionCostUsd?: number;
+         sessionUsageByModel?: Record<string, ModelUsage>;
+         rateLimits?: RateLimits;
++        fastMode?: boolean;
+       } = {};
+       if (event.contextTokens !== undefined) {
+         patch.tokensUsed = event.contextTokens;
+@@ -6208,6 +6221,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+       if (event.rateLimits !== undefined) {
+         patch.rateLimits = event.rateLimits;
+       }
++      if (event.fastMode !== undefined) {
++        patch.fastMode = event.fastMode;
++      }
+       if (event.totalCostUsd !== undefined || event.usageByModel !== undefined) {
+         const entry =
+           sourceConversationId === null
+diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
+index d930eca..26a5066 100644
+--- a/web/src/store/conversationState.ts
++++ b/web/src/store/conversationState.ts
+@@ -49,6 +49,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
+   sessionCostUsd: true,
+   sessionUsageByModel: true,
+   rateLimits: true,
++  fastMode: true,
+   tailscaleHost: true,
+   gitBranch: true,
+   todos: true,
+@@ -117,6 +118,7 @@ export function createInitialConversationState(): ConversationState {
+     sessionCostUsd: null,
+     sessionUsageByModel: null,
+     rateLimits: null,
++    fastMode: null,
+     tailscaleHost: null,
+     gitBranch: null,
+     todos: [],

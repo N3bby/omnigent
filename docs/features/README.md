@@ -8,6 +8,7 @@ where you can.
 | Feature | What you get | Can you turn it off? |
 | --- | --- | --- |
 | [Usage limits in the UI](usage-limits.md) | Your Claude and Codex usage, right in the composer | No |
+| [Fast mode from the chat](fast-mode.md) | Send `/fast` to switch Claude's or Codex's fast mode, and see when it's on | Fast mode is off until you send `/fast` |
 | [Model picker straight away](model-picker.md) | Choose a model before your first session has run | No |
 | [Root and containers](root-and-containers.md) | Agents can `apt-get install`, and use Docker, Compose and Testcontainers | No |
 | [Runtimes from mise](mise-runtimes.md) | `node`, `python` and others follow a project's `.mise.toml` or `.tool-versions` | No |
