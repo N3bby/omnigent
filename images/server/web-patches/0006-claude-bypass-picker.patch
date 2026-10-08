@@ -1,0 +1,29 @@
+Offer Bypass permissions in a running Claude session's permission picker.
+
+The composer's picker listed Manual, Auto, Accept edits and Plan only, so a
+session in bypass showed no selected mode, and one that left bypass couldn't
+be switched back from the web UI. Needs images/server/patches/0007 and
+images/runner/patches/0003.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/lib/claudePermissionMode.ts b/web/src/lib/claudePermissionMode.ts
+index 28dd1df..8566f07 100644
+--- a/web/src/lib/claudePermissionMode.ts
++++ b/web/src/lib/claudePermissionMode.ts
+@@ -49,10 +49,14 @@ export const CLAUDE_NATIVE_PERMISSION_MODES: ClaudePermissionModeOption[] = [
+   },
+ ];
+ 
+-/** Modes a running session can be switched to (shift+tab-reachable). */
++/**
++ * Modes a running session can be switched to (shift+tab-reachable). Bypass is
++ * in the cycle while the deployment's claude_bypass_permissions is on: the
++ * runner then launches Claude with `--allow-dangerously-skip-permissions`.
++ */
+ export const CLAUDE_NATIVE_SWITCHABLE_PERMISSION_MODES: ClaudePermissionModeOption[] =
+   CLAUDE_NATIVE_PERMISSION_MODES.filter((mode) =>
+-    ["default", "acceptEdits", "plan", "auto"].includes(mode.value),
++    ["default", "acceptEdits", "plan", "auto", "bypassPermissions"].includes(mode.value),
+   );
+ 
+ export function isSwitchableClaudePermissionMode(mode: string | null | undefined): boolean {
