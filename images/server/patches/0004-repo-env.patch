@@ -1,0 +1,56 @@
+Mount each repository's variables Secret into its runner Pod.
+
+For every repository a session starts with, the runner Pod gets the Secret
+named by omnigent_repo_env.secret_name, mounted read-only on the host
+container under /run/omnigent/repo-env/<Secret name>. The volume is optional,
+so a repository without a Secret starts as before. The server image installs
+omnigent_repo_env from images/server/omnigent_repo_env.py.
+A wake re-renders the Pod template with the recorded repositories, so the
+mount survives a suspend. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
+index 2b3b3f4..ba61249 100644
+--- a/omnigent/onboarding/sandboxes/kubernetes.py
++++ b/omnigent/onboarding/sandboxes/kubernetes.py
+@@ -58,6 +58,7 @@ from collections.abc import Mapping, Sequence
+ from typing import TYPE_CHECKING, ClassVar, Literal, cast
+ 
+ import click
++from omnigent_repo_env import pod_volumes as _repo_env_volumes
+ 
+ from omnigent.host.identity import (
+     HOST_ID_ENV_VAR,
+@@ -898,6 +899,10 @@ def build_job_manifest(
+             {"name": f"secret-{i}", "mountPath": mount["mount_path"], "readOnly": True}
+         )
+ 
++    # Each repository's variables Secret, when there is one. Host container
++    # only, like secret_mounts: the clone doesn't need them.
++    repo_env_volumes, repo_env_mounts = _repo_env_volumes(repo.url for repo in repos)
++
+     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
+     if repos:
+         # The clone wires the per-user broker when the owner has connected GitHub
+@@ -976,7 +981,12 @@ def build_job_manifest(
+         "env": host_env,
+         "resources": pod_resources,
+         "securityContext": container_security,
+-        "volumeMounts": [*home_mount, *pvc_volume_mounts, *secret_volume_mounts],
++        "volumeMounts": [
++            *home_mount,
++            *pvc_volume_mounts,
++            *secret_volume_mounts,
++            *repo_env_mounts,
++        ],
+     }
+     if harness_secret:
+         host_container["envFrom"] = [{"secretRef": {"name": harness_secret}}]
+@@ -997,7 +1007,7 @@ def build_job_manifest(
+             "fsGroupChangePolicy": "OnRootMismatch",
+             "seccompProfile": {"type": "RuntimeDefault"},
+         },
+-        "volumes": [home_volume, *pvc_volumes, *secret_volumes],
++        "volumes": [home_volume, *pvc_volumes, *secret_volumes, *repo_env_volumes],
+         "initContainers": [init_container],
+         "containers": [host_container],
+     }

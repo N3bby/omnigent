@@ -14,6 +14,8 @@ A compromised runner **can**:
 
 - use the shared Claude and Codex logins, and the shared Git token if you set
   one up
+- read the [repository variables](features/repo-env.md) of the repositories
+  its session started with
 - use the GitHub access of the person who started the session, for as long
   as its short-lived token is valid
 - reach anything on the network: the internet, and other services in the
@@ -65,6 +67,10 @@ do there.
   set environment variables and run hooks and tasks, and mise normally asks
   before using one it hasn't seen. Runners skip that question, because agents
   already run the code of any repository they work in.
+- **Repository variables go by repository name.** Anyone who starts a
+  session on a repository gets its variables. Sessions on other repositories
+  don't, because a Pod only mounts the Secrets of the repositories it starts
+  with, and runners can't read Secrets themselves.
 - **Agent logins are shared.** Every runner uses the same Claude token and
   Codex login, so one compromised runner can use them.
 - **Agents skip permission prompts** by default (`claude_bypass_permissions`

@@ -10,7 +10,7 @@ mise run check               # validate your changes
 mise run diff                # see what will change in the cluster
 mise run deploy              # apply it
 mise run status              # health, TLS, storage and failed sessions
-mise run credential-status   # which credentials are stored
+mise run credential-status   # which credentials and repository variables are stored
 ```
 
 Production is never deployed automatically.
