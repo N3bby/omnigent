@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the runner description agents get, and repository variables. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the swipe menu on touch devices, the runner description agents get, and repository variables. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -79,6 +79,7 @@ PASS  images/server/web-patches/0002-composer-tailscale-host.patch
 PASS  images/server/web-patches/0003-composer-gateway-link.patch
 PASS  images/server/web-patches/0004-remove-share-button.patch
 PASS  images/server/web-patches/0005-repo-variables-page.patch
+PASS  images/server/web-patches/0007-sidebar-swipe-menu.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -329,7 +330,12 @@ Hand these to the user; they need their own devices or VM access:
 2. **Gateway:** on desktop, click **Open in Gateway**. Gateway connects as
    `root` and opens the session's repository in IntelliJ.
 3. **Mobile:** the Tailscale name still shows, **Open in Gateway** doesn't, and
-   tapping the usage numbers opens the bars.
+   tapping the usage numbers opens the bars. In the sidebar, swiping a
+   session from right to left shows a **⋯** button that opens its menu
+   (**Fork**, no **Share**); tapping elsewhere slides it back, and scrolling
+   the list doesn't swipe rows. Holding a session down lifts it to drag onto
+   a project without opening a menu, and letting go without moving stays on
+   the current page.
 4. **Idle stop and wake:** after 1 idle hour, `mise run status` shows the
    session `Ready=False`, `SandboxExpired`. Sending a message wakes it with
    its repository, uncommitted changes and Tailscale name intact. The

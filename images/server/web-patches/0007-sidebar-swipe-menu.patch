@@ -1,0 +1,1070 @@
+Open a session's menu by swiping its sidebar row to the left on touch devices.
+
+On phones and tablets a long press on a session row both picked the row up
+for dragging and, a moment later, opened its menu, so the row jumped around
+under the menu. Now a long press only picks the row up, and swiping a row
+from right to left reveals a "more" button that opens the same menu as the
+desktop kebab and right-click. Only horizontal swipes count; scrolling the
+list is unchanged. One row is open at a time, and a tap, a scroll or a drag
+closes it. Touch devices are those with no hover and a coarse pointer, so
+mouse and trackpad devices keep their menus as they were at any width. Also
+stops a long press released without moving from loading the session as a
+new page.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0005.
+
+diff --git a/web/src/shell/SessionRowSwipe.test.tsx b/web/src/shell/SessionRowSwipe.test.tsx
+new file mode 100644
+index 0000000..9856056
+--- /dev/null
++++ b/web/src/shell/SessionRowSwipe.test.tsx
+@@ -0,0 +1,169 @@
++import { useRef } from "react";
++import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
++import { SessionRowSwipeAction, useSessionRowSwipe } from "./SessionRowSwipe";
++import { getOpenSwipeRow, setOpenSwipeRow } from "./sidebarSwipe";
++
++const onNavigate = vi.fn((event: { preventDefault: () => void }) => event.preventDefault());
++
++function Row({
++  id,
++  enabled = true,
++  dragging = false,
++}: {
++  id: string;
++  enabled?: boolean;
++  dragging?: boolean;
++}) {
++  const rowRef = useRef<HTMLLIElement>(null);
++  const swipe = useSessionRowSwipe({ id, enabled, dragging, rowRef });
++  return (
++    <li
++      ref={rowRef}
++      data-testid={`row-${id}`}
++      data-sidebar-session-id={id}
++      {...swipe.rowProps}
++      className={swipe.rowClassName}
++    >
++      <SessionRowSwipeAction swipe={swipe} label={`More actions ${id}`}>
++        <DropdownMenuItem onSelect={() => swipe.setMenuOpen(false)}>Rename {id}</DropdownMenuItem>
++      </SessionRowSwipeAction>
++      <a href={`/c/${id}`} onClick={onNavigate}>
++        Session {id}
++      </a>
++    </li>
++  );
++}
++
++function List(props: { enabled?: boolean; dragging?: boolean }) {
++  return (
++    <ul>
++      <Row id="a" {...props} />
++      <Row id="b" />
++    </ul>
++  );
++}
++
++let pointerId = 1;
++
++/** A touch that moves from (x, y) by (dx, dy) in a few steps, then lifts. */
++function swipeRow(target: Element, dx: number, dy = 0, pointerType = "touch") {
++  const id = pointerId++;
++  const base = { pointerId: id, pointerType, isPrimary: true, bubbles: true };
++  fireEvent.pointerDown(target, { ...base, clientX: 200, clientY: 100 });
++  for (let i = 1; i <= 4; i++) {
++    fireEvent.pointerMove(target, {
++      ...base,
++      clientX: 200 + (dx * i) / 4,
++      clientY: 100 + (dy * i) / 4,
++    });
++  }
++  fireEvent.pointerUp(target, { ...base, clientX: 200 + dx, clientY: 100 + dy });
++}
++
++const link = (id: string) => screen.getByText(`Session ${id}`);
++const row = (id: string) => screen.getByTestId(`row-${id}`);
++
++afterEach(() => {
++  act(() => setOpenSwipeRow(null));
++  onNavigate.mockClear();
++});
++
++describe("useSessionRowSwipe", () => {
++  it("opens a row on a swipe to the left and reveals its button", async () => {
++    render(<List />);
++    act(() => swipeRow(link("a"), -80));
++    expect(getOpenSwipeRow()).toBe("a");
++    // Settles back from the over-pull to exactly the button's width.
++    await waitFor(() => expect(row("a").style.getPropertyValue("--swipe-x")).toBe("-52px"));
++    expect(row("a")).toHaveAttribute("data-swiped");
++    expect(screen.getByRole("button", { name: "More actions a" })).toBeInTheDocument();
++  });
++
++  it("leaves a vertical move to the list's scrolling", () => {
++    render(<List />);
++    act(() => swipeRow(link("a"), -12, 60));
++    expect(getOpenSwipeRow()).toBeNull();
++    expect(row("a")).not.toHaveAttribute("data-swiped");
++  });
++
++  it("ignores mouse and pen", () => {
++    render(<List />);
++    act(() => swipeRow(link("a"), -80, 0, "mouse"));
++    act(() => swipeRow(link("a"), -80, 0, "pen"));
++    expect(getOpenSwipeRow()).toBeNull();
++  });
++
++  it("keeps one row open at a time", () => {
++    render(<List />);
++    act(() => swipeRow(link("a"), -80));
++    act(() => swipeRow(link("b"), -80));
++    expect(getOpenSwipeRow()).toBe("b");
++  });
++
++  it("closes on a swipe back to the right", () => {
++    render(<List />);
++    act(() => swipeRow(link("a"), -80));
++    act(() => swipeRow(link("a"), 80));
++    expect(getOpenSwipeRow()).toBeNull();
++  });
++
++  it("closes an open row on a tap instead of opening the session", () => {
++    render(<List />);
++    act(() => swipeRow(link("a"), -80));
++    // The swipe's own trailing click is swallowed too; wait it out.
++    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 1000);
++    const notCancelled = fireEvent.click(link("a"));
++    vi.restoreAllMocks();
++    expect(notCancelled).toBe(false);
++    expect(onNavigate).not.toHaveBeenCalled();
++    expect(getOpenSwipeRow()).toBeNull();
++    // Closed, a tap opens the session again.
++    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 2000);
++    fireEvent.click(link("a"));
++    vi.restoreAllMocks();
++    expect(onNavigate).toHaveBeenCalledTimes(1);
++  });
++
++  it("closes on a touch elsewhere and on scroll", () => {
++    render(<List />);
++    act(() => swipeRow(link("a"), -80));
++    act(() => {
++      fireEvent.pointerDown(document.body, { pointerType: "touch" });
++    });
++    expect(getOpenSwipeRow()).toBeNull();
++    act(() => swipeRow(link("a"), -80));
++    act(() => {
++      fireEvent.scroll(document);
++    });
++    expect(getOpenSwipeRow()).toBeNull();
++  });
++
++  it("closes when a long press starts a drag", () => {
++    const { rerender } = render(<List />);
++    act(() => swipeRow(link("a"), -80));
++    rerender(<List dragging />);
++    expect(getOpenSwipeRow()).toBeNull();
++  });
++
++  it("does nothing while disabled", () => {
++    render(<List enabled={false} />);
++    act(() => swipeRow(link("a"), -80));
++    expect(getOpenSwipeRow()).toBeNull();
++    expect(screen.queryByRole("button", { name: "More actions a" })).toBeNull();
++    expect(row("a")).not.toHaveAttribute("class");
++  });
++
++  it("opens the row's menu from the revealed button, and closes with it", async () => {
++    render(<List />);
++    act(() => swipeRow(link("a"), -80));
++    const button = screen.getByRole("button", { name: "More actions a" });
++    fireEvent.pointerDown(button, { button: 0, ctrlKey: false, pointerType: "touch" });
++    // Touches on the button aren't swipes and don't close the row.
++    expect(getOpenSwipeRow()).toBe("a");
++    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename a" }));
++    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
++    expect(getOpenSwipeRow()).toBeNull();
++  });
++});
+diff --git a/web/src/shell/SessionRowSwipe.tsx b/web/src/shell/SessionRowSwipe.tsx
+new file mode 100644
+index 0000000..0deb2aa
+--- /dev/null
++++ b/web/src/shell/SessionRowSwipe.tsx
+@@ -0,0 +1,327 @@
++import {
++  useCallback,
++  useEffect,
++  useLayoutEffect,
++  useRef,
++  useState,
++  type HTMLAttributes,
++  type ReactNode,
++  type RefObject,
++} from "react";
++import { MoreHorizontalIcon } from "lucide-react";
++import { Button } from "@/components/ui/button";
++import {
++  DropdownMenu,
++  DropdownMenuContent,
++  DropdownMenuTrigger,
++} from "@/components/ui/dropdown-menu";
++import {
++  SWIPE_ACTION_WIDTH,
++  classifySwipe,
++  closeSwipeRow,
++  getOpenSwipeRow,
++  settleSwipe,
++  setOpenSwipeRow,
++  swipeOffset,
++  useIsSwipeRowOpen,
++} from "./sidebarSwipe";
++
++const SETTLE_MS = 180;
++// A finger that rests this long before lifting ends without a flick.
++const FLICK_MAX_AGE_MS = 100;
++// The click a browser may still send after a swipe or a drag lifts.
++const SWIPE_CLICK_GUARD_MS = 400;
++const ACTION_SELECTOR = "[data-swipe-action]";
++const ROW_ID_ATTRIBUTE = "data-sidebar-session-id";
++const ROW_SELECTOR = `[${ROW_ID_ATTRIBUTE}]`;
++
++// While a row is slid, every child of the row except the action moves left by
++// `--swipe-x`. `transform` (not `translate`, which the row's centred badges
++// use) so the two don't fight. Only while `data-swiped` is set, so a row at
++// rest has no transform and no extra stacking contexts.
++const ROW_CLASS =
++  "overflow-hidden rounded-[var(--radius-otto-button)] touch-pan-y select-none [-webkit-touch-callout:none] [&[data-swiped]>:not([data-swipe-action])]:[transform:translate3d(var(--swipe-x),0,0)]";
++
++interface Gesture {
++  pointerId: number;
++  x: number;
++  y: number;
++  start: number;
++  axis: "pending" | "horizontal";
++  offset: number;
++  lastX: number;
++  lastT: number;
++  velocity: number;
++}
++
++export interface SessionRowSwipe {
++  enabled: boolean;
++  menuOpen: boolean;
++  setMenuOpen: (open: boolean) => void;
++  /** Spread onto the row's `<li>`. Empty when the gesture is off. */
++  rowProps: HTMLAttributes<HTMLLIElement>;
++  /** Added to the row's `<li>` classes. Empty when the gesture is off. */
++  rowClassName: string | undefined;
++}
++
++/**
++ * Swipe a sidebar session row from right to left, on touch-primary devices,
++ * to reveal a button for the row's menu ({@link SessionRowSwipeAction}).
++ * With `enabled` off (mouse and trackpad devices, selection mode) the row
++ * gets nothing from this hook.
++ *
++ * Only horizontal-dominant swipes count; a vertical move is left to the list's
++ * scrolling, and a long press to the drag. One row is open at a time, and it
++ * closes on a tap on the row or anywhere else, on scroll, when its menu
++ * closes, and when a drag starts.
++ */
++export function useSessionRowSwipe({
++  id,
++  enabled,
++  dragging,
++  rowRef,
++}: {
++  id: string;
++  enabled: boolean;
++  /** A drag (long press) is in progress: close, and ignore touches. */
++  dragging: boolean;
++  rowRef: RefObject<HTMLLIElement | null>;
++}): SessionRowSwipe {
++  const isOpen = useIsSwipeRowOpen(id) && enabled;
++  const [menuOpen, setMenuOpen] = useState(false);
++  const gesture = useRef<Gesture | null>(null);
++  const suppressClickUntil = useRef(0);
++  const shown = useRef(0);
++  const frame = useRef(0);
++
++  // The slide is drawn outside React (CSS variables on the row), so following
++  // the finger never re-renders the row.
++  const draw = useCallback(
++    (offset: number) => {
++      shown.current = offset;
++      const row = rowRef.current;
++      if (!row) return;
++      if (offset > 0) {
++        row.setAttribute("data-swiped", "");
++        row.style.setProperty("--swipe-x", `${-offset}px`);
++        row.style.setProperty("--swipe-progress", String(Math.min(1, offset / SWIPE_ACTION_WIDTH)));
++      } else {
++        row.removeAttribute("data-swiped");
++        row.style.removeProperty("--swipe-x");
++        row.style.removeProperty("--swipe-progress");
++      }
++    },
++    [rowRef],
++  );
++  const animateTo = useCallback(
++    (target: number) => {
++      cancelAnimationFrame(frame.current);
++      const from = shown.current;
++      if (from === target) return;
++      const begin = performance.now();
++      const step = (now: number) => {
++        const t = Math.min(1, Math.max(0, now - begin) / SETTLE_MS);
++        const eased = 1 - (1 - t) ** 3;
++        draw(from + (target - from) * eased);
++        if (t < 1) frame.current = requestAnimationFrame(step);
++      };
++      frame.current = requestAnimationFrame(step);
++    },
++    [draw],
++  );
++  useEffect(() => () => cancelAnimationFrame(frame.current), []);
++
++  useLayoutEffect(() => {
++    if (gesture.current?.axis === "horizontal") return;
++    animateTo(isOpen ? SWIPE_ACTION_WIDTH : 0);
++  }, [isOpen, animateTo]);
++
++  // A long press picked the row up: the drag owns the touch now.
++  useEffect(() => {
++    if (!dragging) return undefined;
++    gesture.current = null;
++    closeSwipeRow(id);
++    animateTo(0);
++    // Lifting the finger without moving still clicks the row's link. dnd-kit
++    // stops that click's propagation at the document, before React sees it,
++    // but not its default action, so the browser would load the session as a
++    // new page. Cancel it from the window, which comes first.
++    const swallowClick = (event: MouseEvent) => {
++      const row = event.target instanceof Element ? event.target.closest(ROW_SELECTOR) : null;
++      if (row?.getAttribute(ROW_ID_ATTRIBUTE) === id) event.preventDefault();
++    };
++    window.addEventListener("click", swallowClick, true);
++    return () => {
++      setTimeout(
++        () => window.removeEventListener("click", swallowClick, true),
++        SWIPE_CLICK_GUARD_MS,
++      );
++    };
++  }, [dragging, id, animateTo]);
++
++  // Closing the menu (an item picked, a tap outside, Escape) closes the row.
++  const menuWasOpen = useRef(false);
++  useEffect(() => {
++    if (menuWasOpen.current && !menuOpen) closeSwipeRow(id);
++    menuWasOpen.current = menuOpen;
++  }, [menuOpen, id]);
++
++  // While open (and its menu isn't), a touch anywhere else or a scroll closes it.
++  useEffect(() => {
++    if (!isOpen || menuOpen) return undefined;
++    const onPointerDown = (event: PointerEvent) => {
++      if (!rowRef.current?.contains(event.target as Node)) closeSwipeRow(id);
++    };
++    const onScroll = () => closeSwipeRow(id);
++    document.addEventListener("pointerdown", onPointerDown, true);
++    document.addEventListener("scroll", onScroll, true);
++    return () => {
++      document.removeEventListener("pointerdown", onPointerDown, true);
++      document.removeEventListener("scroll", onScroll, true);
++    };
++  }, [isOpen, menuOpen, id, rowRef]);
++
++  useEffect(() => {
++    if (!enabled) return undefined;
++    return () => closeSwipeRow(id);
++  }, [enabled, id]);
++
++  if (!enabled) {
++    return { enabled, menuOpen: false, setMenuOpen, rowProps: {}, rowClassName: undefined };
++  }
++
++  // Only touches on the row itself: not its revealed button, and not the
++  // menus and dialogs React portals out of it (their events bubble here too).
++  const onRow = (event: { currentTarget: Element; target: EventTarget }) =>
++    event.target instanceof Element &&
++    event.currentTarget.contains(event.target) &&
++    !event.target.closest(ACTION_SELECTOR);
++
++  const settle = (g: Gesture, velocity: number) => {
++    const open = settleSwipe(g.offset, velocity);
++    suppressClickUntil.current = performance.now() + SWIPE_CLICK_GUARD_MS;
++    if (open) setOpenSwipeRow(id);
++    else closeSwipeRow(id);
++    animateTo(open ? SWIPE_ACTION_WIDTH : 0);
++  };
++
++  const rowProps: HTMLAttributes<HTMLLIElement> = {
++    // Long press is the drag gesture here; keep the browser's own menu away.
++    onContextMenu: (event) => {
++      if (onRow(event)) event.preventDefault();
++    },
++    onPointerDown: (event) => {
++      if (event.pointerType !== "touch" || !event.isPrimary || dragging || !onRow(event)) return;
++      cancelAnimationFrame(frame.current);
++      const start = shown.current;
++      gesture.current = {
++        pointerId: event.pointerId,
++        x: event.clientX,
++        y: event.clientY,
++        start,
++        axis: "pending",
++        offset: start,
++        lastX: event.clientX,
++        lastT: event.timeStamp,
++        velocity: 0,
++      };
++    },
++    onPointerMove: (event) => {
++      const g = gesture.current;
++      if (!g || event.pointerId !== g.pointerId) return;
++      const dx = event.clientX - g.x;
++      if (g.axis === "pending") {
++        const axis = classifySwipe(dx, event.clientY - g.y);
++        if (axis === "pending") return;
++        if (axis === "vertical") {
++          gesture.current = null;
++          // Put back a row caught mid-settle; the list scrolls instead.
++          animateTo(isOpen ? SWIPE_ACTION_WIDTH : 0);
++          return;
++        }
++        g.axis = "horizontal";
++        // One open row at a time: swiping this one closes any other.
++        if (getOpenSwipeRow() !== id) setOpenSwipeRow(null);
++      }
++      const dt = event.timeStamp - g.lastT;
++      if (dt > 0) g.velocity = (event.clientX - g.lastX) / dt;
++      g.lastX = event.clientX;
++      g.lastT = event.timeStamp;
++      g.offset = swipeOffset(g.start, dx);
++      draw(g.offset);
++    },
++    onPointerUp: (event) => {
++      const g = gesture.current;
++      if (!g || event.pointerId !== g.pointerId) return;
++      gesture.current = null;
++      if (g.axis !== "horizontal") {
++        // A tap during the settle animation: finish it where it was heading.
++        animateTo(isOpen ? SWIPE_ACTION_WIDTH : 0);
++        return;
++      }
++      const fresh = event.timeStamp - g.lastT <= FLICK_MAX_AGE_MS;
++      settle(g, fresh ? g.velocity : 0);
++    },
++    onPointerCancel: (event) => {
++      const g = gesture.current;
++      if (!g || event.pointerId !== g.pointerId) return;
++      gesture.current = null;
++      if (g.axis === "horizontal") settle(g, 0);
++      else animateTo(isOpen ? SWIPE_ACTION_WIDTH : 0);
++    },
++    // A tap on an open row closes it instead of opening the session, and the
++    // click a swipe may leave behind is dropped.
++    onClickCapture: (event) => {
++      if (!onRow(event)) return;
++      if (isOpen || performance.now() < suppressClickUntil.current) {
++        event.preventDefault();
++        event.stopPropagation();
++        closeSwipeRow(id);
++      }
++    },
++  };
++  return { enabled, menuOpen, setMenuOpen, rowProps, rowClassName: ROW_CLASS };
++}
++
++/**
++ * The button a swipe reveals at the row's right edge. It sits under the row
++ * and fades in as the row slides off it; its menu is the row's own menu.
++ * Assistive technology can reach it without swiping.
++ */
++export function SessionRowSwipeAction({
++  swipe,
++  label = "More actions",
++  children,
++}: {
++  swipe: SessionRowSwipe;
++  label?: string;
++  /** The menu's items. */
++  children: ReactNode;
++}) {
++  if (!swipe.enabled) return null;
++  return (
++    <div
++      data-swipe-action
++      className="absolute inset-y-0 right-0 flex items-center justify-end pr-0.5"
++      style={{ width: SWIPE_ACTION_WIDTH, opacity: "var(--swipe-progress, 0)" }}
++    >
++      <DropdownMenu open={swipe.menuOpen} onOpenChange={swipe.setMenuOpen}>
++        <DropdownMenuTrigger asChild>
++          <Button
++            type="button"
++            variant="secondary"
++            size="icon-sm"
++            aria-label={label}
++            data-testid="session-swipe-actions"
++            className="h-[calc(100%-4px)] w-11 rounded-[var(--radius-otto-button)]"
++          >
++            <MoreHorizontalIcon className="size-4" />
++          </Button>
++        </DropdownMenuTrigger>
++        <DropdownMenuContent align="end" className="min-w-44">
++          {children}
++        </DropdownMenuContent>
++      </DropdownMenu>
++    </div>
++  );
++}
+diff --git a/web/src/shell/Sidebar.swipeMenu.test.tsx b/web/src/shell/Sidebar.swipeMenu.test.tsx
+new file mode 100644
+index 0000000..e6b765f
+--- /dev/null
++++ b/web/src/shell/Sidebar.swipeMenu.test.tsx
+@@ -0,0 +1,181 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++vi.mock("@/hooks/useScopeCache", () => import("@/test/mockScopeCache"));
++import { SidebarDataProvider } from "@/hooks/useSidebarData";
++// The session row's menu on touch-primary devices. A long press picks the row
++// up to drag it, so it no longer opens the menu as well; swiping the row to
++// the left reveals a button for the same menu instead. Mouse and trackpad
++// devices keep the right-click menu and the kebab, and get no swipe.
++// The gesture itself is covered by SessionRowSwipe.test.tsx.
++
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { MemoryRouter } from "react-router-dom";
++import { TooltipProvider } from "@/components/ui/tooltip";
++import type * as SidebarSwipe from "./sidebarSwipe";
++
++const touch = vi.hoisted(() => ({ primary: false }));
++
++vi.mock("./sidebarSwipe", async (importOriginal) => ({
++  ...(await importOriginal<typeof SidebarSwipe>()),
++  useIsTouchPrimary: () => touch.primary,
++}));
++
++vi.mock("@/hooks/useConversations", () => ({
++  useConversations: vi.fn(),
++  useConnectedConversations: () => [],
++  useStopAndDeleteConversation: () => ({
++    mutate: vi.fn(),
++    reset: vi.fn(),
++    isPending: false,
++    isError: false,
++  }),
++  usePinnedConversations: () => ({
++    data: { conversations: [], filterHonored: true },
++    isSuccess: true,
++  }),
++  useTogglePinnedConversation: () => ({ mutate: vi.fn() }),
++  setConversationPinned: vi.fn(() => Promise.resolve({})),
++  PINNED_CONVERSATIONS_KEY: ["pinned-conversations"],
++  useRenameConversation: () => ({ mutate: vi.fn() }),
++  useLeaveSession: () => ({ mutate: vi.fn(), isPending: false }),
++  useArchiveConversation: () => ({ mutate: vi.fn() }),
++  useBulkArchiveConversations: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
++  useBulkDeleteConversations: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
++  useBulkMoveToProject: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
++  useBulkStopSessions: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
++  useStopSession: () => ({ mutate: vi.fn() }),
++  useProjects: () => ({ data: [] }),
++  useMoveToProject: () => ({ mutate: vi.fn() }),
++  useDeleteProject: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
++  useRenameProject: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
++  useCreateProject: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
++  useProjectConfig: () => ({ data: undefined, isLoading: false }),
++  useUpdateProjectConfig: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
++  fetchProjectSessionIds: () => Promise.resolve([]),
++  PROJECT_LABEL_KEY: "omni_project",
++}));
++
++vi.mock("@/components/PermissionsModal", () => ({ PermissionsModal: () => null }));
++
++import { type Conversation, useConversations } from "@/hooks/useConversations";
++import { Sidebar } from "./Sidebar";
++import { getOpenSwipeRow, setOpenSwipeRow } from "./sidebarSwipe";
++
++const useConvMock = vi.mocked(useConversations);
++
++const CONV: Conversation = {
++  id: "conv_1",
++  object: "conversation",
++  title: "Fix login redirect",
++  created_at: 1_700_000_000,
++  updated_at: 1_700_000_000,
++  labels: {},
++  permission_level: null,
++  status: "idle",
++};
++
++function mockConversations(conversations: Conversation[]) {
++  const withData = {
++    data: {
++      pages: [
++        {
++          data: conversations,
++          first_id: conversations[0]?.id ?? null,
++          last_id: conversations.at(-1)?.id ?? null,
++          has_more: false,
++        },
++      ],
++      pageParams: [undefined],
++    },
++    isLoading: false,
++    isError: false,
++    error: null,
++    fetchNextPage: vi.fn(),
++    hasNextPage: false,
++    isFetchingNextPage: false,
++  } as unknown as ReturnType<typeof useConversations>;
++  useConvMock.mockImplementation(() => withData);
++}
++
++function renderSidebar() {
++  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(
++    <QueryClientProvider client={qc}>
++      <SidebarDataProvider>
++        <TooltipProvider>
++          <MemoryRouter initialEntries={["/"]}>
++            <Sidebar open={true} onClose={vi.fn()} />
++          </MemoryRouter>
++        </TooltipProvider>
++      </SidebarDataProvider>
++    </QueryClientProvider>,
++  );
++}
++
++const rowLink = () => screen.getByRole("link", { name: /Fix login redirect/ });
++const rowItem = () => rowLink().closest("li") as HTMLLIElement;
++
++function swipeLeft(target: Element) {
++  const base = { pointerId: 7, pointerType: "touch", isPrimary: true };
++  fireEvent.pointerDown(target, { ...base, clientX: 220, clientY: 100 });
++  for (const x of [205, 185, 160, 140]) {
++    fireEvent.pointerMove(target, { ...base, clientX: x, clientY: 102 });
++  }
++  fireEvent.pointerUp(target, { ...base, clientX: 140, clientY: 102 });
++}
++
++beforeEach(() => {
++  mockConversations([CONV]);
++});
++
++afterEach(() => {
++  act(() => setOpenSwipeRow(null));
++  touch.primary = false;
++  cleanup();
++});
++
++describe("session row menu on touch-primary devices", () => {
++  beforeEach(() => {
++    touch.primary = true;
++  });
++
++  it("doesn't open the menu on a long press, which drags the row instead", () => {
++    renderSidebar();
++    const notCancelled = fireEvent.contextMenu(rowLink());
++    expect(screen.queryByTestId("rename-conversation")).toBeNull();
++    // Nor the browser's own link menu.
++    expect(notCancelled).toBe(false);
++  });
++
++  it("opens the row's own menu from the button a swipe to the left reveals", () => {
++    renderSidebar();
++    act(() => swipeLeft(rowLink()));
++    expect(getOpenSwipeRow()).toBe("conv_1");
++
++    fireEvent.pointerDown(screen.getByRole("button", { name: "More actions" }), {
++      button: 0,
++      ctrlKey: false,
++      pointerType: "touch",
++    });
++
++    // The same items as the kebab and the right-click menu.
++    expect(screen.getByTestId("rename-conversation")).toBeInTheDocument();
++    expect(screen.getByTestId("archive-conversation")).toBeInTheDocument();
++    expect(screen.getByTestId("delete-conversation")).toBeInTheDocument();
++  });
++});
++
++describe("session row menu with a mouse or trackpad", () => {
++  it("keeps the right-click menu and adds no swipe", () => {
++    renderSidebar();
++    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
++    expect(rowItem().className).toBe("group relative");
++
++    act(() => swipeLeft(rowLink()));
++    expect(rowItem()).not.toHaveAttribute("data-swiped");
++
++    fireEvent.contextMenu(rowLink());
++    expect(screen.getByTestId("rename-conversation")).toBeInTheDocument();
++  });
++});
+diff --git a/web/src/shell/Sidebar.tsx b/web/src/shell/Sidebar.tsx
+index c42cd0f..2aee576 100644
+--- a/web/src/shell/Sidebar.tsx
++++ b/web/src/shell/Sidebar.tsx
+@@ -221,6 +221,8 @@ import {
+ } from "./sidebarNav";
+ import { SidebarServerPicker } from "./SidebarServerPicker";
+ import { ForkSessionDialog } from "./ForkSessionDialog";
++import { SessionRowSwipeAction, useSessionRowSwipe } from "./SessionRowSwipe";
++import { useIsTouchPrimary } from "./sidebarSwipe";
+ import { SIDEBAR_ROW } from "./sidebarStyles";
+ import { TooltipArrow } from "radix-ui/tooltip";
+ import { getEmbedRoot } from "../lib/host";
+@@ -3706,6 +3708,9 @@ function ConversationRowImpl({
+   // project flyout's HoverCard and leave it lingering over the chat. Gate the
+   // flyout off below the `md` breakpoint (see `projectFlyoutName`).
+   const isMobile = useContext(IsMobileContext);
++  // Phones and tablets: a long press picks the row up to drag it, so the
++  // long-press menu is off there; swiping the row left reveals the menu.
++  const isTouchPrimary = useIsTouchPrimary();
+   // When this row becomes the active conversation (e.g. a freshly created
+   // session navigated to via `/c/:id`), scroll it toward the center of the
+   // sidebar so it's comfortably in view rather than pinned to an edge.
+@@ -3880,6 +3885,12 @@ function ConversationRowImpl({
+     data: { type: "session", label, project: currentProject, isPinned },
+     disabled: !isOwner || selectionMode || isArchived || isEditing || isProvisionalRow,
+   });
++  const swipe = useSessionRowSwipe({
++    id: conversation.id,
++    enabled: isTouchPrimary && !selectionMode && !isEditing && !isProvisionalRow,
++    dragging: isDragging,
++    rowRef,
++  });
+   // A drag ends with a synthetic click on the row's <Link> (mousedown + mouseup
+   // on the same anchor still fires a click); swallow that one click so a drag
+   // doesn't also navigate into the session. Flagged when a drag finishes,
+@@ -4150,8 +4161,17 @@ function ConversationRowImpl({
+           dragListeners?.onTouchStart?.(event);
+         }
+       }}
+-      className={cn("group relative", isDragging && "opacity-40")}
++      {...swipe.rowProps}
++      className={cn("group relative", isDragging && "opacity-40", swipe.rowClassName)}
+     >
++      {/* Touch only: the button a swipe to the left reveals, for this menu. */}
++      <SessionRowSwipeAction swipe={swipe}>
++        <ConversationMenuItems
++          components={dropdownBundle}
++          setMenuOpen={swipe.setMenuOpen}
++          {...menuItemProps}
++        />
++      </SessionRowSwipeAction>
+       {/* Right-click anywhere on the row opens the same actions as the kebab.
+           Suppressed in selection mode (bulk-select owns the row), where the
+           bare link is rendered instead. ContextMenuTrigger preventDefaults the
+@@ -4188,7 +4208,7 @@ function ConversationRowImpl({
+       ) : projectFlyoutName ? (
+         <HoverCard openDelay={150} closeDelay={0}>
+           <ContextMenu>
+-            <ContextMenuTrigger asChild>
++            <ContextMenuTrigger asChild disabled={isTouchPrimary}>
+               <HoverCardTrigger asChild>{rowLink}</HoverCardTrigger>
+             </ContextMenuTrigger>
+             <ContextMenuContent className="min-w-44">
+@@ -4209,7 +4229,9 @@ function ConversationRowImpl({
+         </HoverCard>
+       ) : isMobile ? (
+         <ContextMenu>
+-          <ContextMenuTrigger asChild>{rowLink}</ContextMenuTrigger>
++          <ContextMenuTrigger asChild disabled={isTouchPrimary}>
++            {rowLink}
++          </ContextMenuTrigger>
+           <ContextMenuContent className="min-w-44">
+             <ConversationMenuItems
+               components={contextBundle}
+@@ -4221,7 +4243,7 @@ function ConversationRowImpl({
+       ) : (
+         <Tooltip>
+           <ContextMenu>
+-            <ContextMenuTrigger asChild>
++            <ContextMenuTrigger asChild disabled={isTouchPrimary}>
+               <div className="w-full">
+                 <TooltipTrigger asChild>{rowLink}</TooltipTrigger>
+               </div>
+diff --git a/web/src/shell/sidebarSwipe.test.ts b/web/src/shell/sidebarSwipe.test.ts
+new file mode 100644
+index 0000000..40a68b9
+--- /dev/null
++++ b/web/src/shell/sidebarSwipe.test.ts
+@@ -0,0 +1,132 @@
++import { renderHook } from "@testing-library/react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import {
++  SWIPE_ACTION_WIDTH,
++  TOUCH_PRIMARY_QUERY,
++  classifySwipe,
++  closeSwipeRow,
++  getOpenSwipeRow,
++  resetTouchPrimaryQueryForTests,
++  setOpenSwipeRow,
++  settleSwipe,
++  swipeOffset,
++  useIsSwipeRowOpen,
++  useIsTouchPrimary,
++} from "./sidebarSwipe";
++
++describe("classifySwipe", () => {
++  it("stays pending inside the slop, so taps and long presses never lock", () => {
++    expect(classifySwipe(0, 0)).toBe("pending");
++    expect(classifySwipe(-9, 3)).toBe("pending");
++    expect(classifySwipe(6, -9)).toBe("pending");
++  });
++
++  it("locks to the dominant axis once past the slop", () => {
++    expect(classifySwipe(-12, 4)).toBe("horizontal");
++    expect(classifySwipe(15, -10)).toBe("horizontal");
++    expect(classifySwipe(-6, 14)).toBe("vertical");
++    expect(classifySwipe(-11, -12)).toBe("vertical");
++  });
++
++  it("treats a diagonal as a scroll", () => {
++    expect(classifySwipe(-20, 20)).toBe("vertical");
++  });
++});
++
++describe("swipeOffset", () => {
++  it("follows the finger to the left from closed", () => {
++    expect(swipeOffset(0, -20)).toBe(20);
++    expect(swipeOffset(0, -SWIPE_ACTION_WIDTH)).toBe(SWIPE_ACTION_WIDTH);
++  });
++
++  it("never slides right of closed", () => {
++    expect(swipeOffset(0, 30)).toBe(0);
++    expect(swipeOffset(SWIPE_ACTION_WIDTH, SWIPE_ACTION_WIDTH + 40)).toBe(0);
++  });
++
++  it("closes from open as the finger moves right", () => {
++    expect(swipeOffset(SWIPE_ACTION_WIDTH, 20)).toBe(SWIPE_ACTION_WIDTH - 20);
++  });
++
++  it("resists an over-pull past fully open", () => {
++    const pulled = swipeOffset(0, -(SWIPE_ACTION_WIDTH + 40));
++    expect(pulled).toBeGreaterThan(SWIPE_ACTION_WIDTH);
++    expect(pulled).toBeLessThan(SWIPE_ACTION_WIDTH + 40);
++  });
++});
++
++describe("settleSwipe", () => {
++  it("opens past halfway and closes short of it", () => {
++    expect(settleSwipe(SWIPE_ACTION_WIDTH / 2 + 1, 0)).toBe(true);
++    expect(settleSwipe(SWIPE_ACTION_WIDTH / 2 - 1, 0)).toBe(false);
++  });
++
++  it("lets a flick decide by its direction", () => {
++    expect(settleSwipe(5, -0.5)).toBe(true);
++    expect(settleSwipe(SWIPE_ACTION_WIDTH, 0.5)).toBe(false);
++  });
++
++  it("ignores slow drift", () => {
++    expect(settleSwipe(5, -0.1)).toBe(false);
++    expect(settleSwipe(SWIPE_ACTION_WIDTH, 0.1)).toBe(true);
++  });
++});
++
++describe("open row store", () => {
++  afterEach(() => setOpenSwipeRow(null));
++
++  it("keeps at most one row open", () => {
++    const a = renderHook(() => useIsSwipeRowOpen("a"));
++    const b = renderHook(() => useIsSwipeRowOpen("b"));
++    setOpenSwipeRow("a");
++    a.rerender();
++    expect(a.result.current).toBe(true);
++    expect(b.result.current).toBe(false);
++    setOpenSwipeRow("b");
++    a.rerender();
++    b.rerender();
++    expect(a.result.current).toBe(false);
++    expect(b.result.current).toBe(true);
++  });
++
++  it("only closes the row that asks", () => {
++    setOpenSwipeRow("a");
++    closeSwipeRow("b");
++    expect(getOpenSwipeRow()).toBe("a");
++    closeSwipeRow("a");
++    expect(getOpenSwipeRow()).toBeNull();
++  });
++});
++
++describe("useIsTouchPrimary", () => {
++  const original = window.matchMedia;
++  afterEach(() => {
++    window.matchMedia = original;
++    resetTouchPrimaryQueryForTests();
++  });
++
++  function mockMatchMedia(touch: boolean) {
++    window.matchMedia = vi.fn((query: string) => ({
++      matches: query === TOUCH_PRIMARY_QUERY && touch,
++      media: query,
++      onchange: null,
++      addListener: () => {},
++      removeListener: () => {},
++      addEventListener: () => {},
++      removeEventListener: () => {},
++      dispatchEvent: () => false,
++    })) as unknown as typeof window.matchMedia;
++    resetTouchPrimaryQueryForTests();
++  }
++
++  it("is true without hover and with a coarse pointer", () => {
++    mockMatchMedia(true);
++    expect(renderHook(() => useIsTouchPrimary()).result.current).toBe(true);
++    expect(window.matchMedia).toHaveBeenCalledWith("(hover: none) and (pointer: coarse)");
++  });
++
++  it("is false on mouse and trackpad devices, whatever their width", () => {
++    mockMatchMedia(false);
++    expect(renderHook(() => useIsTouchPrimary()).result.current).toBe(false);
++  });
++});
+diff --git a/web/src/shell/sidebarSwipe.ts b/web/src/shell/sidebarSwipe.ts
+new file mode 100644
+index 0000000..831b81a
+--- /dev/null
++++ b/web/src/shell/sidebarSwipe.ts
+@@ -0,0 +1,133 @@
++// Swipe-to-reveal for sidebar session rows on touch devices.
++//
++// On a touch-primary device a long press on a session row picks it up for
++// dragging (dnd-kit's TouchSensor), so it can't also open the row's menu.
++// Instead, swiping a row from right to left slides it over and reveals a
++// "more" button that opens the same menu. This module holds the pure gesture
++// maths (unit-tested), the "which row is open" store (one row at a time), and
++// the media-query hook that decides whether the gesture is on at all.
++
++import { useSyncExternalStore } from "react";
++
++/** Width of the revealed action area, in CSS pixels. */
++export const SWIPE_ACTION_WIDTH = 52;
++/** Movement before a touch counts as a swipe or a scroll. */
++export const SWIPE_SLOP_PX = 10;
++/** A release faster than this (px/ms) settles in its direction. */
++export const SWIPE_FLICK_VELOCITY = 0.3;
++/** How much of an over-pull past the open position still moves the row. */
++const OVERPULL_RESISTANCE = 0.25;
++
++export type SwipeAxis = "pending" | "horizontal" | "vertical";
++
++/**
++ * Decide what a touch is from how far it has moved since it started. Stays
++ * `pending` inside the slop, so a tap or a long press (drag) never locks.
++ * Past it, the dominant axis wins once and for all: a mostly vertical move is
++ * the list scrolling and is left to the browser.
++ */
++export function classifySwipe(dx: number, dy: number, slop = SWIPE_SLOP_PX): SwipeAxis {
++  const ax = Math.abs(dx);
++  const ay = Math.abs(dy);
++  if (Math.max(ax, ay) < slop) return "pending";
++  return ax > ay ? "horizontal" : "vertical";
++}
++
++/**
++ * How far the row is slid left, given where it started (`0` closed, `width`
++ * open) and the finger's horizontal travel (negative = left). Never slides
++ * right of closed; past fully open it follows the finger with resistance.
++ */
++export function swipeOffset(start: number, dx: number, width = SWIPE_ACTION_WIDTH): number {
++  const raw = start - dx;
++  if (raw <= 0) return 0;
++  if (raw <= width) return raw;
++  return width + (raw - width) * OVERPULL_RESISTANCE;
++}
++
++/**
++ * Whether the row stays open when the finger lifts. A flick decides by its
++ * direction (`velocity` in px/ms, negative = moving left); otherwise the row
++ * opens when it's more than halfway out.
++ */
++export function settleSwipe(offset: number, velocity: number, width = SWIPE_ACTION_WIDTH): boolean {
++  if (velocity <= -SWIPE_FLICK_VELOCITY) return true;
++  if (velocity >= SWIPE_FLICK_VELOCITY) return false;
++  return offset > width / 2;
++}
++
++// ── The open row ──────────────────────────────────────────────────────────
++// At most one row is swiped open; opening another closes the previous one.
++
++let openRowId: string | null = null;
++const openRowListeners = new Set<() => void>();
++
++function subscribeOpenRow(listener: () => void): () => void {
++  openRowListeners.add(listener);
++  return () => openRowListeners.delete(listener);
++}
++
++/** Open `id`'s row (closing any other), or close the open row with `null`. */
++export function setOpenSwipeRow(id: string | null): void {
++  if (openRowId === id) return;
++  openRowId = id;
++  for (const listener of openRowListeners) listener();
++}
++
++/** Close `id`'s row if it's the open one; leaves another open row alone. */
++export function closeSwipeRow(id: string): void {
++  if (openRowId === id) setOpenSwipeRow(null);
++}
++
++export function getOpenSwipeRow(): string | null {
++  return openRowId;
++}
++
++/** Whether `id`'s row is swiped open. Re-renders only that row on changes. */
++export function useIsSwipeRowOpen(id: string): boolean {
++  return useSyncExternalStore(
++    subscribeOpenRow,
++    () => openRowId === id,
++    () => false,
++  );
++}
++
++// ── Touch-primary devices ──────────────────────────────────────────────────
++// Phones and tablets: no hover, and a coarse primary pointer. A laptop with a
++// touchscreen, or a tablet with a mouse or trackpad attached, reports hover
++// and keeps the desktop behaviour (right-click menu, kebab on hover).
++
++export const TOUCH_PRIMARY_QUERY = "(hover: none) and (pointer: coarse)";
++
++let touchQuery: MediaQueryList | null | undefined;
++
++function getTouchQuery(): MediaQueryList | null {
++  if (touchQuery === undefined) {
++    touchQuery =
++      typeof window !== "undefined" && window.matchMedia
++        ? window.matchMedia(TOUCH_PRIMARY_QUERY)
++        : null;
++  }
++  return touchQuery;
++}
++
++function subscribeTouch(callback: () => void): () => void {
++  const mql = getTouchQuery();
++  if (!mql) return () => {};
++  mql.addEventListener("change", callback);
++  return () => mql.removeEventListener("change", callback);
++}
++
++/** True on touch-primary devices (no hover, coarse pointer). SSR-safe. */
++export function useIsTouchPrimary(): boolean {
++  return useSyncExternalStore(
++    subscribeTouch,
++    () => getTouchQuery()?.matches ?? false,
++    () => false,
++  );
++}
++
++/** Test hook: forget the cached media query so a new `matchMedia` mock applies. */
++export function resetTouchPrimaryQueryForTests(): void {
++  touchQuery = undefined;
++}
