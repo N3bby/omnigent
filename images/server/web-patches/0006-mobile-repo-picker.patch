@@ -1,0 +1,166 @@
+Keep the GitHub repository picker on screen on phones.
+
+The repo and branch comboboxes in the new-session form open a popover of a
+search field and a list up to 18rem tall, about 330px in all. A phone has less
+room than that both above and below the picker, so Radix flipped the popover
+to the top and it ran off the top of the screen, search field first. The
+popover is now capped at the room Radix finds (8px off the screen edges) and
+the list scrolls inside it. On touch screens the search field also isn't
+focused on open, so the on-screen keyboard doesn't pop up and pan the page;
+tapping the field focuses it. Desktop, with room to spare, is unchanged.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0005.
+
+diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
+index 43c57e5..d5fc46a 100644
+--- a/web/src/shell/NewChatDialog.test.tsx
++++ b/web/src/shell/NewChatDialog.test.tsx
+@@ -6697,6 +6697,72 @@ describe("NewChatLandingScreen", () => {
+     expect(screen.queryByTestId("new-chat-landing-repo-select")).toBeNull();
+   });
+ 
++  // Opens the "Add repository" combobox from a connected GitHub account.
++  async function openRepoPicker(): Promise<void> {
++    authenticatedFetchMock.mockImplementation(((input: RequestInfo | URL) => {
++      const url = typeof input === "string" ? input : input.toString();
++      if (url === "/v1/connections/github/repos") {
++        return Promise.resolve({
++          ok: true,
++          json: async () => ({
++            connected: true,
++            repos: [
++              {
++                full_name: "octo/hello",
++                clone_url: "https://github.com/octo/hello.git",
++                default_branch: "main",
++                private: false,
++                pushed_at: "2026-07-28T00:00:00Z",
++              },
++            ],
++          }),
++        } as unknown as Response);
++      }
++      return Promise.resolve({ ok: true, json: async () => ({}) } as unknown as Response);
++    }) as unknown as typeof authenticatedFetch);
++    renderLanding({ managed_sandboxes_enabled: true, enabled_connections: ["github"] });
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-host-chip").getAttribute("aria-label")).toContain(
++        "New Sandbox",
++      ),
++    );
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-chip"));
++    fireEvent.click(await screen.findByTestId("new-chat-landing-repo-select"));
++    await screen.findByRole("option", { name: /octo\/hello/ });
++  }
++
++  it("focuses the repo search when the picker opens with a mouse", async () => {
++    await openRepoPicker();
++    await waitFor(() =>
++      expect(document.activeElement).toBe(screen.getByTestId("new-chat-landing-repo-search")),
++    );
++  });
++
++  it("keeps the repo picker on screen and the keyboard closed on a touch screen", async () => {
++    vi.spyOn(window, "matchMedia").mockImplementation(
++      (query: string) =>
++        ({
++          matches: query === "(pointer: coarse)",
++          media: query,
++          onchange: null,
++          addListener: () => {},
++          removeListener: () => {},
++          addEventListener: () => {},
++          removeEventListener: () => {},
++          dispatchEvent: () => false,
++        }) as MediaQueryList,
++    );
++    await openRepoPicker();
++    const search = screen.getByTestId("new-chat-landing-repo-search");
++    // Not focused on open, so a phone doesn't pop up its keyboard; tapping
++    // the field still focuses it.
++    expect(document.activeElement).not.toBe(search);
++    // Capped at the room next to the trigger, so it can't run off the screen.
++    expect(search.closest("[data-slot=popover-content]")?.className).toContain(
++      "max-h-(--radix-popover-content-available-height)",
++    );
++  });
++
+   it("creates a managed session without host_id/workspace and no provisioning subtext", async () => {
+     // Controlled promise so the in-flight state is observable
+     // deterministically before the create resolves.
+diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
+index a9fec1e..5bfeb56 100644
+--- a/web/src/shell/NewChatDialog.tsx
++++ b/web/src/shell/NewChatDialog.tsx
+@@ -1025,6 +1025,38 @@ export function deriveRepoName(url: string): string | null {
+ const COMBOBOX_TRIGGER_CLASS =
+   "flex w-full items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors hover:border-ring/60 focus-visible:border-ring";
+ 
++/**
++ * Shared popover props for the repo/branch comboboxes, so they fit on a phone.
++ *
++ * - The popover is capped at the room Radix finds next to the trigger
++ *   (``--radix-popover-content-available-height``, kept 8px off the screen
++ *   edges); the list shrinks and scrolls when there's less than its usual
++ *   18rem. Without the cap, a phone has room for the full popover neither
++ *   above nor below the trigger, so Radix flips it to the top and it runs off
++ *   the top of the screen.
++ * - On touch screens the search field isn't focused on open, so the on-screen
++ *   keyboard doesn't pop up and pan the page. Tapping the field focuses it.
++ *
++ * @returns Props to spread onto the combobox's ``PopoverContent``.
++ */
++function useComboboxContentProps(): {
++  align: "start";
++  className: string;
++  collisionPadding: number;
++  onOpenAutoFocus: (event: Event) => void;
++} {
++  const isCoarsePointer = useIsCoarsePointer();
++  return {
++    align: "start",
++    className:
++      "max-h-(--radix-popover-content-available-height) w-(--radix-popover-trigger-width) min-w-72 p-0",
++    collisionPadding: 8,
++    onOpenAutoFocus: (event) => {
++      if (isCoarsePointer) event.preventDefault();
++    },
++  };
++}
++
+ /**
+  * Searchable combobox for picking one of the caller's GitHub repos.
+  *
+@@ -1049,6 +1081,7 @@ function SandboxRepoCombobox({
+ }): ReactNode {
+   const [open, setOpen] = useState(false);
+   const selected = repos.find((r) => r.full_name === value) ?? null;
++  const comboboxContentProps = useComboboxContentProps();
+   return (
+     <Popover open={open} onOpenChange={setOpen}>
+       <PopoverTrigger asChild>
+@@ -1064,7 +1097,7 @@ function SandboxRepoCombobox({
+           <ChevronsUpDownIcon className="ml-auto size-3.5 shrink-0 opacity-50" />
+         </button>
+       </PopoverTrigger>
+-      <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-72 p-0">
++      <PopoverContent {...comboboxContentProps}>
+         <Command>
+           <CommandInput
+             placeholder="Search repositories…"
+@@ -1125,6 +1158,7 @@ function SandboxRepoBranchSelect({
+   onChange: (branch: string) => void;
+ }): ReactNode {
+   const [open, setOpen] = useState(false);
++  const comboboxContentProps = useComboboxContentProps();
+   const { data, isPending } = useQuery({
+     queryKey: ["github-branches", fullName],
+     queryFn: () => fetchGithubBranches(fullName),
+@@ -1156,7 +1190,7 @@ function SandboxRepoBranchSelect({
+           <ChevronsUpDownIcon className="ml-auto size-3.5 shrink-0 opacity-50" />
+         </button>
+       </PopoverTrigger>
+-      <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-72 p-0">
++      <PopoverContent {...comboboxContentProps}>
+         <Command>
+           <CommandInput
+             placeholder="Search branches…"
