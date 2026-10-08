@@ -1,0 +1,27 @@
+Run the GitHub credential helper with Omnigent's own Python.
+
+The per-user broker helper written to ~/.gitconfig ran bare python3. Runner
+login shells put mise's shims first on PATH, so in a project that pins Python
+(.mise.toml, .tool-versions) python3 was the project's interpreter, which has
+no omnigent module, and git push/fetch to github.com failed. The helper now
+names sys.executable, e.g. /opt/venv/bin/python3. The host rewrites the helper
+on every start, so existing sessions pick it up when they wake.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/git_credential_github.py b/omnigent/git_credential_github.py
+index 8d7ca07..472e337 100644
+--- a/omnigent/git_credential_github.py
++++ b/omnigent/git_credential_github.py
+@@ -146,8 +146,11 @@ def _install_broker_helper(server_url: str, host_id: str, token: str) -> None:
+     re-runs on every resume). A plain set can't overwrite the 2+ values that
+     leaves, so without ``--replace-all`` broker entries would pile up.
+     """
++    # The interpreter running this, not whatever ``python3`` is on PATH: in a
++    # project that pins Python with mise, the shims put a Python without
++    # omnigent first, and every git operation against github.com would fail.
+     helper = (
+-        "!python3 -m omnigent.git_credential_github "
++        f"!{shlex.quote(sys.executable)} -m omnigent.git_credential_github "
+         f"--server {shlex.quote(server_url)} --host-id {shlex.quote(host_id)} "
+         f"--host-token {shlex.quote(token)}"
+     )

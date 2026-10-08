@@ -174,6 +174,29 @@ shims=/home/omnigent/.local/share/mise/shims
 check "login shells put mise shims first on PATH" sh -c "bash -lc 'echo \$PATH' | grep -q '^$shims:'"
 check "Claude is told to use mise" grep -q 'mise install' /etc/claude-code/CLAUDE.md
 check "Codex is told to use mise" grep -q 'mise install' /opt/codex-home/AGENTS.md
+# Pod startup runs in a login shell, where the shims come first; a Python
+# pinned for the home directory would otherwise run it, and fail on yaml.
+pid1="$(tr '\0' '\n' < /proc/1/cmdline | head -n1)"
+if [[ "$pid1" == /opt/venv/bin/python3 ]]; then
+  pass "the Pod starts with Omnigent's Python: $pid1"
+else
+  fail "the Pod starts with Omnigent's Python" "PID 1 is $pid1"
+fi
+# git runs Omnigent's GitHub helper in the repository's directory, where the
+# shims would pick a project's pinned Python, which has no omnigent module.
+# Only the interpreter is printed: the helper line holds the host token.
+helper="$(git config --global --get-all credential.https://github.com.helper 2>/dev/null | grep -m1 'omnigent.git_credential_github')"
+if [[ -z "$helper" ]]; then
+  skip "git's GitHub helper runs Omnigent's Python" "GitHub isn't connected for this session"
+else
+  interpreter="${helper#!}"
+  interpreter="${interpreter%% *}"
+  if [[ "$interpreter" == /* ]] && "$interpreter" -c 'import omnigent.git_credential_github' 2>/dev/null; then
+    pass "git's GitHub helper runs Omnigent's Python: $interpreter"
+  else
+    fail "git's GitHub helper runs Omnigent's Python" "runs $interpreter"
+  fi
+fi
 if ((quick)); then
   skip "a project's pinned Node, and codex on the image's Node" --quick
 else
