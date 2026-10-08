@@ -80,8 +80,8 @@ RUN set -eu; \
     done; \
     apt-get purge -y --auto-remove patch; \
     rm -rf /var/lib/apt/lists/* /tmp/omnigent-patches; \
-    python -m compileall -q -f "$site/omnigent/harnesses"; \
-    python -c 'import omnigent.harnesses.claude_native.forwarder, omnigent.harnesses.codex_native.forwarder'
+    python -m compileall -q -f "$site/omnigent/harnesses" "$site/omnigent/git_credential_github.py"; \
+    python -c 'import omnigent.harnesses.claude_native.forwarder, omnigent.harnesses.codex_native.forwarder, omnigent.git_credential_github'
 
 # Shell setup for Tailscale SSH logins. It's personal taste: change
 # images/runner/shell/ to make it your own (see docs/features/tailscale.md).

@@ -53,6 +53,11 @@ You can't.
   - Omnigent itself calls its venv's Python by full path, and the `codex`
     wrapper runs Codex with the image's Node. A project's pins don't affect
     them.
+  - So does git's GitHub credential helper, which Omnigent writes to
+    `~/.gitconfig` when you've connected GitHub. Upstream writes it as bare
+    `python3`, so in a project that pins Python, git pushes and fetches failed.
+    `images/runner/patches/0002-git-helper-python.patch` writes the venv's
+    Python by full path instead.
 - **Home directory:** the script sets `MISE_DATA_DIR`, `MISE_CONFIG_DIR` and
   `MISE_STATE_DIR` under `/home/omnigent`. Agents have
   `HOME=/home/omnigent`, but root's home in `/etc/passwd`, which Tailscale
