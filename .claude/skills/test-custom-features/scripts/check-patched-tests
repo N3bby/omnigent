@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Run the fast-mode backend regressions and related frontend suites against
+# a fresh, fully patched upstream checkout. Keep logs and JUnit reports.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+cd "$root"
+for tool in mise git patch; do
+  command -v "$tool" >/dev/null || { echo "needs $tool" >&2; exit 2; }
+done
+value() { awk -F'"' -v key="$1" '$1 == key ": " { print $2 }' "$root/versions.yaml"; }
+commit="$(value omnigent_commit)"
+node_version="$(value web_builder)"
+node_version="${node_version%-slim}"
+pnpm_version="$(value pnpm)"
+[[ -n "$commit" && -n "$node_version" && -n "$pnpm_version" ]] || {
+  echo "missing upstream, Node, or pnpm version in versions.yaml" >&2
+  exit 2
+}
+
+mkdir -p "$root/.generated/patched-tests"
+reports="$(mktemp -d "$root/.generated/patched-tests/run.XXXXXX")"
+source_dir="$reports/upstream"
+echo "Reports: $reports"
+
+run_tests() {
+  echo "deployment revision: $(git -C "$root" rev-parse HEAD)"
+  mise install
+  mise install "node@$node_version" "pnpm@$pnpm_version"
+  git init -q "$source_dir"
+  git -C "$source_dir" fetch -q --depth 1 https://github.com/omnigent-ai/omnigent.git "$commit"
+  git -C "$source_dir" -c advice.detachedHead=false checkout -q FETCH_HEAD
+  echo "upstream: $(git -C "$source_dir" rev-parse HEAD)"
+
+  # The native parser is shipped by both images; apply its identical addition once.
+  for group in images/runner/patches images/server/patches images/server/web-patches; do
+    for patch_file in "$root/$group"/*.patch; do
+      sha256sum "$patch_file" >> "$reports/patches.sha256"
+      if [[ "$group" == images/server/patches ]]; then
+        mise exec -- python - "$patch_file" "$source_dir" "$reports/server.patch" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+patch_file, source_dir, output = map(Path, sys.argv[1:])
+chunks = re.split(r"(?=^diff --git )", patch_file.read_text(), flags=re.MULTILINE)
+shared_path = "omnigent/native/fast_mode.py"
+for chunk in chunks:
+    if chunk.startswith(f"diff --git a/{shared_path} "):
+        expected = "".join(
+            line[1:] for line in chunk.splitlines(keepends=True)
+            if line.startswith("+") and not line.startswith("+++")
+        )
+        if (source_dir / shared_path).read_text() != expected:
+            raise SystemExit("runner and server fast-mode parsers differ")
+output.write_text("".join(
+    chunk for chunk in chunks if not chunk.startswith(f"diff --git a/{shared_path} ")
+))
+PY
+        patch -d "$source_dir" -p1 --forward --fuzz=0 --no-backup-if-mismatch < "$reports/server.patch"
+      else
+        patch -d "$source_dir" -p1 --forward --fuzz=0 --no-backup-if-mismatch < "$patch_file"
+      fi
+    done
+  done
+  rm -f "$reports/server.patch"
+
+  # Resolve only what these suites need, constrained by upstream's lockfile.
+  mise exec -- uv export --project "$source_dir" --frozen --no-default-groups \
+    --group test --no-emit-local --no-hashes --output-file "$reports/constraints.txt"
+  python_bin="$(mise exec -- python -c 'import sys; print(sys.executable)')"
+  mise exec -- uv venv --python "$python_bin" "$source_dir/.venv"
+  mise exec -- uv pip install --python "$source_dir/.venv/bin/python" \
+    --constraint "$reports/constraints.txt" \
+    --editable "$source_dir" --editable "$source_dir/sdks/python-client" \
+    --editable "$source_dir/sdks/ui" \
+    pytest pytest-asyncio pytest-mock pytest-timeout pytest-rerunfailures \
+    pytest-playwright-visual-snapshot
+
+  (
+    cd "$source_dir"
+    PYTHONPATH="$source_dir:$root/images/server" "$source_dir/.venv/bin/python" -m pytest \
+      tests/runner/test_fast_mode_command.py tests/server/test_fast_mode_command.py \
+      -q --tb=short --junitxml="$reports/backend.xml"
+  )
+  mise exec "node@$node_version" "pnpm@$pnpm_version" -- \
+    pnpm --dir "$source_dir" install --frozen-lockfile --filter web
+  mise exec "node@$node_version" "pnpm@$pnpm_version" -- \
+    pnpm --dir "$source_dir/web" exec vitest run \
+      src/lib/fastMode.test.ts src/store/chatStore.test.ts src/pages/ChatPage.test.ts \
+      --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
+}
+
+trap 'result=$?; if ((result)); then echo "FAIL  patched upstream tests or setup; checkout and reports kept: $reports" >&2; fi' EXIT
+run_tests 2>&1 | tee "$reports/run.log"
+rm -rf "$source_dir"
+echo "PASS  patched upstream frontend/backend tests; reports: $reports"
