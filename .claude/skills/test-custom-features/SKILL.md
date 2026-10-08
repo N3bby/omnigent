@@ -353,7 +353,10 @@ Hand these to the user; they need their own devices or VM access:
    a new session shows **1 variable**, and the session's agent prints `page`.
    Edit it, leave the value blank and save: the agent of a new session still
    prints `page`. Then remove it. A `may not manage Secrets` error means the
-   platform wasn't bootstrapped after this feature was deployed.
+   platform wasn't bootstrapped after this feature was deployed. On a phone,
+   the page fits the screen without sideways scrolling, a long repository
+   wraps instead of being cut off, and editing shows each name above its
+   value.
 
 ## 7. Clean up
 
