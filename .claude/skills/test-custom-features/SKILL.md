@@ -65,11 +65,13 @@ fetched).
 ```
 upstream: <the pinned omnigent_commit>
 PASS  images/runner/patches/0001-rate-limits.patch
+PASS  images/runner/patches/0002-git-helper-python.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
 PASS  images/server/patches/0003-tailscale-host.patch
 PASS  images/server/patches/0004-repo-env.patch
+PASS  images/server/patches/0005-runner-python.patch
 PASS  images/server/patches/0006-repo-env-routes.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
