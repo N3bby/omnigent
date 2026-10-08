@@ -66,6 +66,7 @@ fetched).
 upstream: <the pinned omnigent_commit>
 PASS  images/runner/patches/0001-rate-limits.patch
 PASS  images/runner/patches/0002-git-helper-python.patch
+PASS  images/runner/patches/0003-claude-bypass-switch.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -73,6 +74,7 @@ PASS  images/server/patches/0003-tailscale-host.patch
 PASS  images/server/patches/0004-repo-env.patch
 PASS  images/server/patches/0005-runner-python.patch
 PASS  images/server/patches/0006-repo-env-routes.patch
+PASS  images/server/patches/0007-claude-bypass-switch.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -81,6 +83,7 @@ PASS  images/server/web-patches/0004-remove-share-button.patch
 PASS  images/server/web-patches/0005-repo-variables-page.patch
 PASS  images/server/web-patches/0006-mobile-repo-picker.patch
 PASS  images/server/web-patches/0007-sidebar-swipe-menu.patch
+PASS  images/server/web-patches/0008-claude-bypass-picker.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -154,6 +157,11 @@ PASS  Claude statusLine reports usage windows: 5h <n>% · 7d <n>%
 == Agents don't stop to ask
 PASS  Claude managed settings bypass permissions
 PASS  claude is the deployment wrapper
+PASS  claude is first on PATH
+PASS  claude wrapper keeps bypass switchable
+PASS  runner can switch Claude back to bypass
+PASS  running Claude doesn't auto-update
+PASS  running Claude has --allow-dangerously-skip-permissions
 PASS  codex is the deployment wrapper
 SKIP  running Codex has --dangerously-bypass-approvals-and-sandbox (no Codex running in this Pod)
 == Root and containers
@@ -220,6 +228,8 @@ What a failure usually means:
 | `… posts rate limits` | the runner patch was dropped or upstream moved the code; see step 2 |
 | `Claude statusLine reports …` | the Claude Code statusLine payload changed shape, or it's not a Pro/Max login |
 | managed settings / wrappers | `images/runner/Dockerfile` no longer installs the wrappers over the real CLIs, or `claude_bypass_permissions` is off |
+| `… switch Claude back to bypass`, `running Claude has --allow-dangerously-skip-permissions` | `images/runner/patches/0003-claude-bypass-switch.patch` was dropped, or this session's Pod started before the deploy |
+| `claude is the deployment wrapper`, `claude is first on PATH`, `… doesn't auto-update` | Claude Code updated itself: it replaced `/usr/local/bin/claude`, or put a `claude` shim in `~/.local/share/mise/shims` by installing into a mise Node. The wrapper sets `DISABLE_AUTOUPDATER=1` to prevent that; this session may predate it. Remove the shim's package with that Node's `npm rm -g @anthropic-ai/claude-code` and run `mise reshim` |
 | user namespace / Podman / compose | k3s, containerd or the admission policies changed; run `scripts/check-userns` on the VM |
 | tailnet | see `/run/omnigent-tailscale.log`; the key may have expired (`mise run credential-status`) |
 | mise shims, pinned Node | `images/runner/Dockerfile` no longer installs `images/runner/mise/mise-profile.sh`, or a newer mise changed its settings or shims; `mise doctor` in a login shell shows what it sees |
@@ -301,6 +311,7 @@ settings.
 | Usage limits | Next to the context ring, a button labelled like `5-hour limit 13% used, Weekly limit 56% used` and showing `5h 13% · 7d 56%`. The percentages are the rounded `used_percent` values from step 4. Clicking it opens **Usage limits** with a bar and `Resets in …` per window. |
 | Runners on your tailnet | After the working directory, the Tailscale mark and `omnigent-<8 hex>`, the `joined as` short name from step 4. The control is labelled `Copy Tailscale name omnigent-<8 hex>.<tailnet>`. |
 | Open in Gateway | Next to it, a link **Open in Gateway** titled `Open <workspace> in JetBrains Gateway on <full Tailscale name>`. If the snapshot exposes its URL, it is `jetbrains-gateway://connect#type=ssh&host=<full name>&port=22&user=root&projectPath=<workspace, URL-encoded>&idePath=%2Fopt%2Fjetbrains%2Fintellij&deploy=false`. |
+| Bypass in the permission picker | In this session's composer, the permission menu (hand icon) lists **Manual**, **Auto**, **Accept edits**, **Plan** and **Bypass permissions**, with **Bypass permissions** selected. Close the menu with Escape without picking anything. |
 | No Share button | No **Share** in the chat header or its menu. Open a session row's menu (⋯) in the sidebar: it has **Fork** but no **Share**. Close the menu with Escape. |
 | Model picker | Start a new session (don't send it) with the Kubernetes sandbox and Claude Code: the model menu lists models, such as Opus and Sonnet, and never says `Models unavailable`. Repeat for Codex. Then discard it. |
 | Repository variables page | If you're an admin, Settings has **Repository variables** under Admin. It lists repositories with their variable names and `••••••••`, never a value. Don't add, edit or remove anything. Not an admin: record SKIP. |

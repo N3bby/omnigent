@@ -77,7 +77,24 @@ elif [[ -z "$got" ]]; then
 else
   fail "Claude managed settings bypass permissions" "unexpected content: $got"
 fi
-check "claude is the deployment wrapper" grep -q 'managed-settings.json' /usr/local/bin/claude
+# Claude's own binary also contains managed-settings.json, so check for the script.
+check "claude is the deployment wrapper" grep -q 'exec /usr/local/bin/claude-real' /usr/local/bin/claude
+check "claude is first on PATH" test "$(bash -lc 'command -v claude' 2>/dev/null)" = /usr/local/bin/claude
+check "claude wrapper keeps bypass switchable" grep -q -- '--allow-dangerously-skip-permissions' /usr/local/bin/claude
+check "runner can switch Claude back to bypass" python -c 'from omnigent.harnesses.claude_native.bridge import CYCLEABLE_PERMISSION_MODES as m; assert "bypassPermissions" in m'
+claude_args="$(pgrep -af 'claude-real .*--mcp-config' 2>/dev/null | head -n1)"
+if [[ -n "$claude_args" ]] && tr '\0' '\n' < "/proc/${claude_args%% *}/environ" | grep -qx 'DISABLE_AUTOUPDATER=1'; then
+  pass "running Claude doesn't auto-update"
+elif [[ -n "$claude_args" ]]; then
+  fail "running Claude doesn't auto-update" "no DISABLE_AUTOUPDATER=1 in its environment"
+fi
+if [[ -z "$claude_args" ]]; then
+  skip "running Claude has --allow-dangerously-skip-permissions" "no Claude running in this Pod"
+elif [[ "$claude_args" == *--allow-dangerously-skip-permissions* ]]; then
+  pass "running Claude has --allow-dangerously-skip-permissions"
+else
+  fail "running Claude has --allow-dangerously-skip-permissions" "$claude_args"
+fi
 check "codex is the deployment wrapper" grep -q -- '--dangerously-bypass-approvals-and-sandbox' /usr/local/bin/codex
 codex_args="$(pgrep -a codex-real 2>/dev/null | head -n1)"
 if [[ -z "$codex_args" ]]; then

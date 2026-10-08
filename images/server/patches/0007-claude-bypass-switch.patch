@@ -1,0 +1,34 @@
+Accept bypassPermissions when switching a running Claude session's mode.
+
+The web picker's PATCH was limited to the modes upstream's cycler can reach,
+which left out bypass. This deployment's runner launches Claude so that bypass
+is always reachable (images/runner/patches/0003), so the server accepts it and
+pins it in the session's launch args like any other confirmed switch, which
+keeps it across idle restarts.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/server/routes/_sessions/common.py b/omnigent/server/routes/_sessions/common.py
+index 2ca0be8..04ddbbf 100644
+--- a/omnigent/server/routes/_sessions/common.py
++++ b/omnigent/server/routes/_sessions/common.py
+@@ -236,14 +236,14 @@ _CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY = "omnigent.claude_native.permission_mo
+ 
+ # Permission modes switchable on a running session — the ones Claude
+ # Code's shift+tab cycle can reach. Mirrors
+-# ``claude_native_bridge.CYCLEABLE_PERMISSION_MODES``; ``dontAsk`` and
+-# ``bypassPermissions`` are launch-only and rejected on PATCH.
++# ``claude_native_bridge.CYCLEABLE_PERMISSION_MODES``; ``dontAsk`` is
++# launch-only and rejected on PATCH. ``bypassPermissions`` is in the cycle
++# while the deployment's claude_bypass_permissions is on: the runner's claude
++# wrapper then launches with ``--allow-dangerously-skip-permissions``.
+ _CLAUDE_NATIVE_PERMISSION_MODES: frozenset[str] = frozenset(
+-    {"default", "acceptEdits", "plan", "auto"}
++    {"default", "acceptEdits", "plan", "auto", "bypassPermissions"}
+ )
+-# Modes the forwarder can read off the pane footer. A session launched into
+-# ``bypassPermissions`` reports it so the label and picker show the real mode;
+-# it is still not a PATCH target.
++# Modes the forwarder can read off the pane footer.
+ _CLAUDE_NATIVE_READABLE_PERMISSION_MODES: frozenset[str] = _CLAUDE_NATIVE_PERMISSION_MODES | {
+     "bypassPermissions"
+ }

@@ -1,0 +1,36 @@
+Let the permission-mode cycler switch a running Claude session into bypass.
+
+Upstream treats bypassPermissions as launch-only: Claude Code only puts it in
+the shift+tab cycle when it was launched into bypass, so once a session left
+bypass (approving a plan in the web UI switches to auto or manual) it could
+not get back. The runner's claude wrapper now launches Claude with
+--allow-dangerously-skip-permissions while claude_bypass_permissions is on, so
+bypass is always in the cycle and the cycler may target it. Pairs with images/server/patches/0007 and
+images/server/web-patches/0008.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/harnesses/claude_native/bridge.py b/omnigent/harnesses/claude_native/bridge.py
+index 413cdae..dbbd7ab 100644
+--- a/omnigent/harnesses/claude_native/bridge.py
++++ b/omnigent/harnesses/claude_native/bridge.py
+@@ -345,14 +345,14 @@ _PERMISSION_MODE_FOOTERS: dict[str, str] = {
+     "acceptEdits": "accept edits on",
+     "plan": "plan mode on",
+     "auto": "auto mode on",
+-    # Launch-only, but readable: a pane launched into bypass must report
+-    # its own mode so the cycler has a starting point to leave it from.
++    # Only in the cycle when Claude was launched into bypass or with
++    # --allow-dangerously-skip-permissions, which the runner's claude wrapper
++    # passes while the deployment's claude_bypass_permissions is on.
+     "bypassPermissions": "bypass permissions on",
+ }
+-# Modes shift+tab can reach from any session. ``dontAsk`` is never in the
+-# cycle and ``bypassPermissions`` only joins it when launched into, so
+-# neither is a switch target.
+-CYCLEABLE_PERMISSION_MODES = frozenset(_PERMISSION_MODE_FOOTERS) - {"bypassPermissions"}
++# Modes shift+tab can reach. ``dontAsk`` is never in the cycle. A session
++# whose cycle lacks bypass fails the switch after a full lap.
++CYCLEABLE_PERMISSION_MODES = frozenset(_PERMISSION_MODE_FOOTERS)
+ # Cap on shift+tab presses. The cycle is 3-5 modes wide depending on which
+ # optional modes are enabled, so a full lap plus slack proves the target is
+ # unreachable rather than slow.
