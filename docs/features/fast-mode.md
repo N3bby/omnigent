@@ -24,6 +24,9 @@ Hover over the bolt to see what it means.
 
 ## Good to know
 
+- **It doesn't start an agent turn.** Sending `/fast` while idle keeps the
+  chat idle; sending it during a response preserves that response. Delivery
+  failures appear as errors without ending a running turn.
 - **It applies from the next turn.** Sent while the agent is working, it
   doesn't change the turn already running.
 - **For Claude, the chat shows the result.** The command appears in the
@@ -43,13 +46,16 @@ You can't turn the feature off. Fast mode itself is off until you send
 
 ## How it works
 
-Three patches work together:
+The feature and command lifecycle patches work together:
 
 | Part | Patch | What it does |
 | --- | --- | --- |
 | Runner | `images/runner/patches/0004-fast-mode.patch` | Lets `/fast` reach Claude Code and switches Codex's service tier. Reports whether fast mode is on. |
 | Server | `images/server/patches/0008-fast-mode.patch` | Keeps the latest state for each session and sends it to the UI. |
 | Web UI | `images/server/web-patches/0009-composer-fast-mode.patch` | Adds `/fast` to the slash menu and the lightning bolt. |
+| Runner commands | `images/runner/patches/0005-fast-mode-command-lifecycle.patch` | Applies `/fast` before message buffering or turn dispatch and acknowledges delivery. |
+| Server commands | `images/server/patches/0009-fast-mode-command-lifecycle.patch` | Forwards `/fast` without pending inputs or model routing. |
+| Web commands | `images/server/web-patches/0010-fast-mode-command-lifecycle.patch` | Bypasses the turn queue and sends `/fast` without a pending bubble or waiting for an agent reply. |
 
 - **Claude:** upstream Omnigent sends `/fast` to Claude Code as plain text,
   so the model answers it as a question. The runner patch lets `/fast on`

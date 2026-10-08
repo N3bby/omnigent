@@ -68,6 +68,7 @@ PASS  images/runner/patches/0001-rate-limits.patch
 PASS  images/runner/patches/0002-git-helper-python.patch
 PASS  images/runner/patches/0003-claude-bypass-switch.patch
 PASS  images/runner/patches/0004-fast-mode.patch
+PASS  images/runner/patches/0005-fast-mode-command-lifecycle.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -77,6 +78,7 @@ PASS  images/server/patches/0005-runner-python.patch
 PASS  images/server/patches/0006-repo-env-routes.patch
 PASS  images/server/patches/0007-claude-bypass-switch.patch
 PASS  images/server/patches/0008-fast-mode.patch
+PASS  images/server/patches/0009-fast-mode-command-lifecycle.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -87,6 +89,7 @@ PASS  images/server/web-patches/0006-mobile-repo-picker.patch
 PASS  images/server/web-patches/0007-sidebar-swipe-menu.patch
 PASS  images/server/web-patches/0008-claude-bypass-picker.patch
 PASS  images/server/web-patches/0009-composer-fast-mode.patch
+PASS  images/server/web-patches/0010-fast-mode-command-lifecycle.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -129,6 +132,57 @@ the unit tests end in `OK` (17 tests on 2026-10-07). Warnings that
 the rendered settings behind several features, such as idle-session timing and
 the per-session home volume. They are the local part of the `Validate`
 workflow, which also runs kubeconform and shellcheck in CI.
+
+### 3b. Execute the patched upstream tests
+
+The image patches contain test changes as well as production changes. Those
+tests become files in an upstream Omnigent checkout when the patches are
+applied; they are not standalone files in this deployment repo's `tests/`.
+Image builds apply the patches, build the frontend, and check Python
+compilation/imports. `Validate` CI runs this repo's unit tests, including patch
+application and compilation checks. **Neither executes the patched upstream
+frontend/backend tests.** Run them explicitly when testing fast mode or
+changing its native message/composer paths:
+
+```bash
+.claude/skills/test-custom-features/scripts/check-patched-tests
+```
+
+This helper fetches `omnigent_commit` from `versions.yaml`, applies all three
+patch sets, and runs the following suites against that source:
+
+| Suite | File in the patched upstream checkout | Expected on the pinned version |
+| --- | --- | --- |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts` | 687 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py` | 15 passed |
+
+Most frontend cases are existing upstream tests; this fix adds 11 frontend
+and 15 backend cases. These are selected suites, not the entire upstream test
+suite. The backend uses mocked CLI transports: a pass verifies command routing
+and lifecycle handling, not live Claude/Codex availability or billing.
+
+Prerequisites are Git, GNU patch, and mise. The helper installs the repo's mise
+tools and the Node/pnpm versions pinned in `versions.yaml`. It creates an
+isolated Python environment, constrains dependencies with upstream's `uv.lock`,
+and installs frontend dependencies with `pnpm --frozen-lockfile`. Network access
+and package downloads are needed; first-run setup can take several minutes.
+uv and pnpm's home-directory caches speed up later runs. It uses no CLI login
+and does not change a live session's fast-mode setting.
+
+**Expected:** exit 0, both suite summaries above, and a final `PASS` line.
+A dependency/setup failure is not a test pass; missing or skipped suites must
+be recorded as SKIP with the reason. Preserve the actual output rather than
+reporting an expected count as if it had run.
+
+Each invocation prints its report directory under
+`.generated/patched-tests/run.<suffix>/`. It retains `run.log`, `backend.xml`,
+`frontend.xml`, upstream/deployment revisions in the log, and `patches.sha256`
+identifying the patch contents tested. On failure it also keeps the checkout;
+on success it removes the checkout to save space. Link the actual run's reports
+in your final report so the user can verify execution. Failed setup runs may
+have only a log or one suite's XML; never claim the missing suite ran. These
+generated artifacts are ignored by Git. Remove old run directories once their
+results have been reviewed.
 
 ## 4. Runner checks
 
@@ -388,7 +442,10 @@ Hand these to the user; they need their own devices or VM access:
     model, and a lightning bolt appears left of the model selector; hovering
     it says `Fast mode is on. Send /fast to turn it off.` Send `/fast off`:
     the bolt goes. In a Codex session, `/fast` and `/fast off` add and remove
-    the bolt the same way, without a reply.
+    the bolt the same way, without a reply. On both harnesses, an idle chat
+    stays idle after the command, with no stuck “Pondering…” indicator or
+    pending user bubble. Repeat during a response: it continues normally,
+    and `/fast` bypasses the message queue.
 
 ## 7. Clean up
 
