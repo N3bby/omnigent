@@ -68,6 +68,7 @@ PASS  images/runner/patches/0001-rate-limits.patch
 PASS  images/runner/patches/0002-git-helper-python.patch
 PASS  images/runner/patches/0003-claude-bypass-switch.patch
 PASS  images/runner/patches/0004-fast-mode.patch
+PASS  images/runner/patches/0005-fast-mode-command-lifecycle.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -77,6 +78,7 @@ PASS  images/server/patches/0005-runner-python.patch
 PASS  images/server/patches/0006-repo-env-routes.patch
 PASS  images/server/patches/0007-claude-bypass-switch.patch
 PASS  images/server/patches/0008-fast-mode.patch
+PASS  images/server/patches/0009-fast-mode-command-lifecycle.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -87,6 +89,7 @@ PASS  images/server/web-patches/0006-mobile-repo-picker.patch
 PASS  images/server/web-patches/0007-sidebar-swipe-menu.patch
 PASS  images/server/web-patches/0008-claude-bypass-picker.patch
 PASS  images/server/web-patches/0009-composer-fast-mode.patch
+PASS  images/server/web-patches/0010-fast-mode-command-lifecycle.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -388,7 +391,10 @@ Hand these to the user; they need their own devices or VM access:
     model, and a lightning bolt appears left of the model selector; hovering
     it says `Fast mode is on. Send /fast to turn it off.` Send `/fast off`:
     the bolt goes. In a Codex session, `/fast` and `/fast off` add and remove
-    the bolt the same way, without a reply.
+    the bolt the same way, without a reply. On both harnesses, an idle chat
+    stays idle after the command, with no stuck “Pondering…” indicator or
+    pending user bubble. Repeat during a response: it continues normally,
+    and `/fast` bypasses the message queue.
 
 ## 7. Clean up
 

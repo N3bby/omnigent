@@ -1,0 +1,227 @@
+Handle /fast before native message buffers and turn dispatch.
+
+Acknowledge settings commands with HTTP 204; never start or finish a turn.
+Applies after 0004-fast-mode.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/native/fast_mode.py b/omnigent/native/fast_mode.py
+new file mode 100644
+--- /dev/null
++++ b/omnigent/native/fast_mode.py
+@@ -0,0 +1,24 @@
++"""Recognize native fast-mode controls without starting a conversation turn."""
++
++from __future__ import annotations
++
++
++def fast_mode_command(content: object) -> str | None:
++    """Return on/off/toggle for standalone text-only commands, else None."""
++    if isinstance(content, list):
++        if not content or not all(
++            isinstance(block, dict)
++            and block.get("type") in {"input_text", "text"}
++            and isinstance(block.get("text"), str)
++            for block in content
++        ):
++            return None
++        content = "".join(block["text"] for block in content)
++    if not isinstance(content, str):
++        return None
++    words = content.split()
++    if not words or words[0] != "/fast" or len(words) > 2:
++        return None
++    if len(words) == 1:
++        return "toggle"
++    return words[1] if words[1] in {"on", "off"} else None
+diff --git a/omnigent/runner/app.py b/omnigent/runner/app.py
+--- a/omnigent/runner/app.py
++++ b/omnigent/runner/app.py
+@@ -6276,6 +6276,62 @@
+             extra={"session_id": conv_id},
+         )
+
++    async def _handle_native_fast_mode_command(
++        conv_id: str, harness: str, command: str
++    ) -> Response:
++        """Apply /fast outside the message buffer and turn lifecycle."""
++        try:
++            if harness == "codex-native":
++                from omnigent.harnesses.codex_native.app_server import client_for_transport
++                from omnigent.inner.codex_native_executor import _set_codex_fast_mode
++
++                state = await _codex_native_bridge_state_for_session(conv_id, action="fast mode")
++                if state is None:
++                    return JSONResponse(
++                        status_code=503,
++                        content={
++                            "error": "codex_fast_mode_no_bridge",
++                            "detail": "Codex bridge is not ready.",
++                        },
++                    )
++                bridge_dir = await _codex_native_bridge_dir_for_session(conv_id)
++                client = client_for_transport(state.socket_path, client_name="omnigent-fast-mode")
++                try:
++                    await client.connect()
++                    await _set_codex_fast_mode(
++                        client, bridge_dir=bridge_dir, state=state, command=command
++                    )
++                finally:
++                    await client.close()
++            else:
++                from omnigent.harnesses.claude_native.bridge import (
++                    bridge_dir_for_bridge_id,
++                    inject_slash_command,
++                    resolve_fast_command,
++                )
++
++                bridge_id = await _claude_native_bridge_id_for_session(
++                    server_client=server_client, session_id=conv_id
++                )
++                bridge_dir = bridge_dir_for_bridge_id(bridge_id)
++                await _prepare_claude_native_pane_for_injection(conv_id, bridge_dir)
++                text = "/fast" if command == "toggle" else f"/fast {command}"
++                await asyncio.to_thread(
++                    inject_slash_command,
++                    bridge_dir,
++                    command=resolve_fast_command(text, bridge_dir),
++                    timeout_s=1.0,
++                )
++        except (RuntimeError, ValueError, OSError, httpx.HTTPError) as exc:
++            return JSONResponse(
++                status_code=503,
++                content={
++                    "error": "native_fast_mode_failed",
++                    "detail": _client_safe_error_detail(exc, context="native fast mode change"),
++                },
++            )
++        return Response(status_code=204)
++
+     async def _handle_claude_native_effort_change(
+         conv_id: str,
+         effort: str | None,
+@@ -9745,6 +9801,14 @@
+                 await _side_client.close()
+             return Response(status_code=202)
+         if body_type == "message" and isinstance(body, dict):
++            from omnigent.native.fast_mode import fast_mode_command
++
++            fast_command = fast_mode_command(body.get("content"))
++            fast_harness = _session_harness_name(conversation_id)
++            if fast_command is not None and fast_harness in {"claude-native", "codex-native"}:
++                return await _handle_native_fast_mode_command(
++                    conversation_id, fast_harness, fast_command
++                )
+             # A codex /side command opens a side chat; it must not run a turn
+             # here. Starting one publishes a "running" edge for this session,
+             # and the fork's settling edges belong to the child — idle is
+diff --git a/tests/runner/test_fast_mode_command.py b/tests/runner/test_fast_mode_command.py
+new file mode 100644
+--- /dev/null
++++ b/tests/runner/test_fast_mode_command.py
+@@ -0,0 +1,107 @@
++"""Fast controls acknowledge delivery without manufacturing a native turn."""
++
++import uuid
++from unittest.mock import AsyncMock
++
++import pytest
++
++from omnigent.native.fast_mode import fast_mode_command
++from omnigent.runner import create_runner_app
++from omnigent.runner.app import _session_event_queues_ref
++from omnigent.spec.types import AgentSpec, ExecutorSpec
++from tests.runner.conftest import (
++    _drain_session_event_queue,
++    _FakeProcessManager,
++    _runner_client,
++    _ScriptedHarnessClient,
++)
++from tests.runner.helpers import NullServerClient
++
++
++@pytest.mark.parametrize(
++    "content,expected",
++    [
++        ("/fast", "toggle"),
++        ("/fast on", "on"),
++        (" /fast off ", "off"),
++        ([{"type": "input_text", "text": "/fast on"}], "on"),
++        ("/fast maybe", None),
++        ("/fast on please", None),
++        ([{"type": "input_text", "text": "/fast"}, {"type": "input_image", "file_id": "x"}], None),
++    ],
++)
++def test_only_standalone_text_is_a_fast_control(content, expected):
++    assert fast_mode_command(content) == expected
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("harness", ["claude-native", "codex-native"])
++@pytest.mark.parametrize("fail", [False, True])
++async def test_fast_control_never_enters_turn_lifecycle(monkeypatch, harness, fail):
++    from omnigent.harnesses.claude_native import bridge as claude_bridge
++    from omnigent.harnesses.codex_native import app_server
++    from omnigent.harnesses.codex_native import bridge as codex_bridge
++    from omnigent.inner import codex_native_executor
++
++    injected = []
++
++    def inject(bridge_dir, *, command, timeout_s):
++        if fail:
++            raise RuntimeError("test unavailable")
++        injected.append(command)
++
++    monkeypatch.setattr(claude_bridge, "inject_slash_command", inject)
++    monkeypatch.setattr(claude_bridge, "resolve_fast_command", lambda text, _: "/fast on")
++    fake_client = AsyncMock()
++    monkeypatch.setattr(app_server, "client_for_transport", lambda *args, **kwargs: fake_client)
++    apply_fast = AsyncMock(side_effect=RuntimeError("test unavailable") if fail else None)
++    monkeypatch.setattr(codex_native_executor, "_set_codex_fast_mode", apply_fast)
++    conv_id = uuid.uuid4().hex
++    spec = AgentSpec(
++        spec_version=1,
++        name="t",
++        executor=ExecutorSpec(type="omnigent", config={"harness": harness}),
++    )
++
++    async def resolver(*args, **kwargs):
++        return spec
++
++    pm = _FakeProcessManager(_ScriptedHarnessClient([]))
++    app = create_runner_app(
++        process_manager=pm, spec_resolver=resolver, server_client=NullServerClient()
++    )
++    async with _runner_client(app) as client:
++        created = await client.post(
++            "/v1/sessions", json={"session_id": conv_id, "agent_id": "test"}
++        )
++        assert created.status_code == 201, created.text
++        if harness == "codex-native":
++            # The control route reads the existing bridge, never starts a native turn.
++            from omnigent.harnesses.codex_native.bridge import CodexNativeBridgeState
++
++            state = CodexNativeBridgeState(
++                session_id=conv_id,
++                thread_id="thread_test",
++                socket_path="/tmp/test.sock",
++                codex_home="/tmp/test-home",
++                active_turn_id="turn_live",
++            )
++            monkeypatch.setattr(codex_bridge, "read_bridge_state", lambda _: state)
++        _drain_session_event_queue(_session_event_queues_ref.get(conv_id))
++        response = await client.post(
++            f"/v1/sessions/{conv_id}/events",
++            json={
++                "type": "message",
++                "role": "user",
++                "content": [{"type": "input_text", "text": "/fast on"}],
++            },
++        )
++        assert response.status_code == (503 if fail else 204), response.text
++        events = _drain_session_event_queue(_session_event_queues_ref.get(conv_id))
++        assert not any(event.get("type") == "session.status" for event in events)
++        assert not app.state.has_active_work()
++        if not fail:
++            if harness == "claude-native":
++                assert injected == ["/fast on"]
++            else:
++                apply_fast.assert_awaited_once()

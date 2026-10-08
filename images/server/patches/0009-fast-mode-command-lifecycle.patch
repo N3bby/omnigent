@@ -1,0 +1,118 @@
+Forward native /fast controls without pending-input or routing bookkeeping.
+
+These controls have no user-prompt echo to reconcile. Applies after
+0008-fast-mode.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/native/fast_mode.py b/omnigent/native/fast_mode.py
+new file mode 100644
+--- /dev/null
++++ b/omnigent/native/fast_mode.py
+@@ -0,0 +1,24 @@
++"""Recognize native fast-mode controls without starting a conversation turn."""
++
++from __future__ import annotations
++
++
++def fast_mode_command(content: object) -> str | None:
++    """Return on/off/toggle for standalone text-only commands, else None."""
++    if isinstance(content, list):
++        if not content or not all(
++            isinstance(block, dict)
++            and block.get("type") in {"input_text", "text"}
++            and isinstance(block.get("text"), str)
++            for block in content
++        ):
++            return None
++        content = "".join(block["text"] for block in content)
++    if not isinstance(content, str):
++        return None
++    words = content.split()
++    if not words or words[0] != "/fast" or len(words) > 2:
++        return None
++    if len(words) == 1:
++        return "toggle"
++    return words[1] if words[1] in {"on", "off"} else None
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -6483,6 +6483,16 @@
+                 conversation_store,
+                 ensure_outcome.policy_notice,
+             )
++        from omnigent.native.fast_mode import fast_mode_command
++
++        if (
++            _native_pane_harness(conv) in {"claude-native", "codex-native"}
++            and fast_mode_command(body.data.get("content")) is not None
++        ):
++            # Settings commands have no prompt echo or agent turn to reconcile.
++            await _forward_native_terminal_message(runner_client, session_id, conv, body)
++            return _SessionEventDispatchResult(item_id=None, pending_id=None)
++
+         # Record the optimistic bubble before forwarding so it's known
+         # server-side immediately (replayed into the snapshot). Roll it
+         # back on any failure/cancellation so a message the TUI never
+diff --git a/tests/server/test_fast_mode_command.py b/tests/server/test_fast_mode_command.py
+new file mode 100644
+--- /dev/null
++++ b/tests/server/test_fast_mode_command.py
+@@ -0,0 +1,59 @@
++"""Native settings commands never become pending prompts or routed turns."""
++
++import pytest
++from fastapi import HTTPException
++
++from omnigent.runtime import pending_inputs
++from omnigent.server.routes._sessions.orchestration import _dispatch_session_event_to_runner_impl
++from omnigent.server.schemas import SessionEventInput
++from tests.server.routes.test_session_resources import _ConversationStore, _FakeRunnerClient
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("wrapper", ["claude-code-native-ui", "codex-native-ui"])
++@pytest.mark.parametrize("fail", [False, True])
++async def test_fast_command_skips_pending_inputs_and_routing(wrapper, fail):
++    pending_inputs.reset_for_tests()
++    store = _ConversationStore()
++    conv_id = "64a784c3aa907d1774f44313546947c6"
++    conv = store.get_conversation(conv_id)
++    assert conv is not None
++    conv.labels["omnigent.wrapper"] = wrapper
++    conv.cost_control_mode_override = "on"
++    event_path = f"/v1/sessions/{conv_id}/events"
++    client = _FakeRunnerClient(responses={event_path: (503, {})} if fail else {})
++    body = SessionEventInput(
++        type="message",
++        data={
++            "role": "user",
++            "content": [{"type": "input_text", "text": "/fast on"}],
++        },
++    )
++
++    async def dispatch():
++        return await _dispatch_session_event_to_runner_impl(
++            conv_id,
++            conv,
++            body,
++            store,
++            client,
++            agent_name=wrapper,
++            file_store=None,
++            artifact_store=None,
++            native_terminal_ready=True,
++        )
++
++    try:
++        if fail:
++            with pytest.raises(HTTPException):
++                await dispatch()
++        else:
++            result = await dispatch()
++            assert result.pending_id is None
++            assert result.item_id is None
++        assert pending_inputs.snapshot_for(conv_id) == []
++        assert store.appended_items == []
++        assert [call[0] for call in client.post_json_calls] == [event_path]
++        assert client.post_json_calls[0][1]["content"] == body.data["content"]
++    finally:
++        pending_inputs.reset_for_tests()
