@@ -27,6 +27,14 @@ repository's variables.
 
 ![Editing a repository: a blank value keeps the current one, a typed value replaces it](../images/repo-env-edit.webp)
 
+The page works on a phone too. There, a long repository wraps instead of
+being cut off, and each variable's name sits above its value.
+
+<p>
+  <img src="../images/repo-env-mobile.webp" width="300" alt="Repository variables on a phone: each repository's full name, its variable names and the edit and remove buttons">
+  <img src="../images/repo-env-mobile-add.webp" width="300" alt="Adding a repository on a phone: each variable's name above its value">
+</p>
+
 ### From the command line
 
 The same variables can be set from your machine. The page and the command
@@ -58,8 +66,8 @@ mise run setup-repo-env kunlabora/roadpass
 ## Using them
 
 Start a session on the repository with the repository picker. Once picked,
-the repository shows **2 variables** (or however many it has); click it to see
-their names.
+the repository shows **2 variables** (or however many it has, and on a phone
+just the number); click it to see their names.
 
 ![The new-session form's repository list, with "2 variables" next to roadpass](../images/repo-env-new-session.webp)
 
