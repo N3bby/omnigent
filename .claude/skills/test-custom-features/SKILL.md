@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the swipe menu on touch devices, the Codex theme, the runner description agents get, and repository variables. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, and a repository's own Git token. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -79,6 +79,7 @@ PASS  images/server/patches/0006-repo-env-routes.patch
 PASS  images/server/patches/0007-claude-bypass-switch.patch
 PASS  images/server/patches/0008-fast-mode.patch
 PASS  images/server/patches/0009-fast-mode-command-lifecycle.patch
+PASS  images/server/patches/0010-repo-git-token.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -91,6 +92,7 @@ PASS  images/server/web-patches/0008-claude-bypass-picker.patch
 PASS  images/server/web-patches/0009-composer-fast-mode.patch
 PASS  images/server/web-patches/0010-fast-mode-command-lifecycle.patch
 PASS  images/server/web-patches/0011-codex-theme.patch
+PASS  images/server/web-patches/0012-repo-git-token-field.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -455,6 +457,15 @@ Hand these to the user; they need their own devices or VM access:
     sit on one baseline. Queue a message while the agent works: it shows
     above the composer and the bar stays under it. Switch between light and
     dark mode, then pick **Omnigent** again: the pink look is back.
+12. **A repository's own Git token:** it needs a real token, so it's left to
+    you. For a repository the GitHub App isn't installed on, add it in
+    Settings → Repository variables, turn on **Git token** and paste a token
+    for it. The card lists **Git token** apart from the variables. After a
+    reload, the new-session repository picker lists the repository and its
+    branch menu lists its branches. A session on it starts, and its agent can
+    `git fetch` and `git push --dry-run` in the checkout, while `.git/config`
+    holds no token. Then edit it and turn **Git token** off: the repository
+    leaves the picker.
 
 ## 7. Clean up
 

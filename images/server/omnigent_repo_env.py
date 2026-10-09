@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import re
+import shlex
 from collections.abc import Iterable, Mapping
 from datetime import timezone
 from typing import Any
@@ -32,6 +33,10 @@ UPDATED_BY_ANNOTATION = "omnigent.dev/updated-by"
 # Each repository's Secret is mounted at MOUNT_ROOT/<Secret name>.
 MOUNT_ROOT = "/run/omnigent/repo-env"
 DEFAULT_HOST = "github.com"
+# A repository with this variable is cloned, fetched and pushed with it
+# instead of the user's GitHub App token, and is listed in the repository
+# picker for everyone who has connected GitHub.
+TOKEN_VARIABLE = "GIT_TOKEN"
 
 _PREFIX = "omnigent-repo-env-"
 _HASH_LENGTH = 8
@@ -185,6 +190,70 @@ def pod_volumes(urls: Iterable[str]) -> tuple[list[dict[str, object]], list[dict
     return volumes, mounts
 
 
+def token_file(url: str) -> str | None:
+    """
+    Where a runner Pod finds a repository's ``GIT_TOKEN``, if it has one.
+
+    Only HTTPS clone URLs use a token; an SSH URL authenticates with keys.
+
+    :param url: e.g. ``"https://github.com/kunlabora/roadpass.git"``.
+    :returns: e.g. ``"/run/omnigent/repo-env/omnigent-repo-env-kunlabora-roadpass-1a2b3c4d/GIT_TOKEN"``,
+        or ``None`` for an SSH or unusable URL.
+    """
+    if not url.strip().lower().startswith("https://"):
+        return None
+    try:
+        name = secret_name(repo_key(url))
+    except ValueError:
+        return None
+    return f"{MOUNT_ROOT}/{name}/{TOKEN_VARIABLE}"
+
+
+def credential_helper(path: str) -> str:
+    """
+    A git credential helper that answers with the token in ``path``.
+
+    It reads the file on every use, so a changed token reaches running
+    sessions, and answers nothing once the file is gone.
+
+    :param path: A path from :func:`token_file`.
+    :returns: The ``credential.helper`` value.
+    """
+    return (
+        f'!f() {{ if [ "$1" = get ] && [ -r {path} ]; then '
+        f"printf 'username=x-access-token\\npassword=%s\\n' \"$(cat {path})\"; fi; }}; f"
+    )
+
+
+def clone_command(url: str, args: str, directory: str) -> str:
+    """
+    The shell command that clones a repository, with its ``GIT_TOKEN`` if it has one.
+
+    With a token, the clone uses only that token, not the user's GitHub App
+    token, and the checkout keeps using it: its own config clears the
+    helpers inherited from the global config and adds one that reads the
+    token. Without one, it's a plain ``git clone``. The token file is checked
+    when the command runs, because the Secret is mounted optionally.
+
+    :param url: The clone URL.
+    :param args: What follows ``git clone``, quoted for the shell, e.g.
+        ``"-- https://github.com/kunlabora/roadpass.git /home/omnigent/workspace/roadpass.tmp/clone"``.
+    :param directory: The checkout ``args`` clones into, quoted for the shell.
+    :returns: A shell command.
+    """
+    path = token_file(url)
+    if path is None:
+        return f"git clone {args}"
+    helper = shlex.quote(credential_helper(path))
+    return (
+        f"if [ -r {shlex.quote(path)} ]; then "
+        f"git -c credential.helper= -c credential.helper={helper} clone {args} "
+        f"&& git -C {directory} config credential.helper '' "
+        f"&& git -C {directory} config --add credential.helper {helper}; "
+        f"else git clone {args}; fi"
+    )
+
+
 def _not_found(exc: Exception) -> bool:
     return getattr(exc, "status", None) == 404
 
@@ -221,6 +290,51 @@ def list_repositories(core: Any) -> list[dict[str, Any]]:
     """
     secrets = core.list_namespaced_secret(NAMESPACE, label_selector=LABEL).items
     return sorted((_entry(s) for s in secrets), key=lambda entry: entry["repository"])
+
+
+def _token(secret: Any) -> str | None:
+    value = (secret.data or {}).get(TOKEN_VARIABLE)
+    token = base64.b64decode(value).decode().strip() if value else ""
+    return token or None
+
+
+def token_repositories(core: Any) -> dict[str, str]:
+    """
+    The github.com repositories with a ``GIT_TOKEN``, and their tokens.
+
+    For the server only, to list them in the repository picker. The tokens
+    never leave the server.
+
+    :param core: A Kubernetes ``CoreV1Api``.
+    :returns: e.g. ``{"github.com/kunlabora/roadpass": "github_pat_…"}``.
+    """
+    tokens: dict[str, str] = {}
+    for secret in core.list_namespaced_secret(NAMESPACE, label_selector=LABEL).items:
+        key = (secret.metadata.annotations or {}).get(ANNOTATION, "")
+        # Only owner/repo on github.com, and only the Secret a Pod would
+        # mount for it.
+        if not key.startswith(f"{DEFAULT_HOST}/") or key.count("/") != 2:
+            continue
+        if secret.metadata.name != secret_name(key) or (token := _token(secret)) is None:
+            continue
+        tokens[key] = token
+    return tokens
+
+
+def repository_token(core: Any, key: str) -> str | None:
+    """
+    A repository's ``GIT_TOKEN``, or ``None``.
+
+    :param core: A Kubernetes ``CoreV1Api``.
+    :param key: A key from :func:`repo_key`.
+    """
+    try:
+        secret = core.read_namespaced_secret(secret_name(key), NAMESPACE)
+    except Exception as exc:
+        if _not_found(exc):
+            return None
+        raise
+    return _token(secret)
 
 
 def variable_names(core: Any, key: str) -> list[str]:

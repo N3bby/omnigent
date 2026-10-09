@@ -15,6 +15,16 @@ private ones included. You don't also need `mise run setup-git-token`.
 Each user connects their own GitHub account, so each user gets their own
 access.
 
+## A repository is missing
+
+The picker lists the repositories the App is installed on, not every
+repository you can open on GitHub. Install the App on the repository's owner,
+or add the repository to the installation, under **Repository access** in the
+App's installation settings. An organization's owner may have to approve it.
+
+If you can't, give the repository its own token: see
+[a repository's own Git token](repo-git-token.md).
+
 ## Good to know
 
 - **Tokens are encrypted.** Each user's GitHub tokens are encrypted by a

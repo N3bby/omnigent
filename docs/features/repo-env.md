@@ -87,6 +87,11 @@ A project's `mise.toml` that loads a local file with
 `_.file = "../roadpass-env/roadpass.env"` needs no change. In a session the
 file doesn't exist, and mise skips it, so the session's variables stay.
 
+## A repository the GitHub App can't reach
+
+Turn on its **Git token**: see
+[a repository's own Git token](repo-git-token.md).
+
 ## Good to know
 
 - **Only the repositories a session starts with count.** A repository the
@@ -138,6 +143,8 @@ There's nothing to turn off. A repository without variables starts as before.
   repositories at `/run/omnigent/repo-env/<Secret name>/`, on the host
   container only. The volume is optional, so a repository without a Secret
   mounts nothing. A wake re-creates the Pod with the same repositories.
+- **`GIT_TOKEN`**: see [how it works](repo-git-token.md#how-it-works) on
+  its own page.
 - **The agent** (`images/runner/repo-env/repo-env.sh`): the `claude` and
   `codex` wrappers source it before starting the real CLI, and it exports each
   mounted file as a variable. It's also `/etc/profile.d/omnigent-repo-env.sh`,

@@ -36,7 +36,8 @@ RUN python -m pip install --no-cache-dir "hvac==${HVAC_VERSION}" \
 
 # --fuzz=0 fails the build when upstream code under a patch has moved.
 # omnigent_repo_env and omnigent_repo_env_api are ours, not upstream's:
-# 0004-repo-env.patch and 0006-repo-env-routes.patch import them, and
+# 0004-repo-env.patch, 0006-repo-env-routes.patch and
+# 0010-repo-git-token.patch import them, and
 # scripts/setup-repo-env uses the same omnigent_repo_env to name the Secrets.
 COPY patches/ /tmp/omnigent-patches/
 COPY omnigent_repo_env.py omnigent_repo_env_api.py /tmp/omnigent-modules/

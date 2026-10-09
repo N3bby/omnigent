@@ -21,6 +21,7 @@ where you can.
 | [Codex theme](codex-theme.md) | A colour theme that looks like the Codex app, beyond just the colours | It's off until you pick it in Settings → Appearance |
 | [Swipe for a session's menu](session-swipe-menu.md) | On a phone, swipe a session left for its menu; holding it down only moves it | No |
 | [Repository variables](repo-env.md) | A repository's own environment variables, such as an npm token, in its sessions | Optional setup step |
+| [A repository's own Git token](repo-git-token.md) | Pick, clone and push a repository the GitHub App can't reach, with its own token | Optional setup step |
 | [Agents know where they're running](runner-instructions.md) | Agents know what the session can do, link files you can open, and give tailnet addresses | You can change the text |
 
 ## Words used on these pages

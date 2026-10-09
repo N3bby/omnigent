@@ -1,10 +1,15 @@
-"""Routes behind Settings → Repository variables.
+"""Routes behind Settings → Repository variables, and the repository picker's tokens.
 
 Admins list, save and remove repositories' variables. Values only go from the
 browser to the Secret, never back: listing returns names, and saving a name
 without a value keeps the value it has. Anyone signed in can see the names of
 a repository's variables, which the new-session form shows next to the
 repository.
+
+A repository with a ``GIT_TOKEN`` variable is also in the repository picker,
+for everyone who has connected GitHub, and its branches are listed with that
+token. ``0010-repo-git-token.patch`` calls :func:`add_token_repositories` and
+:func:`repository_token` from the GitHub picker routes.
 
 The server image installs this file as the top-level
 ``omnigent_repo_env_api`` module, and ``0006-repo-env-routes.patch`` mounts
@@ -20,6 +25,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
@@ -29,6 +35,9 @@ from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import get_user_id
 
 logger = logging.getLogger(__name__)
+
+_GITHUB_API = "https://api.github.com"
+_GITHUB_TIMEOUT_S = 15.0
 
 
 class SaveRepositoryRequest(BaseModel):
@@ -165,3 +174,89 @@ def create_repo_env_router(
         return {"repository": key, "deleted": True}
 
     return router
+
+
+async def _picker_entry(client: httpx.AsyncClient, key: str, token: str) -> dict[str, object]:
+    """
+    A repository with a ``GIT_TOKEN``, as the picker lists it.
+
+    GitHub fills in the details when the token can read the repository.
+    When it can't, the repository is still listed, so a session started on
+    it fails on the clone, where the error says why.
+    """
+    full_name = key.split("/", 1)[1]
+    entry: dict[str, object] = {
+        "full_name": full_name,
+        "clone_url": f"https://github.com/{full_name}.git",
+        "default_branch": None,
+        "private": True,
+        "pushed_at": None,
+    }
+    try:
+        resp = await client.get(
+            f"{_GITHUB_API}/repos/{full_name}",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+        )
+        if resp.status_code != 200:
+            logger.warning("GitHub answered %s for %s with its GIT_TOKEN", resp.status_code, key)
+            return entry
+        data = resp.json()
+        entry.update(
+            full_name=str(data["full_name"]),
+            clone_url=data.get("clone_url") or entry["clone_url"],
+            default_branch=data.get("default_branch"),
+            private=bool(data.get("private")),
+            pushed_at=data.get("pushed_at"),
+        )
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("Couldn't look up %s with its GIT_TOKEN: %s", key, exc)
+    return entry
+
+
+async def add_token_repositories(
+    repos: list[dict[str, object]],
+    core: Callable[[], Any] = _core,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> list[dict[str, object]]:
+    """
+    Add the repositories with a ``GIT_TOKEN`` to the GitHub App's list.
+
+    A repository the App already lists keeps the App's entry. The result
+    stays newest push first. If the Secrets can't be read, the App's list
+    comes back as it was.
+
+    :param repos: ``/v1/connections/github/repos`` entries, newest push first.
+    :param core: Returns the ``CoreV1Api``; tests pass a fake.
+    :param transport: For tests, an ``httpx.MockTransport``.
+    :returns: The combined list.
+    """
+    try:
+        tokens = await asyncio.to_thread(lambda: repo_env.token_repositories(core()))
+    except Exception:
+        logger.exception("Couldn't read the repositories with a GIT_TOKEN")
+        return repos
+    listed = {str(repo.get("full_name", "")).lower() for repo in repos}
+    missing = {key: token for key, token in tokens.items() if key.split("/", 1)[1] not in listed}
+    if not missing:
+        return repos
+    async with httpx.AsyncClient(timeout=_GITHUB_TIMEOUT_S, transport=transport) as client:
+        extra = await asyncio.gather(
+            *(_picker_entry(client, key, token) for key, token in sorted(missing.items()))
+        )
+    # ISO times sort as text; a repository without one goes last.
+    return sorted([*repos, *extra], key=lambda repo: str(repo.get("pushed_at") or ""), reverse=True)
+
+
+async def repository_token(owner: str, repo: str, core: Callable[[], Any] = _core) -> str | None:
+    """
+    The ``GIT_TOKEN`` of ``github.com/owner/repo``, for listing its branches.
+
+    :returns: The token, or ``None`` when it has none or the Secret can't be
+        read, so the caller falls back to the GitHub App token.
+    """
+    try:
+        key = repo_env.repo_key(f"{owner}/{repo}")
+        return await asyncio.to_thread(lambda: repo_env.repository_token(core(), key))
+    except Exception:
+        logger.exception("Couldn't read the GIT_TOKEN of %s/%s", owner, repo)
+        return None
