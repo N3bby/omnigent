@@ -452,8 +452,9 @@ Hand these to the user; they need their own devices or VM access:
     messages in a grey bubble, a line after **Worked**, a round send button and
     the working directory under the composer, a few pixels clear of its
     shadow. The labels in that bar, including the monospace Tailscale name,
-    sit on one baseline. Switch between light and dark mode, then pick
-    **Omnigent** again: the pink look is back.
+    sit on one baseline. Queue a message while the agent works: it shows
+    above the composer and the bar stays under it. Switch between light and
+    dark mode, then pick **Omnigent** again: the pink look is back.
 
 ## 7. Clean up
 

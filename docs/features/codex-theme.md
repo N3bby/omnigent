@@ -25,9 +25,9 @@ It changes more than the colours:
   for a turn ends.
 - **Flat code blocks** with a small language label and no line numbers.
 - **A rounder composer** with a soft shadow and a round send button. The
-  working directory, branch and Tailscale name move underneath it. When
-  messages are queued, the bar stays above the composer as in the other
-  themes.
+  working directory, branch and Tailscale name move underneath it and stay
+  there when messages are queued. Queued messages and the sub-agent tray
+  still sit above the composer.
 - **A terminal mark** above "What should we build?" instead of the starfish.
 - **Rounder menus and dialogs** with a hairline edge.
 

@@ -7,18 +7,19 @@ regenerated from them. codexTheme.css changes the layout under
 [data-theme="codex"]: the native system font, a flat grey sidebar with
 compact rows, user messages in a borderless grey bubble, "Worked" folds
 followed by a hairline, flat code blocks without line numbers, a rounder
-composer with a round send button and the workspace bar beneath it, its
-labels on one baseline whatever the fonts, a terminal mark instead of the
-mascot on the new-session screen, and rounder menus. The other palettes
+composer with a round send button and the workspace bar beneath it, also
+when messages are queued above it, its labels on one baseline whatever the
+fonts, a terminal mark instead of the mascot on the new-session screen, and
+rounder menus. The other palettes
 are unchanged. Applies after 0010-fast-mode-command-lifecycle.patch.
 Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/web/src/codexTheme.css b/web/src/codexTheme.css
 new file mode 100644
-index 0000000..0e17133
+index 0000000..c2895ac
 --- /dev/null
 +++ b/web/src/codexTheme.css
-@@ -0,0 +1,339 @@
+@@ -0,0 +1,351 @@
 +/* Codex palette: the layout and type changes that go beyond colour.
 + *
 + * themePalette.ts sets the colour tokens for `data-theme="codex"`; this file
@@ -235,9 +236,12 @@ index 0000000..0e17133
 +  color: rgba(255, 255, 255, 0.45);
 +}
 +
-+/* Move the workspace bar below the card. Only when nothing is docked above
-+ * it: queued messages and the sub-agent tray share its wrapper and belong on
-+ * top. */
++/* Move the workspace bar below the card. Queued messages and the sub-agent
++ * tray share its wrapper but belong on top, so the wrapper drops out of the
++ * layout and its children become the form's own flex items: the trays keep
++ * their place above the card and only the bar moves under it. They still
++ * inherit the wrapper's --chat-column-width, which keeps them in the chat
++ * column. */
 +[data-theme="codex"] .chat-composer-form {
 +  display: flex;
 +  flex-direction: column;
@@ -245,10 +249,25 @@ index 0000000..0e17133
 +
 +[data-theme="codex"]
 +  .chat-composer-form
-+  > div:has(> [data-testid="composer-workspace-controls"]):not(
-+    :has(.composer-queued-surface, .composer-subagent-surface)
-+  ) {
++  > div:has(> [data-testid="composer-workspace-controls"]) {
++  display: contents;
++}
++
++/* Inset 1.25rem so the trays' square bottom corners, tucked under the card,
++ * stay hidden inside its rounder corners. */
++[data-theme="codex"]
++  .chat-composer-form
++  > div
++  > :is(.composer-queued-surface, .composer-subagent-surface) {
++  width: calc(min(100%, var(--chat-column-width)) - 2.5rem);
++  margin-inline: auto;
++}
++
++/* `:root` outranks the bar's margin below. */
++:root[data-theme="codex"] .chat-composer-form > div > .composer-workspace-surface {
 +  order: 2;
++  width: calc(min(100%, var(--chat-column-width)) - 1rem);
++  margin-inline: auto;
 +}
 +
 +[data-theme="codex"]
@@ -288,16 +307,10 @@ index 0000000..0e17133
 +  }
 +}
 +
-+/* Except when it docks under queued messages, as in the default layout. */
-+:root[data-theme="codex"] :has(> .composer-queued-surface) > .composer-workspace-surface,
-+:root[data-theme="codex"] :has(> .composer-subagent-surface) > .composer-workspace-surface,
-+.dark[data-theme="codex"] :has(> .composer-queued-surface) > .composer-workspace-surface,
-+.dark[data-theme="codex"] :has(> .composer-subagent-surface) > .composer-workspace-surface {
-+  height: 37px;
-+  margin: 0 0.75rem -1px;
-+  border: 1px solid var(--border);
-+  border-bottom: 0;
-+  background: var(--muted);
++/* With messages queued the bar gets a hairline on top for docking under
++ * them, which it no longer does here. */
++[data-theme="codex"] .composer-workspace-surface::before {
++  content: none;
 +}
 +
 +/* ---- New session --------------------------------------------------------
