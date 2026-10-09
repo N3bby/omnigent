@@ -132,6 +132,93 @@ class PodVolumeTests(unittest.TestCase):
         self.assertIn("repo_env_volumes", patch)
 
 
+class GitTokenTests(unittest.TestCase):
+    def test_only_https_urls_have_a_token_file(self) -> None:
+        roadpass = repo_env.secret_name("github.com/kunlabora/roadpass")
+        expected = f"/run/omnigent/repo-env/{roadpass}/GIT_TOKEN"
+        for url in ("https://github.com/kunlabora/roadpass.git", "https://github.com/Kunlabora/RoadPass"):
+            with self.subTest(url=url):
+                self.assertEqual(repo_env.token_file(url), expected)
+        for url in ("git@github.com:kunlabora/roadpass.git", "ssh://git@github.com/kunlabora/roadpass.git", "https://github.com/"):
+            with self.subTest(url=url):
+                self.assertIsNone(repo_env.token_file(url))
+
+    def test_an_ssh_url_is_a_plain_clone(self) -> None:
+        self.assertEqual(
+            repo_env.clone_command("git@github.com:kunlabora/roadpass.git", "-- url dir", "dir"),
+            "git clone -- url dir",
+        )
+
+    def git(self, tmp: Path, *args: str, stdin: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
+        env = {
+            "PATH": os.environ["PATH"],
+            "HOME": str(tmp),
+            "GIT_CONFIG_GLOBAL": str(tmp / "gitconfig"),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+        return subprocess.run(args, cwd=tmp, env=env, input=stdin, check=check, capture_output=True, text=True)
+
+    def clone(self, tmp: Path, with_token: bool) -> subprocess.CompletedProcess:
+        """Clone a local repository the way workspace-prep clones roadpass."""
+        url = "https://github.com/kunlabora/roadpass.git"
+        with mock.patch.object(repo_env, "MOUNT_ROOT", str(tmp / "repo-env")):
+            path = Path(repo_env.token_file(url))
+            command = repo_env.clone_command(url, f"-q -- {tmp / 'origin'} {tmp / 'checkout'}", str(tmp / "checkout"))
+        if with_token:
+            path.parent.mkdir(parents=True)
+            path.write_text("repo-token\n")
+        self.git(tmp, "git", "init", "-q", "--bare", str(tmp / "origin"))
+        # The GitHub App broker, as the init container and host install it.
+        for args in (("--replace-all", ""), ("--add", "!f() { echo username=app; echo password=app-token; }; f")):
+            self.git(tmp, "git", "config", "--global", args[0], "credential.https://github.com.helper", args[1])
+        self.git(tmp, "bash", "-c", f"set -e; {command}")
+        request = "protocol=https\nhost=github.com\npath=kunlabora/roadpass.git\n\n"
+        return self.git(tmp, "git", "-C", "checkout", "credential", "fill", stdin=request, check=False)
+
+    def test_a_checkout_with_a_token_uses_only_that_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            filled = self.clone(tmp, with_token=True)
+            self.assertIn("password=repo-token\n", filled.stdout)
+            self.assertNotIn("repo-token", (tmp / "checkout" / ".git" / "config").read_text())
+            # A removed token answers nothing, rather than the App token.
+            next(tmp.glob("repo-env/*/GIT_TOKEN")).unlink()
+            filled = self.git(tmp, "git", "-C", "checkout", "credential", "fill", check=False,
+                              stdin="protocol=https\nhost=github.com\npath=kunlabora/roadpass.git\n\n")
+            self.assertNotEqual(filled.returncode, 0)
+            self.assertNotIn("app-token", filled.stdout)
+
+    def test_a_checkout_without_a_token_keeps_the_github_app(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            filled = self.clone(Path(tmp), with_token=False)
+            self.assertIn("password=app-token\n", filled.stdout)
+
+    def test_the_server_reads_tokens_only_for_github_repositories(self) -> None:
+        core = FakeCore()
+        repo_env.save_repository(core, ROADPASS, {"GIT_TOKEN": "tok\n", "NPM": "x"})
+        repo_env.save_repository(core, "github.com/kunlabora/npm-only", {"NPM": "x"})
+        repo_env.save_repository(core, "gitlab.com/kunlabora/roadpass", {"GIT_TOKEN": "gl"})
+        repo_env.save_repository(core, "github.com/kunlabora/blank", {"GIT_TOKEN": " "})
+        # A Secret that names a repository other than the one it's mounted for.
+        forged = json.loads(json.dumps(core.secrets[repo_env.secret_name(ROADPASS)]))
+        forged["metadata"]["name"] = "omnigent-repo-env-forged"
+        forged["metadata"]["annotations"]["omnigent.dev/repository"] = "github.com/someone/else"
+        core.secrets["omnigent-repo-env-forged"] = forged
+        self.assertEqual(repo_env.token_repositories(core), {ROADPASS: "tok"})
+        self.assertEqual(repo_env.repository_token(core, ROADPASS), "tok")
+        self.assertIsNone(repo_env.repository_token(core, "github.com/kunlabora/npm-only"))
+        self.assertIsNone(repo_env.repository_token(core, "github.com/kunlabora/missing"))
+
+    def test_the_patch_clones_with_it_and_mounts_it_for_the_clone(self) -> None:
+        patch = (ROOT / "images" / "server" / "patches" / "0010-repo-git-token.patch").read_text()
+        self.assertIn("+from omnigent_repo_env import clone_command as _repo_env_clone_command\n", patch)
+        self.assertIn('+        "volumeMounts": [*home_mount, *repo_env_mounts],\n', patch)
+        self.assertIn("+from omnigent_repo_env_api import add_token_repositories, repository_token\n", patch)
+        self.assertIn("+            repo_list = await add_token_repositories(repo_list)\n", patch)
+        self.assertIn("+            token = await repository_token(owner, repo) or await resolve_access_token(\n", patch)
+
+
 class FakeApiException(Exception):
     def __init__(self, status: int) -> None:
         super().__init__(status)

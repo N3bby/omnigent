@@ -1,0 +1,369 @@
+Give a repository's Git token its own switch on Settings → Repository variables.
+
+A repository's Git token is its GIT_TOKEN variable
+(images/server/patches/0010-repo-git-token.patch). The page shows it apart from
+the other variables: the card lists "Git token" instead of GIT_TOKEN, and the
+editor has a Git token switch with a write-only field, where a blank field keeps
+the stored token and switching it off removes it. A GIT_TOKEN typed as a
+variable name is refused, and one in a pasted .env fills the field.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0011.
+
+diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
+index d44da2d..4449014 100644
+--- a/web/src/lib/repoEnv.ts
++++ b/web/src/lib/repoEnv.ts
+@@ -22,6 +22,14 @@ export interface RepoEnvEntry {
+   updated_by: string | null;
+ }
+ 
++/**
++ * The variable that holds a repository's own Git token. Sessions clone, fetch
++ * and push the repository with it, and it's listed in the repository picker
++ * (``TOKEN_VARIABLE`` in ``omnigent_repo_env.py``). The page sets it with its
++ * own switch rather than as a variable.
++ */
++export const GIT_TOKEN = "GIT_TOKEN";
++
+ const DEFAULT_HOST = "github.com";
+ const SEGMENT = /^[a-z0-9._-]+$/;
+ const SCP_URL = /^(?:[^@/]+@)?([^:/]+):([^/].*)$/;
+diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
+index a01644e..922787e 100644
+--- a/web/src/pages/RepoVariablesPage.test.tsx
++++ b/web/src/pages/RepoVariablesPage.test.tsx
+@@ -187,6 +187,91 @@ describe("RepoVariablesPage", () => {
+     expect(save).toBeEnabled();
+   });
+ 
++  it("shows the Git token apart from the variables", async () => {
++    stored[ROADPASS].GIT_TOKEN = "github_pat_secret";
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    expect(within(card).getByText(/2 variables · Git token · updated 3d ago/)).toBeInTheDocument();
++    expect(within(card).getByText("Git token")).toBeInTheDocument();
++    expect(within(card).queryByText("GIT_TOKEN")).not.toBeInTheDocument();
++    expect(document.body.textContent).not.toContain("github_pat_secret");
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Remove variables for kunlabora/roadpass" }),
++    );
++    expect(within(card).getByText(/Remove the Git token and 2 variables for/)).toBeInTheDocument();
++  });
++
++  it("keeps a stored Git token left blank, and removes it when switched off", async () => {
++    stored[ROADPASS].GIT_TOKEN = "github_pat_secret";
++    renderPage();
++    let card = await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++    );
++    const editor = within(card).getByTestId("repo-env-editor");
++    expect(within(editor).getByRole("switch", { name: "Git token" })).toBeChecked();
++    expect(within(editor).queryByDisplayValue("GIT_TOKEN")).not.toBeInTheDocument();
++    expect(within(editor).getByLabelText("Git token", { selector: "input" })).toHaveAttribute(
++      "placeholder",
++      "Leave blank to keep the current token",
++    );
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true));
++    expect(requests.find((r) => r.method === "PUT")!.body).toEqual({
++      repository: ROADPASS,
++      variables: { GOVFLANDERS_NPM_TOKEN: null, NPM_CONFIG_REGISTRY: null, GIT_TOKEN: null },
++    });
++    expect(stored[ROADPASS].GIT_TOKEN).toBe("github_pat_secret");
++
++    card = await screen.findByRole("article", { name: ROADPASS });
++    await waitFor(() =>
++      expect(
++        within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++      ).toBeInTheDocument(),
++    );
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++    );
++    fireEvent.click(within(card).getByRole("switch", { name: "Git token" }));
++    expect(within(card).getByText("Saving removes the current token.")).toBeInTheDocument();
++    fireEvent.click(within(card).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(stored[ROADPASS].GIT_TOKEN).toBeUndefined());
++  });
++
++  it("adds a repository with only a Git token, from the switch or a pasted .env", async () => {
++    renderPage();
++    await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
++    const editor = screen.getByTestId("repo-env-editor");
++    const save = within(editor).getByRole("button", { name: "Save" });
++    fireEvent.change(within(editor).getByLabelText("Repository"), {
++      target: { value: "kunlabora/other" },
++    });
++    fireEvent.change(within(editor).getByLabelText("Variable name"), {
++      target: { value: "GIT_TOKEN" },
++    });
++    expect(
++      within(editor).getByText("Set the Git token with its switch above."),
++    ).toBeInTheDocument();
++    fireEvent.change(within(editor).getByLabelText("Variable name"), { target: { value: "" } });
++    fireEvent.click(within(editor).getByRole("switch", { name: "Git token" }));
++    expect(within(editor).getByText("Give the Git token a value.")).toBeInTheDocument();
++    expect(save).toBeDisabled();
++    fireEvent.click(within(editor).getByRole("button", { name: "Paste .env" }));
++    fireEvent.change(within(editor).getByLabelText("Paste NAME=value lines"), {
++      target: { value: "GIT_TOKEN=github_pat_other\n" },
++    });
++    fireEvent.click(within(editor).getByRole("button", { name: "Add these lines" }));
++    expect(within(editor).getByLabelText("Git token", { selector: "input" })).toHaveValue(
++      "github_pat_other",
++    );
++    expect(within(editor).getByLabelText("Variable name")).toHaveValue("");
++    // Pasting replaced the buttons, so look Save up again.
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(stored["github.com/kunlabora/other"]).toBeDefined());
++    expect(stored["github.com/kunlabora/other"]).toEqual({ GIT_TOKEN: "github_pat_other" });
++  });
++
+   it("removes a repository after confirming", async () => {
+     renderPage();
+     const card = await screen.findByRole("article", { name: ROADPASS });
+diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
+index de0fb80..bff95f4 100644
+--- a/web/src/pages/RepoVariablesPage.tsx
++++ b/web/src/pages/RepoVariablesPage.tsx
+@@ -7,7 +7,8 @@
+  * environment. Values are write-only: the server lists names, and editing
+  * keeps a value whose field is left blank. The server stores each repository
+  * as the Kubernetes Secret that ``mise run setup-repo-env`` writes, so the two
+- * are interchangeable.
++ * are interchangeable. A repository's Git token is its ``GIT_TOKEN`` variable,
++ * shown and edited apart from the others, behind its own switch.
+  *
+  * Gated on the client by an admin check AND on the server by the routes.
+  */
+@@ -17,6 +18,7 @@ import { useQuery } from "@tanstack/react-query";
+ import {
+   ClipboardPasteIcon,
+   FolderGit2Icon,
++  KeyRoundIcon,
+   PencilIcon,
+   PlusIcon,
+   SearchIcon,
+@@ -26,6 +28,7 @@ import {
+ import { PageScroll } from "@/components/PageScroll";
+ import { Button } from "@/components/ui/button";
+ import { Input } from "@/components/ui/input";
++import { Switch } from "@/components/ui/switch";
+ import { Textarea } from "@/components/ui/textarea";
+ import { showToast } from "@/components/ui/toast";
+ import { useDeleteRepoEnv, useRepoEnv, useSaveRepoEnv } from "@/hooks/useRepoEnv";
+@@ -34,7 +37,7 @@ import { isSingleUserMode } from "@/lib/capabilities";
+ import { fetchGithubRepos } from "@/lib/githubIntegration";
+ import { getCurrentIsAdmin, resolveIdentity } from "@/lib/identity";
+ import { absoluteTime, relativeTime } from "@/lib/relativeTime";
+-import { type RepoEnvEntry, parseEnv, repoKey, variableNameError } from "@/lib/repoEnv";
++import { GIT_TOKEN, type RepoEnvEntry, parseEnv, repoKey, variableNameError } from "@/lib/repoEnv";
+ import { cn } from "@/lib/utils";
+ 
+ /** ``github.com/kunlabora/roadpass`` → ``["github.com", "kunlabora/roadpass"]``. */
+@@ -47,6 +50,28 @@ function plural(count: number, word: string): string {
+   return `${count} ${word}${count === 1 ? "" : "s"}`;
+ }
+ 
++/** A repository's variables apart from its Git token, and whether it has one. */
++function splitToken(names: string[]): { variables: string[]; token: boolean } {
++  return { variables: names.filter((n) => n !== GIT_TOKEN), token: names.includes(GIT_TOKEN) };
++}
++
++/** ``"2 variables · Git token"``, for a repository's card. */
++function summary(names: string[]): string {
++  const { variables, token } = splitToken(names);
++  const parts = variables.length || !token ? [plural(variables.length, "variable")] : [];
++  if (token) parts.push("Git token");
++  return parts.join(" · ");
++}
++
++/** ``"the Git token and 2 variables"``, for sentences. */
++function describe(names: string[]): string {
++  const { variables, token } = splitToken(names);
++  if (!token) return plural(variables.length, "variable");
++  return variables.length
++    ? `the Git token and ${plural(variables.length, "variable")}`
++    : "the Git token";
++}
++
+ /**
+  * ``kunlabora/roadpass`` with a line-break opportunity after each slash, on
+  * narrow screens. Hidden from sm, where the name truncates instead: Chrome
+@@ -276,7 +301,7 @@ function RepositoryCard({
+           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
+           title={absoluteTime(updated)}
+         >
+-          {plural(entry.names.length, "variable")}
++          {summary(entry.names)}
+           {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
+           {entry.updated_by && ` by ${entry.updated_by}`}
+         </span>
+@@ -313,8 +338,12 @@ function RepositoryCard({
+         ) : confirming ? (
+           <div className="flex flex-wrap items-center justify-between gap-3">
+             <p className="text-ui">
+-              Remove all {plural(entry.names.length, "variable")} for{" "}
+-              <span className="font-medium">{path}</span>? New sessions on it start without them.
++              Remove{" "}
++              {splitToken(entry.names).token
++                ? describe(entry.names)
++                : `all ${describe(entry.names)}`}{" "}
++              for <span className="font-medium">{path}</span>? New sessions on it start without
++              them.
+             </p>
+             <div className="ml-auto flex gap-2">
+               <Button
+@@ -337,7 +366,18 @@ function RepositoryCard({
+           </div>
+         ) : (
+           <ul className="flex flex-col">
+-            {entry.names.map((name) => (
++            {splitToken(entry.names).token && (
++              <li className="flex items-center gap-3 py-0.5 text-ui">
++                <span className="flex min-w-0 items-center gap-1.5 text-sm">
++                  <KeyRoundIcon className="ui-icon shrink-0 text-muted-foreground" />
++                  Git token
++                </span>
++                <span className="text-muted-foreground" aria-label="hidden value">
++                  ••••••••
++                </span>
++              </li>
++            )}
++            {splitToken(entry.names).variables.map((name) => (
+               <li key={name} className="flex items-center gap-3 py-0.5 text-ui">
+                 <span className="min-w-0 truncate font-mono text-sm">{name}</span>
+                 <span className="text-muted-foreground" aria-label="hidden value">
+@@ -370,6 +410,7 @@ function newRow(name = "", value = "", existing = false): Row {
+ 
+ function rowError(row: Row, rows: Row[], index: number): string | null {
+   if (!row.name) return row.value ? "Give this value a name." : null;
++  if (row.name === GIT_TOKEN) return "Set the Git token with its switch above.";
+   const nameError = variableNameError(row.name);
+   if (nameError) return nameError;
+   if (rows.findIndex((r) => r.name === row.name) !== index) {
+@@ -396,8 +437,12 @@ function VariablesEditor({
+   const save = useSaveRepoEnv();
+   const [query, setQuery] = useState("");
+   const [rows, setRows] = useState<Row[]>(() =>
+-    entry ? entry.names.map((name) => newRow(name, "", true)) : [newRow()],
++    entry ? splitToken(entry.names).variables.map((name) => newRow(name, "", true)) : [newRow()],
+   );
++  // Already stored: a blank token field keeps it, and switching it off removes it.
++  const tokenStored = entry ? splitToken(entry.names).token : false;
++  const [tokenOn, setTokenOn] = useState(tokenStored);
++  const [token, setToken] = useState("");
+   const [pasting, setPasting] = useState(false);
+   const [pasteText, setPasteText] = useState("");
+   const [pasteError, setPasteError] = useState<string | null>(null);
+@@ -408,12 +453,14 @@ function VariablesEditor({
+   const errors = rows.map((row, i) => rowError(row, rows, i));
+   const named = rows.filter((r) => r.name);
+   const missingValue = named.some((r) => !r.existing && !r.value);
++  const missingToken = tokenOn && !tokenStored && !token;
+   const canSave =
+     key !== null &&
+     !alreadyThere &&
+-    named.length > 0 &&
++    (named.length > 0 || tokenOn) &&
+     errors.every((e) => e === null) &&
+     !missingValue &&
++    !missingToken &&
+     !save.isPending;
+ 
+   function update(id: number, patch: Partial<Row>) {
+@@ -440,12 +487,19 @@ function VariablesEditor({
+     setRows((current) => {
+       const merged = current.filter((r) => r.name || r.value);
+       for (const v of variables) {
++        if (v.name === GIT_TOKEN) continue;
+         const same = merged.findIndex((r) => r.name === v.name);
+         if (same >= 0) merged[same] = { ...merged[same], value: v.value };
+         else merged.push(newRow(v.name, v.value));
+       }
+       return merged.length ? merged : [newRow()];
+     });
++    // A pasted GIT_TOKEN fills the Git token instead of becoming a variable.
++    const pastedTokens = variables.filter((v) => v.name === GIT_TOKEN);
++    if (pastedTokens.length) {
++      setTokenOn(true);
++      setToken(pastedTokens[pastedTokens.length - 1].value);
++    }
+     setPasting(false);
+     setPasteText("");
+     setPasteError(null);
+@@ -455,6 +509,7 @@ function VariablesEditor({
+     if (!canSave || key === null) return;
+     const variables: Record<string, string | null> = {};
+     for (const row of named) variables[row.name] = row.existing && !row.value ? null : row.value;
++    if (tokenOn) variables[GIT_TOKEN] = tokenStored && !token ? null : token;
+     setSaveError(null);
+     save.mutate(
+       { repository: key, variables },
+@@ -464,7 +519,7 @@ function VariablesEditor({
+           showToast(
+             entry
+               ? `Saved the variables for ${path}.`
+-              : `Saved ${plural(saved.names.length, "variable")} for ${path}. New sessions on it get them.`,
++              : `Saved ${describe(saved.names)} for ${path}. New sessions on it get them.`,
+           );
+           onClose();
+         },
+@@ -493,6 +548,40 @@ function VariablesEditor({
+         />
+       )}
+ 
++      <div className="flex flex-col gap-2" data-testid="repo-env-git-token">
++        <div className="flex items-center gap-2">
++          <Switch
++            id="repo-env-git-token"
++            checked={tokenOn}
++            onCheckedChange={setTokenOn}
++            componentId="settings.repo_env.git_token"
++          />
++          <label htmlFor="repo-env-git-token" className="text-sm font-medium text-muted-foreground">
++            Git token
++          </label>
++        </div>
++        <p className="text-sm text-muted-foreground">
++          Clone, fetch and push this repository with its own token instead of each user's GitHub
++          access, for a repository the GitHub App can't reach. It's then in everyone's repository
++          picker.
++        </p>
++        {tokenOn ? (
++          <Input
++            type="password"
++            value={token}
++            onChange={(e) => setToken(e.target.value)}
++            placeholder={tokenStored ? "Leave blank to keep the current token" : "github_pat_…"}
++            aria-label="Git token"
++            autoComplete="new-password"
++            className={TOUCH_HEIGHT}
++          />
++        ) : (
++          tokenStored && (
++            <p className="text-sm text-muted-foreground">Saving removes the current token.</p>
++          )
++        )}
++      </div>
++
+       <div className="flex flex-col gap-2">
+         <span className="text-sm font-medium text-muted-foreground">Variables</span>
+         {pasting ? (
+@@ -598,10 +687,14 @@ function VariablesEditor({
+             </Button>
+           </div>
+           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+-            {missingValue && (
++            {missingValue ? (
+               <span className="text-sm text-muted-foreground">
+                 Give every new variable a value.
+               </span>
++            ) : (
++              missingToken && (
++                <span className="text-sm text-muted-foreground">Give the Git token a value.</span>
++              )
+             )}
+             <Button
+               type="button"

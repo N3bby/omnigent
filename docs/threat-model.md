@@ -70,6 +70,11 @@ the runner namespace, which limits what a compromised server could do there.
   session on a repository gets its variables. Sessions on other repositories
   don't, because a Pod only mounts the Secrets of the repositories it starts
   with, and runners can't read Secrets themselves.
+- **A repository's Git token is shared too.** A repository with a
+  [`GIT_TOKEN` variable](features/repo-git-token.md)
+  is in everyone's repository picker, and anyone who starts a session on it
+  can use the token, with whatever access the token has. Give it a
+  fine-grained token for that one repository.
 - **The server can read the runner namespace's Secrets.** Settings →
   Repository variables needs to list and update them, and Kubernetes can't
   limit that to the repository variables, so the server can also read the

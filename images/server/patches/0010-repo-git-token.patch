@@ -1,0 +1,92 @@
+Clone, fetch and push a repository with its own GIT_TOKEN variable, and list it
+in the repository picker.
+
+A repository whose variables (omnigent_repo_env) include GIT_TOKEN is cloned
+with that token instead of the user's GitHub App token, and its checkout keeps
+using it: the workspace-prep init container now mounts the repositories'
+variables Secrets too, and omnigent_repo_env.clone_command writes a
+repository-local credential helper that reads the mounted token file. The
+GitHub picker routes add those repositories to the App's list and list their
+branches with the token (omnigent_repo_env_api).
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0009.
+
+diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
+index f241029..4ac17b5 100644
+--- a/omnigent/onboarding/sandboxes/kubernetes.py
++++ b/omnigent/onboarding/sandboxes/kubernetes.py
+@@ -58,6 +58,7 @@ from collections.abc import Mapping, Sequence
+ from typing import TYPE_CHECKING, ClassVar, Literal, cast
+ 
+ import click
++from omnigent_repo_env import clone_command as _repo_env_clone_command
+ from omnigent_repo_env import pod_volumes as _repo_env_volumes
+ 
+ from omnigent.host.identity import (
+@@ -628,8 +629,12 @@ def _render_workspace_prep_command(
+             script += "      exit 1\n    fi\n  fi\n"
+             script += f"  mkdir -- {target}\n  mkdir -- {temporary}\n  touch -- {marker}\n"
+             script += '  if [ -z "$wired" ]; then wire_credentials; wired=1; fi\n'
++            # A repository with its own GIT_TOKEN variable clones with it.
++            clone = _repo_env_clone_command(
++                repo.url, f"{branch}-- {shlex.quote(repo.url)} {staged_clone}", staged_clone
++            )
+             script += (
+-                f"  (git clone {branch}-- {shlex.quote(repo.url)} {staged_clone} "
++                f"  ({clone} "
+                 f"&& replace_empty_dir {staged_clone} {target} "
+                 f"&& rm -f -- {marker} && rmdir -- {temporary} "
+                 f"|| {{ rmdir -- {target} 2>/dev/null || true; exit 1; }}) "
+@@ -900,8 +905,8 @@ def build_job_manifest(
+             {"name": f"secret-{i}", "mountPath": mount["mount_path"], "readOnly": True}
+         )
+ 
+-    # Each repository's variables Secret, when there is one. Host container
+-    # only, like secret_mounts: the clone doesn't need them.
++    # Each repository's variables Secret, when there is one. The clone needs
++    # them too: a repository's GIT_TOKEN variable replaces the GitHub App token.
+     repo_env_volumes, repo_env_mounts = _repo_env_volumes(repo.url for repo in repos)
+ 
+     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
+@@ -956,7 +961,7 @@ def build_job_manifest(
+         "env": init_env,
+         "resources": pod_resources,
+         "securityContext": container_security,
+-        "volumeMounts": home_mount,
++        "volumeMounts": [*home_mount, *repo_env_mounts],
+     }
+     if harness_secret:
+         # The clone may need GIT_TOKEN (private repos) from the harness Secret.
+diff --git a/omnigent/server/routes/connections_github.py b/omnigent/server/routes/connections_github.py
+index 6630ef0..795d8ef 100644
+--- a/omnigent/server/routes/connections_github.py
++++ b/omnigent/server/routes/connections_github.py
+@@ -22,6 +22,7 @@ from typing import Any
+ 
+ from fastapi import APIRouter, HTTPException, Request
+ from httpx import HTTPError
++from omnigent_repo_env_api import add_token_repositories, repository_token
+ 
+ from omnigent.connections.github import GithubConnectionStore
+ from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+@@ -156,6 +157,9 @@ def create_connections_github_router(
+                 raise HTTPException(
+                     status_code=502, detail="Failed to list GitHub repositories"
+                 ) from exc
++            # This deployment's repositories with their own GIT_TOKEN variable,
++            # which sessions clone with that token instead of the App's.
++            repo_list = await add_token_repositories(repo_list)
+             return {"connected": True, "repos": repo_list, "truncated": truncated}
+ 
+         @router.get("/connections/github/repos/{owner}/{repo}/branches")
+@@ -169,7 +173,10 @@ def create_connections_github_router(
+             user_id = _current_user(request)
+             if not _valid_github_name(owner) or not _valid_github_name(repo):
+                 raise HTTPException(status_code=400, detail="Invalid repository name")
+-            token = await resolve_access_token(user_id, store=store, client=api)
++            # A repository with its own GIT_TOKEN variable lists its branches with it.
++            token = await repository_token(owner, repo) or await resolve_access_token(
++                user_id, store=store, client=api
++            )
+             if token is None:
+                 return {"connected": False, "branches": []}
+             try:
