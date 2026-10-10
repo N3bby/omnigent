@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, and a repository's own Git token. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, and a repository's own Git token. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -93,6 +93,7 @@ PASS  images/server/web-patches/0009-composer-fast-mode.patch
 PASS  images/server/web-patches/0010-fast-mode-command-lifecycle.patch
 PASS  images/server/web-patches/0011-codex-theme.patch
 PASS  images/server/web-patches/0012-repo-git-token-field.patch
+PASS  images/server/web-patches/0013-remove-sidebar-quick-actions.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -373,6 +374,7 @@ settings.
 | Open in Gateway | Next to it, a link **Open in Gateway** titled `Open <workspace> in JetBrains Gateway on <full Tailscale name>`. If the snapshot exposes its URL, it is `jetbrains-gateway://connect#type=ssh&host=<full name>&port=22&user=root&projectPath=<workspace, URL-encoded>&idePath=%2Fopt%2Fjetbrains%2Fintellij&deploy=false`. |
 | Bypass in the permission picker | In this session's composer, the permission menu (hand icon) lists **Manual**, **Auto**, **Accept edits**, **Plan** and **Bypass permissions**, with **Bypass permissions** selected. Close the menu with Escape without picking anything. |
 | No Share button | No **Share** in the chat header or its menu. Open a session row's menu (⋯) in the sidebar: it has **Fork** but no **Share**. Close the menu with Escape. |
+| No pin or archive buttons in the sidebar | Session rows in the sidebar have a `Conversation actions` button (⋯) and no `Pin conversation`, `Unpin conversation` or `Archive conversation` button. A row's ⋯ menu has **Pin** (**Unpin** under **Pinned**) and **Archive**. Close the menu with Escape without picking anything. |
 | Model picker | Start a new session (don't send it) with the Kubernetes sandbox and Claude Code: the model menu lists models, such as Opus and Sonnet, and never says `Models unavailable`. Repeat for Codex. Then discard it. |
 | Repository variables page | If you're an admin, Settings has **Repository variables** under Admin. It lists repositories with their variable names and `••••••••`, never a value. Don't add, edit or remove anything. Not an admin: record SKIP. |
 | GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository picker lists repositories. If it isn't connected, record SKIP (optional setup). |

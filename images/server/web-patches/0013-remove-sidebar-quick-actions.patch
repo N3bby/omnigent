@@ -1,0 +1,593 @@
+Remove the quick pin and archive buttons from sidebar session rows.
+
+On a computer, hovering a session row in the sidebar revealed Pin and Archive
+buttons next to its ⋯ button, and they were easy to click by accident. Only
+the ⋯ button is left. Pin and Unpin, which upstream showed in the row's menu
+only on phones, are now in that menu (and the right-click menu) everywhere;
+Archive and Unarchive already were. Dragging a session onto Pinned still pins
+it. The title's reserved space on hover shrinks to fit the ⋯ button alone.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/shell/Sidebar.archive.test.tsx b/web/src/shell/Sidebar.archive.test.tsx
+index 9d969bf..3688253 100644
+--- a/web/src/shell/Sidebar.archive.test.tsx
++++ b/web/src/shell/Sidebar.archive.test.tsx
+@@ -192,28 +192,24 @@ describe("archive flow", () => {
+     );
+   });
+ 
+-  it("archives from the row's quick-archive hover button", () => {
++  it("has no quick-archive hover button on the row", () => {
++    // This deployment drops the hover button; Archive lives in the row's menus.
+     mockConversations([CONV]);
+     renderSidebar();
+ 
+-    fireEvent.click(screen.getByTestId("quick-archive-conversation"));
+-
+-    // Same single-PATCH contract as the kebab item, just a different affordance.
+-    expect(mocks.archive.mutate).toHaveBeenCalledTimes(1);
+-    expect(mocks.archive.mutate).toHaveBeenCalledWith({ id: "conv_1", archived: true });
+-    expect(mocks.stop.mutate).not.toHaveBeenCalled();
++    expect(screen.queryByTestId("quick-archive-conversation")).toBeNull();
+   });
+ 
+-  it("unarchives from the quick button on an archived row", () => {
+-    // Archived rows render under the "Archived sessions" filter; the quick
+-    // button flips to its unarchive affordance there.
++  it("unarchives from the kebab on an archived row", () => {
++    // Archived rows render under the "Archived sessions" filter; the kebab's
++    // Archive item flips to Unarchive there.
+     mockConversations([{ ...CONV, archived: true }]);
+     renderSidebar();
+     // Radix menu opens on pointerdown; pick the Archived filter.
+     fireEvent.pointerDown(screen.getByTestId("session-filter"), { button: 0 });
+     fireEvent.click(screen.getByTestId("session-filter-archived"));
+ 
+-    fireEvent.click(screen.getByTestId("quick-archive-conversation"));
++    clickArchive();
+ 
+     expect(mocks.archive.mutate).toHaveBeenCalledWith({ id: "conv_1", archived: false });
+   });
+diff --git a/web/src/shell/Sidebar.dragOverlayPortal.test.tsx b/web/src/shell/Sidebar.dragOverlayPortal.test.tsx
+index c23cf7b..bbf36f1 100644
+--- a/web/src/shell/Sidebar.dragOverlayPortal.test.tsx
++++ b/web/src/shell/Sidebar.dragOverlayPortal.test.tsx
+@@ -217,9 +217,11 @@ describe("session drag preview portal", () => {
+ 
+   it("does not intercept Space on a session action as a keyboard drag", () => {
+     renderSidebar();
+-    const button = screen.getByRole("button", { name: "Pin conversation" });
++    // The row's only action button is the kebab, whose Radix trigger consumes
++    // Space itself to open the menu, so only assert that no drag started.
++    const button = screen.getByRole("button", { name: "Conversation actions" });
+     button.focus();
+-    expect(fireEvent.keyDown(button, { key: " ", code: "Space" })).toBe(true);
++    fireEvent.keyDown(button, { key: " ", code: "Space" });
+     expect(document.body.querySelector('[class*="max-w-[16rem]"]')).toBeNull();
+   });
+ 
+diff --git a/web/src/shell/Sidebar.rowActions.test.tsx b/web/src/shell/Sidebar.rowActions.test.tsx
+index 4c1a414..7f01b47 100644
+--- a/web/src/shell/Sidebar.rowActions.test.tsx
++++ b/web/src/shell/Sidebar.rowActions.test.tsx
+@@ -3,9 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ vi.mock("@/hooks/useScopeCache", () => import("@/test/mockScopeCache"));
+ import { SidebarDataProvider } from "@/hooks/useSidebarData";
+ // Tests for the sidebar conversation-row quick actions:
+-//   1. A desktop quick pin/unpin button (`quick-pin-conversation`) and a
+-//      mobile-only kebab Pin item (`pin-conversation`) — two affordances for
+-//      the same pin toggle, split by viewport (responsive Tailwind classes).
++//   1. The kebab Pin item (`pin-conversation`), on every viewport. This
++//      deployment drops upstream's desktop quick pin and archive buttons.
+ //   2. Double-clicking a row to enter inline rename (ConversationRow's
+ //      `onDoubleClick`), gated on edit permission.
+ // See ConversationRow / ConversationEditRow in Sidebar.tsx.
+@@ -26,7 +25,7 @@ import { USER_SESSION_TITLE_MAX_CHARS } from "@/lib/sessionTitles";
+ // project flyout is disabled there). Declared via vi.hoisted so the vi.mock
+ // factories (hoisted above imports) can reference them.
+ const mocks = vi.hoisted(() => {
+-  // Tiny reactive store for the server-authoritative pinned set, so a quick-pin
++  // Tiny reactive store for the server-authoritative pinned set, so a Pin
+   // click re-renders the sidebar (mirrors the real query's refetch). Holds ids;
+   // the mocked hook maps them onto the loaded conversations.
+   const pinnedListeners = new Set<() => void>();
+@@ -292,26 +291,22 @@ beforeEach(() => {
+ 
+ afterEach(cleanup);
+ 
+-describe("quick pin/unpin hover button", () => {
+-  it("keeps the row full-width and the trailing controls inset from the right edge", () => {
++describe("row trailing controls", () => {
++  it("keeps the row full-width and the kebab, its only control, inset from the right edge", () => {
+     // The row link is `w-full` (not `w-[calc(100%+1rem)]`) so its highlight
+     // stays inset from the right edge, aligning with the project/folder rows.
+     renderSidebar();
+ 
+-    // The pin + kebab share ONE absolutely-positioned flex container anchored
+-    // at right-1 with gap-0.5, mirroring the project-folder header actions —
+-    // so the spacing is defined once and can't drift (no per-button fixed-px
+-    // offsets like the old right-[30px] / -right-3).
+-    const pin = screen.getByTestId("quick-pin-conversation");
++    // The kebab sits in an absolutely-positioned flex container anchored at
++    // right-1, mirroring the project-folder header actions. This deployment
++    // drops the quick pin and archive buttons that used to share it.
++    expect(screen.queryByTestId("quick-pin-conversation")).toBeNull();
++    expect(screen.queryByTestId("quick-archive-conversation")).toBeNull();
+     const kebab = screen.getByTestId("conversation-actions");
+-    expect(pin).toHaveClass("size-6");
+     expect(kebab).toHaveClass("size-6");
+-    // Both buttons live in the same wrapper, which owns the position + gap.
+-    const controls = pin.parentElement!;
+-    expect(controls).toBe(kebab.parentElement);
+-    expect(controls).toHaveClass("absolute", "right-1", "flex", "items-center", "gap-0.5");
+-    // The old per-button offsets are gone.
+-    expect(pin).not.toHaveClass("right-[30px]", "right-[1.875rem]", "right-[14px]", "absolute");
++    const controls = kebab.parentElement!;
++    expect(controls.children).toHaveLength(1);
++    expect(controls).toHaveClass("absolute", "right-1", "flex", "items-center");
+     expect(kebab).not.toHaveClass("-right-3", "absolute");
+ 
+     const rowLink = screen.getByRole("link", { name: "My Session" });
+@@ -323,11 +318,11 @@ describe("quick pin/unpin hover button", () => {
+     renderSidebar();
+ 
+     const rowLink = screen.getByRole("link", { name: "My Session" });
+-    expect(rowLink).not.toHaveClass("md:pr-20");
++    expect(rowLink).not.toHaveClass("md:pr-8");
+ 
+     fireEvent.pointerDown(screen.getByTestId("conversation-actions"), { button: 0 });
+ 
+-    expect(rowLink).toHaveClass("md:pr-20");
++    expect(rowLink).toHaveClass("md:pr-8");
+   });
+ 
+   it("sizes the project-folder header controls to match the session-row kebab", () => {
+@@ -405,113 +400,63 @@ describe("quick pin/unpin hover button", () => {
+     expect(screen.getByTestId("new-project")).toBeInTheDocument();
+   });
+ 
+-  it("toggles the pin without opening the kebab menu, moving the row under Pinned", () => {
++  it("styles the kebab as a muted 14px icon button", () => {
+     renderSidebar();
+ 
+-    // No "Pinned" section to start; the row lives under Recent.
+-    expect(screen.queryByText("Pinned")).toBeNull();
+-    const pinButton = screen.getByTestId("quick-pin-conversation");
+-    expect(pinButton).toHaveAttribute("aria-label", "Pin conversation");
+-    expect(pinButton).toHaveClass("text-muted-foreground", "hover:text-foreground");
+-    expect(pinButton.querySelector("svg")).toHaveClass("size-3.5");
+-    expect(pinButton.querySelector("svg")).toHaveAttribute("data-icon-size", "14");
+     const actionsButton = screen.getByTestId("conversation-actions");
+     expect(actionsButton).toHaveClass("text-muted-foreground", "hover:text-foreground");
+     expect(actionsButton.querySelector("svg")).toHaveClass("size-3.5");
+     expect(actionsButton.querySelector("svg")).toHaveAttribute("data-icon-size", "14");
+-
+-    fireEvent.click(pinButton);
+-
+-    // The row is now grouped under a "Pinned" header, and the quick button
+-    // flips to its unpin affordance — both prove the toggle ran through the
+-    // sidebar's pin state (not just a local no-op).
+-    const pinnedHeader = screen.getByText("Pinned");
+-    const pinnedSection = pinnedHeader.closest("section")!;
+-    expect(within(pinnedSection).getByText("My Session")).toBeInTheDocument();
+-    expect(screen.getByTestId("quick-pin-conversation")).toHaveAttribute(
+-      "aria-label",
+-      "Unpin conversation",
+-    );
+-
+-    // Persisted server-side (the `omnigent.pinned` label) so the pin follows the
+-    // user across devices — same contract as the kebab's Pin item.
+-    expect(mocks.pinnedStore.ids).toContain("conv_1");
+-
+-    // Clicking again unpins: the Pinned section disappears.
+-    fireEvent.click(screen.getByTestId("quick-pin-conversation"));
+-    expect(screen.queryByText("Pinned")).toBeNull();
+   });
+ 
+-  it("also offers Pin in the kebab menu (mobile affordance) and toggles the same pin state", () => {
++  it("pins and unpins from the kebab menu, moving the row under Pinned and back", () => {
+     renderSidebar();
+ 
+     expect(screen.queryByText("Pinned")).toBeNull();
+ 
+     // Radix DropdownMenu opens on pointerdown, not click.
+     fireEvent.pointerDown(screen.getByTestId("conversation-actions"), { button: 0 });
+-
+-    // The kebab carries a Pin item (mobile-only via `md:hidden`, but always in
+-    // the DOM since jsdom doesn't evaluate media queries). Clicking it drives
+-    // the same pin state as the quick button — the row moves under "Pinned".
+     const pinItem = screen.getByTestId("pin-conversation");
+     expect(pinItem).toHaveTextContent("Pin");
+     fireEvent.click(pinItem);
+ 
++    // The row is now grouped under a "Pinned" header — proof the toggle ran
++    // through the sidebar's pin state (not just a local no-op).
+     const pinnedHeader = screen.getByText("Pinned");
+     const pinnedSection = pinnedHeader.closest("section")!;
+     expect(within(pinnedSection).getByText("My Session")).toBeInTheDocument();
++    // Persisted server-side (the `omnigent.pinned` label) so the pin follows the
++    // user across devices.
+     expect(mocks.pinnedStore.ids).toContain("conv_1");
+-  });
+-
+-  it("splits the two pin affordances by viewport via Tailwind responsive classes", () => {
+-    // jsdom doesn't evaluate CSS media queries, so both affordances live in the
+-    // DOM regardless of viewport — the mobile/desktop split is purely the
+-    // responsive classes. Assert those classes directly: the kebab Pin item is
+-    // hidden from `md` up (desktop), and the quick button is hidden below `md`
+-    // (mobile) but shown from `md` up. Together they guarantee exactly one pin
+-    // affordance is visible at any breakpoint.
+-    renderSidebar();
+ 
+-    // Desktop quick button: hidden on mobile, revealed from `md` up. The reveal
+-    // uses `md:inline-flex` (not `md:block`) so the button stays a flex
+-    // container — see the centering regression test below.
+-    const quickButton = screen.getByTestId("quick-pin-conversation");
+-    expect(quickButton).toHaveClass("hidden", "md:inline-flex");
+-
+-    // Kebab Pin item: present in the menu but hidden from `md` up, so it only
+-    // surfaces on mobile.
++    // The item flips to Unpin, and picking it removes the Pinned section.
+     fireEvent.pointerDown(screen.getByTestId("conversation-actions"), { button: 0 });
+-    expect(screen.getByTestId("pin-conversation")).toHaveClass("md:hidden");
++    const unpinItem = screen.getByTestId("pin-conversation");
++    expect(unpinItem).toHaveTextContent("Unpin");
++    fireEvent.click(unpinItem);
++    expect(screen.queryByText("Pinned")).toBeNull();
+   });
+ 
+-  it("reveals the quick-pin button without breaking icon centering", () => {
+-    // The Button base centers its icon with `inline-flex` + `items-center
+-    // justify-center`. The desktop reveal MUST keep a flex display: revealing
+-    // it with `md:block` overrode `inline-flex`, made the
+-    // centering classes inert, and shoved the pin glyph to the button's
+-    // top-left corner (~6px off-center). Guard the display so the reveal
+-    // stays flex and the glyph stays centered.
++  it("shows the kebab Pin item on every viewport", () => {
++    // jsdom doesn't evaluate CSS media queries, so assert the classes: upstream
++    // hid this item from `md` up in favour of the quick-pin button, which this
++    // deployment drops, so desktop needs the item.
+     renderSidebar();
+ 
+-    const quickButton = screen.getByTestId("quick-pin-conversation");
+-    // The centering classes are present...
+-    expect(quickButton).toHaveClass("items-center", "justify-center");
+-    // ...and the desktop reveal makes the button a flex container (so those
+-    // classes actually take effect), rather than a block (which would not).
+-    expect(quickButton).toHaveClass("md:inline-flex");
+-    expect(quickButton).not.toHaveClass("md:block");
++    fireEvent.pointerDown(screen.getByTestId("conversation-actions"), { button: 0 });
++    expect(screen.getByTestId("pin-conversation")).not.toHaveClass("md:hidden");
+   });
+ 
+   it("drops the row kebab on mobile, revealing it only from md up", () => {
+     // The per-row "..." menu is desktop-only: on mobile the chat page's own
+     // header menu covers these per-session actions, so the row kebab is hidden
+     // (`hidden`) and only surfaces from `md` up (`md:inline-flex`). It reveals
+-    // like the quick-pin button — flex, not block — so its glyph stays
+-    // centered.
++    // as flex, not block, so `items-center justify-center` keep its glyph
++    // centered; `md:block` would leave it in the button's top-left corner.
+     renderSidebar();
+ 
+     const kebab = screen.getByTestId("conversation-actions");
+-    expect(kebab).toHaveClass("hidden", "md:inline-flex");
++    expect(kebab).toHaveClass("hidden", "md:inline-flex", "items-center", "justify-center");
+     expect(kebab).not.toHaveClass("md:block");
+   });
+ });
+@@ -767,12 +712,11 @@ describe("leave a shared session", () => {
+   });
+ });
+ 
+-describe("quick-archive owner gate", () => {
++describe("archive owner gate", () => {
+   // Archive is owner-only: the kebab renders its Archive item disabled for
+-  // non-owners ("Only the session owner can archive this session"). The hover
+-  // quick button must enforce the same gate — so a non-owner never gets the
+-  // affordance the menu deliberately blocks.
+-  it("hides the quick-archive button on a shared row the viewer doesn't own", () => {
++  // non-owners ("Only the session owner can archive this session"). This
++  // deployment drops the hover quick-archive button for everyone.
++  it("disables Archive on a shared row the viewer doesn't own", () => {
+     mockConversations([{ ...CONV, owner: "other@example.com" }]);
+     renderSidebar();
+     // Non-owned rows live on the "Shared with me" tab (activates on mousedown).
+@@ -786,17 +730,18 @@ describe("quick-archive owner gate", () => {
+     expect(screen.getByRole("link", { name: /My Session/ })).toBeInTheDocument();
+     expect(screen.queryByTestId("quick-archive-conversation")).toBeNull();
+ 
+-    // The kebab still carries the (disabled) Archive item — the gate hides only
+-    // the quick button, not the explanatory menu entry.
++    // The menu still carries the (disabled) Archive item with its explanation.
+     fireEvent.contextMenu(screen.getByRole("link", { name: /My Session/ }));
+     expect(screen.getByTestId("archive-conversation")).toHaveAttribute("data-disabled");
+   });
+ 
+-  it("shows the quick-archive button on a row the viewer owns", () => {
++  it("enables Archive in the menu, with no quick button, on a row the viewer owns", () => {
+     mockConversations([CONV]);
+     renderSidebar();
+ 
+-    expect(screen.getByTestId("quick-archive-conversation")).toBeInTheDocument();
++    expect(screen.queryByTestId("quick-archive-conversation")).toBeNull();
++    fireEvent.contextMenu(screen.getByRole("link", { name: /My Session/ }));
++    expect(screen.getByTestId("archive-conversation")).not.toHaveAttribute("data-disabled");
+   });
+ });
+ 
+diff --git a/web/src/shell/Sidebar.test.tsx b/web/src/shell/Sidebar.test.tsx
+index 200c453..03dcc83 100644
+--- a/web/src/shell/Sidebar.test.tsx
++++ b/web/src/shell/Sidebar.test.tsx
+@@ -106,7 +106,7 @@ vi.mock("@/hooks/useConversations", () => ({
+       isSuccess: true,
+     };
+   },
+-  // Reflect the toggle into the seeded ref so a test that clicks quick-pin then
++  // Reflect the toggle into the seeded ref so a test that clicks Pin then
+   // re-renders sees the updated Pinned set.
+   useTogglePinnedConversation: () => ({
+     mutate: ({ id, pinned }: { id: string; pinned: boolean }) => {
+@@ -634,17 +634,17 @@ describe("Sidebar session list", () => {
+     renderSidebar();
+ 
+     const row = screen.getByText("Balanced row title").closest("a")!;
+-    // Mobile drops the pin + kebab, so at rest it reserves the same slim `pr-2`
+-    // as desktop; only desktop hover widens it for the revealed controls.
++    // Mobile drops the kebab, so at rest it reserves the same slim `pr-2` as
++    // desktop; only desktop hover widens it for the revealed kebab.
+     expect(row).toHaveClass("pr-2");
+     expect(row.className).not.toMatch(/(?:^|\s)pr-28(?:\s|$)/);
+-    expect(row.className).toContain("md:group-hover:pr-20");
++    expect(row.className).toContain("md:group-hover:pr-8");
+     // Keyed on `:focus-visible`, matching when the trailing controls appear and
+     // the state marker fades. `focus-within` would also fire for a plain click,
+     // narrowing the reserve on the selected row while the marker stayed put.
+-    expect(row.className).toContain("md:group-has-[:focus-visible]:pr-20");
+-    expect(row.className).not.toContain("md:group-focus-within:pr-20");
+-    expect(row.className).not.toMatch(/(?:^|\s)md:pr-20(?:\s|$)/);
++    expect(row.className).toContain("md:group-has-[:focus-visible]:pr-8");
++    expect(row.className).not.toContain("md:group-focus-within:pr-8");
++    expect(row.className).not.toMatch(/(?:^|\s)md:pr-8(?:\s|$)/);
+   });
+ 
+   it("narrows the awaiting row's reserve on the same trigger that fades its tag", () => {
+@@ -667,7 +667,7 @@ describe("Sidebar session list", () => {
+     // Every state that narrows the reserve must also fade the tag, and vice
+     // versa, so the two can never disagree about whether the space is free.
+     for (const trigger of ["md:group-hover:", "md:group-has-[:focus-visible]:"]) {
+-      expect(row.className).toContain(`${trigger}pr-20`);
++      expect(row.className).toContain(`${trigger}pr-8`);
+       expect(tag.parentElement!.className).toContain(`${trigger}opacity-0`);
+     }
+     // `focus-within` fires for a plain mouse click, which the tag's fade does
+@@ -2889,31 +2889,25 @@ describe("Sidebar auto-expand Pinned on pin", () => {
+   });
+ });
+ 
+-// The quick-pin affordance is hover-revealed on every row — including pinned
+-// ones. A pinned row no longer keeps a persistent pin marker (the "Pinned"
+-// section header already conveys the state); on hover it reveals the UNPIN
+-// control.
++// This deployment drops the hover-revealed quick-pin button. A pinned row keeps
++// no persistent pin marker either (the "Pinned" section header already conveys
++// the state); Pin and Unpin live in the row's menus.
+ describe("Sidebar pin marker visibility", () => {
+-  it("hover-reveals an unpin control on a pinned row (no persistent marker)", () => {
++  it("shows no pin control on a pinned row", () => {
+     mockConversations([conv("conv_pin", "Claude Code")]);
+     seedPins(["conv_pin"]);
+     renderSidebar();
+ 
+     const pinned = screen.getByText("Pinned").closest("section")!;
+-    const pinButton = within(pinned).getByTestId("quick-pin-conversation");
+-    // Hover-gated like every other row (no persistent opacity-100 marker), and
+-    // the control unpins.
+-    expect(pinButton.className).toContain("md:opacity-0");
+-    expect(pinButton).toHaveAttribute("aria-label", "Unpin conversation");
++    expect(within(pinned).getByTestId("conversation-actions")).toBeInTheDocument();
++    expect(within(pinned).queryByTestId("quick-pin-conversation")).toBeNull();
+   });
+ 
+-  it("hides the pin affordance until hover on an unpinned row", () => {
++  it("shows no pin control on an unpinned row", () => {
+     mockConversations([conv("conv_plain", "Claude Code")]);
+     renderSidebar();
+ 
+-    const pinButton = screen.getByTestId("quick-pin-conversation");
+-    // Unpinned: hover-gated reveal (opacity-0 until group-hover).
+-    expect(pinButton.className).toContain("md:opacity-0");
++    expect(screen.queryByTestId("quick-pin-conversation")).toBeNull();
+   });
+ });
+ 
+diff --git a/web/src/shell/Sidebar.tsx b/web/src/shell/Sidebar.tsx
+index 2aee576..84a7c46 100644
+--- a/web/src/shell/Sidebar.tsx
++++ b/web/src/shell/Sidebar.tsx
+@@ -224,7 +224,6 @@ import { ForkSessionDialog } from "./ForkSessionDialog";
+ import { SessionRowSwipeAction, useSessionRowSwipe } from "./SessionRowSwipe";
+ import { useIsTouchPrimary } from "./sidebarSwipe";
+ import { SIDEBAR_ROW } from "./sidebarStyles";
+-import { TooltipArrow } from "radix-ui/tooltip";
+ import { getEmbedRoot } from "../lib/host";
+ 
+ // Positioning for a row's trailing session-state badge. Anchored at the row's
+@@ -1893,8 +1892,8 @@ function ConversationList({
+   // A session row can be dragged onto a project folder (file it there), onto the
+   // "Chats" list / a fallback strip (unfile it), or onto "Pinned" (pin it, which
+   // floats it out of its project). "Shared with me" is deliberately not a drop
+-  // target — you can't file sessions there. The kebab "Move session" menu + the
+-  // pin button remain the keyboard-accessible session actions.
++  // target — you can't file sessions there. The kebab's "Move session" and Pin
++  // items remain the keyboard-accessible session actions.
+   const moveToProject = useMoveToProject();
+   // The session currently being dragged (id + source project + pinned state), or
+   // null. Set on drag start, cleared on end/cancel; drives the DragOverlay
+@@ -3401,14 +3400,13 @@ function ConversationMenuItems({
+ 
+   return (
+     <>
+-      {/* Pin/Unpin — mobile-only (md:hidden); desktop uses the
++      {/* Pin/Unpin — on every viewport: this deployment drops the desktop
+           hover-revealed quick-pin button. Archived rows omit it (archive
+           outranks pin). */}
+       {!isArchived && (
+         <C.Item
+           data-testid="pin-conversation"
+           disabled={!isPinned && atPinCap}
+-          className="md:hidden"
+           onSelect={() => onTogglePinned(conversation.id)}
+         >
+           {isPinned ? <PinOffIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}
+@@ -3697,7 +3695,6 @@ function ConversationRowImpl({
+   onToggleSelected: (conversationId: string, shiftKey?: boolean) => void;
+   onProjectAssigned?: (projectName: string) => void;
+ }) {
+-  const atPinCap = useContext(PinCapacityContext);
+   const hostsById = useContext(HostsByIdContext);
+   const navigate = useNavigate();
+   // A client-only `temp:` row (navigate-first create window): no server session
+@@ -3985,11 +3982,6 @@ function ConversationRowImpl({
+     if (nextArchived) showArchiveUndoToast(queryClient, [conversation]);
+   }
+ 
+-  function runUnarchive() {
+-    const nextArchived = !isArchived;
+-    archive.mutate({ id: conversation.id, archived: nextArchived });
+-  }
+-
+   function confirmLeave() {
+     // Leave is a self-revoke, so it needs the viewer's own id. The menu item is
+     // gated on the row NOT being owned by the viewer, which is only decidable
+@@ -4055,9 +4047,9 @@ function ConversationRowImpl({
+         // Full width (not 100%+1rem) so the highlight stays inset from the
+         // right edge, aligning with the project/folder rows above.
+         "w-full",
+-        // Mobile drops the pin + kebab (see the trailing controls below), so it
++        // Mobile drops the kebab (see the trailing controls below), so it
+         // reserves only what the badge needs — the same width desktop uses at
+-        // rest, before hover reveals the controls.
++        // rest, before hover reveals the kebab.
+         !selectionMode &&
+           (sessionState?.kind === "awaiting"
+             ? showSharedIndicator
+@@ -4073,8 +4065,8 @@ function ConversationRowImpl({
+         // `focus-within` also fires for a plain click, which shrank the reserve
+         // on the selected row while the marker stayed put, sliding the title
+         // under it.
+-        !selectionMode && "md:group-hover:pr-20 md:group-has-[:focus-visible]:pr-20",
+-        !selectionMode && menuOpen && "md:pr-20",
++        !selectionMode && "md:group-hover:pr-8 md:group-has-[:focus-visible]:pr-8",
++        !selectionMode && menuOpen && "md:pr-8",
+         selectionMode && "pr-2 pl-8",
+         !selectionMode && isActive && SIDEBAR_ACTIVE_HIGHLIGHT,
+         selectionMode && isSelected && SIDEBAR_ACTIVE_HIGHLIGHT,
+@@ -4309,101 +4301,13 @@ function ConversationRowImpl({
+           <UsersIcon className="size-3.5" aria-hidden="true" />
+         </span>
+       )}
+-      {/* Trailing controls (pin + kebab) share one absolutely-positioned flex
+-          row, so their spacing is defined once (gap-0.5) and stays aligned
+-          with the project-folder header actions, which use the same pattern.
+-          The kebab is the rightmost child (pinned to right-1); the pin sits a
+-          gap to its left. Hidden entirely while selecting (bulk mode owns the
+-          row controls). */}
++      {/* Trailing controls: only the kebab, pinned to right-1. This deployment
++          drops upstream's hover-revealed quick pin and archive buttons, which
++          were easy to hit by accident; Pin and Archive stay in the kebab and
++          right-click menus. Hidden entirely while selecting (bulk mode owns
++          the row controls). */}
+       {!selectionMode && (
+         <div className="-translate-y-1/2 absolute top-1/2 right-1 flex items-center gap-0.5">
+-          {/* Archived rows omit the pin entirely: pinning is meaningless there
+-              (archive outranks pin), so there's no pin action even on hover. */}
+-          {!isArchived && (
+-            <Button
+-              type="button"
+-              variant="ghost"
+-              size="icon-xs"
+-              aria-label={isPinned ? "Unpin conversation" : "Pin conversation"}
+-              data-testid="quick-pin-conversation"
+-              aria-disabled={!isPinned && atPinCap}
+-              title={!isPinned && atPinCap ? "Unpin a session first" : undefined}
+-              className={cn(
+-                // Desktop-only quick affordance: hidden on mobile (the kebab's
+-                // Pin item below covers that), hover/focus-revealed from `md`
+-                // up. Pinned rows no longer keep a persistent pin marker, since
+-                // the "Pinned" section header (and pinned-first ordering inside
+-                // a project) already conveys the pinned state. Revealed glyph:
+-                // unpin if pinned, pin otherwise.
+-                //
+-                // `md:inline-flex` (not `md:block`): the Button base is
+-                // `inline-flex` and relies on it for `items-center
+-                // justify-center` to center the icon. `md:block` would override
+-                // that display and collapse the centering, leaving the glyph
+-                // pinned to the top-left of the button — so keep the flex
+-                // display when revealing it.
+-                "text-muted-foreground transition-opacity",
+-                "hidden md:inline-flex",
+-                "md:opacity-0 md:group-hover:opacity-100",
+-                "md:group-has-[:focus-visible]:opacity-100 md:group-has-[[aria-expanded=true]]:opacity-100",
+-              )}
+-              onClick={(e) => {
+-                // Keep the toggle click off the surrounding Link (no navigation).
+-                e.preventDefault();
+-                e.stopPropagation();
+-                onTogglePinned(conversation.id);
+-              }}
+-            >
+-              {isPinned ? (
+-                <PinOffIcon className="size-3.5" data-icon-size="14" />
+-              ) : (
+-                <PinIcon className="size-3.5" data-icon-size="14" />
+-              )}
+-            </Button>
+-          )}
+-          {/* Archive is owner-only, same as the kebab's Archive item; non-owners
+-              don't get the quick affordance and instead see that item disabled
+-              with an explanation. */}
+-          {isOwner && (
+-            <Tooltip disableHoverableContent>
+-              <TooltipContent>
+-                <TooltipArrow />
+-                {isArchived ? "Unarchive conversation" : "Archive conversation"}
+-              </TooltipContent>
+-              <TooltipTrigger asChild>
+-                <Button
+-                  type="button"
+-                  variant="ghost"
+-                  size="icon-xs"
+-                  aria-label={isArchived ? "Unarchive conversation" : "Archive conversation"}
+-                  data-testid="quick-archive-conversation"
+-                  className={cn(
+-                    "text-muted-foreground transition-opacity",
+-                    "hidden md:inline-flex",
+-                    "md:opacity-0 md:group-hover:opacity-100",
+-                    "md:group-has-[:focus-visible]:opacity-100 md:group-has-[[aria-expanded=true]]:opacity-100",
+-                  )}
+-                  onClick={(e) => {
+-                    // Keep the toggle click off the surrounding Link (no navigation).
+-                    e.preventDefault();
+-                    e.stopPropagation();
+-                    if (!isArchived) {
+-                      runArchive();
+-                    } else {
+-                      runUnarchive();
+-                    }
+-                  }}
+-                >
+-                  {isArchived ? (
+-                    <ArchiveRestoreIcon className="size-3.5" data-icon-size="14" />
+-                  ) : (
+-                    <ArchiveIcon className="size-3.5" data-icon-size="14" />
+-                  )}
+-                </Button>
+-              </TooltipTrigger>
+-            </Tooltip>
+-          )}
+-
+           <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+             <DropdownMenuTrigger asChild>
+               <Button
