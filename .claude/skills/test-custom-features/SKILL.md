@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, and a repository's own Git token. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, and a repository's own Git token. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -69,6 +69,7 @@ PASS  images/runner/patches/0002-git-helper-python.patch
 PASS  images/runner/patches/0003-claude-bypass-switch.patch
 PASS  images/runner/patches/0004-fast-mode.patch
 PASS  images/runner/patches/0005-fast-mode-command-lifecycle.patch
+PASS  images/runner/patches/0006-mention-file-index.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -80,6 +81,7 @@ PASS  images/server/patches/0007-claude-bypass-switch.patch
 PASS  images/server/patches/0008-fast-mode.patch
 PASS  images/server/patches/0009-fast-mode-command-lifecycle.patch
 PASS  images/server/patches/0010-repo-git-token.patch
+PASS  images/server/patches/0011-mention-file-index.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -94,6 +96,7 @@ PASS  images/server/web-patches/0010-fast-mode-command-lifecycle.patch
 PASS  images/server/web-patches/0011-codex-theme.patch
 PASS  images/server/web-patches/0012-repo-git-token-field.patch
 PASS  images/server/web-patches/0013-remove-sidebar-quick-actions.patch
+PASS  images/server/web-patches/0014-composer-fuzzy-mentions.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -146,7 +149,8 @@ Image builds apply the patches, build the frontend, and check Python
 compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode or
-changing its native message/composer paths:
+fuzzy `@` file search, or changing their native message, composer or
+file-index paths:
 
 ```bash
 .claude/skills/test-custom-features/scripts/check-patched-tests
@@ -157,13 +161,15 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts` | 687 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py` | 15 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx` | 742 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py` | 20 passed |
 
-Most frontend cases are existing upstream tests; this fix adds 11 frontend
-and 15 backend cases. These are selected suites, not the entire upstream test
-suite. The backend uses mocked CLI transports: a pass verifies command routing
-and lifecycle handling, not live Claude/Codex availability or billing.
+Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
+and 15 backend cases; fuzzy `@` file search adds 21 frontend and 5 backend
+cases. These are selected suites, not the entire upstream test suite. The
+fast-mode backend uses mocked CLI transports: a pass verifies command routing
+and lifecycle handling, not live Claude/Codex availability or billing. The
+file-index backend lists real temporary folders and Git repositories.
 
 Prerequisites are Git, GNU patch, and mise. The helper installs the repo's mise
 tools and the Node/pnpm versions pinned in `versions.yaml`. It creates an
@@ -215,6 +221,9 @@ PASS  claude-native posts rate limits
 PASS  claude-native reads statusLine rate_limits
 PASS  codex-native posts rate limits
 PASS  Claude statusLine reports usage windows: 5h <n>% · 7d <n>%
+== Fuzzy @ file search: runner patch is installed
+PASS  runner serves the workspace file index
+PASS  runner lists every workspace file
 == Agents don't stop to ask
 PASS  Claude managed settings bypass permissions
 PASS  claude is the deployment wrapper
@@ -287,6 +296,7 @@ What a failure usually means:
 | --- | --- |
 | a version line | the image wasn't rebuilt or locked (`mise run lock-images`), or this session predates the deploy |
 | `… posts rate limits` | the runner patch was dropped or upstream moved the code; see step 2 |
+| `runner serves the workspace file index`, `runner lists every workspace file` | `images/runner/patches/0006-mention-file-index.patch` was dropped or upstream moved the code (see step 2), or this session predates the deploy |
 | `Claude statusLine reports …` | the Claude Code statusLine payload changed shape, or it's not a Pro/Max login |
 | managed settings / wrappers | `images/runner/Dockerfile` no longer installs the wrappers over the real CLIs, or `claude_bypass_permissions` is off |
 | `… switch Claude back to bypass`, `running Claude has --allow-dangerously-skip-permissions` | `images/runner/patches/0003-claude-bypass-switch.patch` was dropped, or this session's Pod started before the deploy |
@@ -375,6 +385,7 @@ settings.
 | Bypass in the permission picker | In this session's composer, the permission menu (hand icon) lists **Manual**, **Auto**, **Accept edits**, **Plan** and **Bypass permissions**, with **Bypass permissions** selected. Close the menu with Escape without picking anything. |
 | No Share button | No **Share** in the chat header or its menu. Open a session row's menu (⋯) in the sidebar: it has **Fork** but no **Share**. Close the menu with Escape. |
 | No pin or archive buttons in the sidebar | Session rows in the sidebar have a `Conversation actions` button (⋯) and no `Pin conversation`, `Unpin conversation` or `Archive conversation` button. A row's ⋯ menu has **Pin** (**Unpin** under **Pinned**) and **Archive**. Close the menu with Escape without picking anything. |
+| Fuzzy file search with @ | In this session's composer, type `@chkrunner` and don't send it. The menu is headed **Search workspace**, and its first row is `check-runner` with `.claude/skills/test-custom-features/scripts/` in grey, the matched letters in bold. Type `@.claude/` instead: it lists that folder's entries, headed `/.claude`. Clear the composer without sending. A menu that only lists the workspace's top level, or nothing, for `@chkrunner` means the file index didn't load: check the runner and server patches and that this session started after the deploy. |
 | Model picker | Start a new session (don't send it) with the Kubernetes sandbox and Claude Code: the model menu lists models, such as Opus and Sonnet, and never says `Models unavailable`. Repeat for Codex. Then discard it. |
 | Repository variables page | If you're an admin, Settings has **Repository variables** under Admin. It lists repositories with their variable names and `••••••••`, never a value. Don't add, edit or remove anything. Not an admin: record SKIP. |
 | GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository picker lists repositories. If it isn't connected, record SKIP (optional setup). |

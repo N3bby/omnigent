@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Run the fast-mode backend regressions and related frontend suites against
-# a fresh, fully patched upstream checkout. Keep logs and JUnit reports.
+# Run the fast-mode and fuzzy "@" file search backend regressions and related
+# frontend suites against a fresh, fully patched upstream checkout. Keep logs
+# and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -70,7 +71,9 @@ PY
     --group test --no-emit-local --no-hashes --output-file "$reports/constraints.txt"
   python_bin="$(mise exec -- python -c 'import sys; print(sys.executable)')"
   mise exec -- uv venv --python "$python_bin" "$source_dir/.venv"
-  mise exec -- uv pip install --python "$source_dir/.venv/bin/python" \
+  # The frontend is installed and tested on its own below, so the editable
+  # install doesn't build the web UI (that needs pnpm on PATH).
+  OMNIGENT_SKIP_WEB_UI=true mise exec -- uv pip install --python "$source_dir/.venv/bin/python" \
     --constraint "$reports/constraints.txt" \
     --editable "$source_dir" --editable "$source_dir/sdks/python-client" \
     --editable "$source_dir/sdks/ui" \
@@ -81,6 +84,7 @@ PY
     cd "$source_dir"
     PYTHONPATH="$source_dir:$root/images/server" "$source_dir/.venv/bin/python" -m pytest \
       tests/runner/test_fast_mode_command.py tests/server/test_fast_mode_command.py \
+      tests/runner/test_file_index.py tests/server/integration/test_file_index_route.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \
@@ -88,6 +92,7 @@ PY
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \
     pnpm --dir "$source_dir/web" exec vitest run \
       src/lib/fastMode.test.ts src/store/chatStore.test.ts src/pages/ChatPage.test.ts \
+      src/lib/fuzzyPathMatch.test.ts src/pages/ChatPage.mention.test.tsx \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

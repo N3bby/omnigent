@@ -1,0 +1,311 @@
+List every file in the workspace for the composer's fuzzy "@" picker.
+
+Adds GET /v1/sessions/{id}/resources/environments/{env}/file-index, which
+returns every file path in the session's workspace in one response, so the
+web UI can match "@auth" against all of them as you type, as Claude Code's
+and Codex's own pickers do. Inside a Git repository it lists what git
+ls-files does (tracked plus untracked files that aren't ignored), and a
+nested repository under its own ignores. Outside one it walks the tree,
+skipping hidden folders, node_modules, .venv and symlinked folders. At most
+50,000 paths, and "truncated" says when the list was cut short. Pairs with
+the server patch 0011-mention-file-index.patch and the web patch
+0014-composer-fuzzy-mentions.patch.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/runner/app.py b/omnigent/runner/app.py
+index 00d251c..0310b9c 100644
+--- a/omnigent/runner/app.py
++++ b/omnigent/runner/app.py
+@@ -11248,6 +11248,23 @@ def create_runner_app(
+             limit=limit,
+         )
+ 
++    @app.get("/v1/sessions/{session_id}/resources/environments/{environment_id}/file-index")
++    async def list_environment_file_index(
++        session_id: str,
++        environment_id: str,
++    ) -> JSONResponse:
++        """Every file path in the workspace, for the composer's fuzzy "@" picker."""
++        from omnigent.runner.environment_filesystem import CallerProcessFilesystem
++
++        agent_spec = await _require_os_env(session_id)
++        await _ensure_session_registered(session_id)
++        env = resource_registry.resolve_environment(session_id, environment_id, agent_spec)
++        paths, truncated = await CallerProcessFilesystem(env).list_file_paths()
++        return JSONResponse(
++            status_code=200,
++            content={"object": "list", "paths": paths, "truncated": truncated},
++        )
++
+     async def _fs_search(
+         session_id: str,
+         environment_id: str,
+diff --git a/omnigent/runner/environment_filesystem.py b/omnigent/runner/environment_filesystem.py
+index 6827359..b4e79b0 100644
+--- a/omnigent/runner/environment_filesystem.py
++++ b/omnigent/runner/environment_filesystem.py
+@@ -58,6 +58,10 @@ _MAX_READ_BYTES = 10 * 1024 * 1024  # 10 MiB
+ # Deterministic (count, not wall clock) so the same tree always yields
+ # the same answer, and sized to match the sandbox cwd scan budget.
+ _SEARCH_SCAN_BUDGET = 50000
++# The composer's fuzzy "@" picker loads every path at once: at most this many,
++# and no more output than the helper's 5 MB shell cap can carry.
++_FILE_INDEX_LIMIT = 50000
++_FILE_INDEX_MAX_OUTPUT = 5_000_000
+ _Params = ParamSpec("_Params")
+ 
+ 
+@@ -832,6 +836,124 @@ print(json.dumps({'r': results, 't': truncated}))
+         entries.sort(key=lambda e: e.path)
+         return entries, truncated
+ 
++    async def list_file_paths(self, *, limit: int = _FILE_INDEX_LIMIT) -> tuple[list[str], bool]:
++        """List every file path in the workspace, for fuzzy matching.
++
++        Inside a Git repository it lists what ``git ls-files`` does, tracked
++        files plus untracked ones that aren't ignored, so ``.gitignore``
++        keeps out build output and dependencies. A nested repository that
++        isn't a submodule is listed the same way, under its own ignores.
++        Outside any repository it walks the tree the way ``rg --files``
++        would, skipping hidden directories and :data:`_DEFAULT_DEPRIORITIZED_DIRS`.
++
++        :param limit: Maximum number of paths, e.g. ``50000``.
++        :returns: ``(paths, truncated)``: paths relative to the workspace
++            root, sorted, and whether the limit cut the list short.
++        :raises FilesystemPathNotFound: If the root directory is not accessible.
++        """
++        import json as _json
++
++        # Caller-derived values are embedded via json.dumps as Python literals,
++        # and the whole script is shell-quoted below, as in search_files.
++        _header = "\n".join(
++            [
++                "import json, os, subprocess",
++                f"limit = {int(limit)}",
++                f"budget = {_FILE_INDEX_MAX_OUTPUT - 1000}",
++                f"skip = set({_json.dumps(list(_DEFAULT_DEPRIORITIZED_DIRS))})",
++            ]
++        )
++        _body = r"""
++paths = []
++size = 0
++truncated = False
++
++
++class Full(Exception):
++    pass
++
++
++def add(path):
++    global size, truncated
++    # The JSON quoting and separator cost a few bytes beyond the path.
++    size += len(path) + 4
++    if len(paths) >= limit or size > budget:
++        truncated = True
++        raise Full()
++    paths.append(path)
++
++
++def git(cwd, *args):
++    try:
++        done = subprocess.run(
++            ['git', '-c', 'core.quotepath=false', *args],
++            cwd=cwd, capture_output=True, timeout=8,
++        )
++    except (OSError, subprocess.SubprocessError):
++        return None
++    if done.returncode != 0:
++        return None
++    return [p for p in done.stdout.decode('utf-8', 'replace').split('\0') if p]
++
++
++def repo(root, prefix):
++    tracked = git(root, 'ls-files', '-z', '--recurse-submodules')
++    if tracked is None:
++        return False
++    others = git(root, 'ls-files', '-z', '--others', '--exclude-standard') or []
++    for p in sorted(set(tracked) | set(others)):
++        if p.endswith('/'):
++            # git lists a nested repository as one "dir/" entry.
++            walk(os.path.join(root, p[:-1]), prefix + p)
++        else:
++            add(prefix + p)
++    return True
++
++
++def walk(root, prefix):
++    if os.path.exists(os.path.join(root, '.git')) and repo(root, prefix):
++        return
++    for dirpath, dirnames, filenames in os.walk(root):
++        rel = os.path.relpath(dirpath, root)
++        base = prefix if rel == '.' else prefix + rel.replace(os.sep, '/') + '/'
++        kept = []
++        for d in sorted(dirnames):
++            # A symlinked directory could lead out of the workspace.
++            if d.startswith('.') or d in skip or os.path.islink(os.path.join(dirpath, d)):
++                continue
++            if os.path.exists(os.path.join(dirpath, d, '.git')) and repo(os.path.join(dirpath, d), base + d + '/'):
++                continue
++            kept.append(d)
++        dirnames[:] = kept
++        for f in sorted(filenames):
++            add(base + f)
++
++
++try:
++    walk('.', '')
++except Full:
++    pass
++print(json.dumps({'p': paths, 't': truncated}))
++"""
++        _script = _header + "\n" + _body
++        result = await _run_os_env_async(
++            self._os_env.shell,
++            f"python3 -c {_shell_quote(_script)}",
++            # The server gives the runner 10 seconds to answer.
++            timeout=10,
++            max_output=_FILE_INDEX_MAX_OUTPUT,
++        )
++        if "error" in result:
++            raise FilesystemPathNotFound(f"Root directory not accessible: {result['error']}")
++        stdout = result.get("stdout", "")
++        try:
++            payload = _json.loads(stdout)
++        except _json.JSONDecodeError as exc:
++            raise RuntimeError(
++                f"list_file_paths: unexpected output from sandbox script: {stdout[:200]!r}"
++            ) from exc
++        return sorted(payload.get("p", [])), bool(payload.get("t"))
++
+     async def read(
+         self,
+         path: str,
+diff --git a/tests/runner/test_file_index.py b/tests/runner/test_file_index.py
+new file mode 100644
+index 0000000..699bb27
+--- /dev/null
++++ b/tests/runner/test_file_index.py
+@@ -0,0 +1,123 @@
++"""Tests for the runner's workspace file index, behind the fuzzy "@" picker."""
++
++from __future__ import annotations
++
++import subprocess
++from collections.abc import AsyncIterator
++from pathlib import Path
++
++import httpx
++import pytest
++from fastapi import FastAPI
++
++from omnigent.entities import DEFAULT_ENVIRONMENT_ID
++from omnigent.inner.datamodel import OSEnvSandboxSpec, OSEnvSpec
++from omnigent.inner.os_env import OSEnvironment, create_os_environment
++from omnigent.runner import create_runner_app
++from omnigent.runner.environment_filesystem import CallerProcessFilesystem
++from omnigent.runner.resource_registry import SessionResourceRegistry
++from tests.runner.helpers import NullServerClient
++
++
++def _git(cwd: Path, *args: str) -> None:
++    subprocess.run(
++        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
++        cwd=cwd,
++        check=True,
++        capture_output=True,
++    )
++
++
++def _os_env(workspace: Path) -> OSEnvironment:
++    os_env = create_os_environment(
++        OSEnvSpec(type="caller_process", cwd=str(workspace), sandbox=OSEnvSandboxSpec(type="none")),
++    )
++    assert os_env is not None
++    return os_env
++
++
++@pytest.fixture
++def workspace(tmp_path: Path) -> Path:
++    """A plain folder holding a Git repository, a hidden folder and node_modules."""
++    ws = tmp_path / "workspace"
++    for path in [
++        "notes.md",
++        "plain/sub/auth.ts",
++        ".cache/blob",
++        "node_modules/pkg/index.js",
++        "repo/src/app.py",
++        "repo/build/out.js",
++        "repo/scratch.py",
++        "repo/vendor/lib/inner.go",
++    ]:
++        (ws / path).parent.mkdir(parents=True, exist_ok=True)
++        (ws / path).write_text("x")
++    repo = ws / "repo"
++    (repo / ".gitignore").write_text("build/\n")
++    _git(repo, "init", "-q")
++    _git(repo / "vendor" / "lib", "init", "-q")
++    _git(repo, "add", ".gitignore", "src")
++    _git(repo, "commit", "-q", "-m", "init")
++    return ws
++
++
++@pytest.fixture
++def app(workspace: Path) -> FastAPI:
++    registry = SessionResourceRegistry()
++    registry._primary_envs["conv_test"] = _os_env(workspace)
++    return create_runner_app(
++        resource_registry=registry,
++        runner_workspace=workspace,
++        server_client=NullServerClient(),  # type: ignore[arg-type]
++    )
++
++
++@pytest.fixture
++async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
++    transport = httpx.ASGITransport(app=app)
++    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as c:
++        yield c
++
++
++@pytest.mark.asyncio
++async def test_file_index_lists_every_file_git_aware(client: httpx.AsyncClient) -> None:
++    """Git repositories list tracked and unignored files; elsewhere the tree is walked."""
++    resp = await client.get(
++        f"/v1/sessions/conv_test/resources/environments/{DEFAULT_ENVIRONMENT_ID}/file-index"
++    )
++    assert resp.status_code == 200
++    assert resp.json() == {
++        "object": "list",
++        "paths": [
++            "notes.md",
++            "plain/sub/auth.ts",
++            "repo/.gitignore",
++            "repo/scratch.py",
++            "repo/src/app.py",
++            # A nested repository is listed under its own ignores.
++            "repo/vendor/lib/inner.go",
++        ],
++        "truncated": False,
++    }
++
++
++@pytest.mark.asyncio
++async def test_file_index_stops_at_the_limit(workspace: Path) -> None:
++    paths, truncated = await CallerProcessFilesystem(_os_env(workspace)).list_file_paths(limit=2)
++    assert len(paths) == 2
++    assert truncated is True
++
++
++@pytest.mark.asyncio
++async def test_file_index_skips_symlinked_folders(tmp_path: Path) -> None:
++    """A symlinked folder could lead out of the workspace, so it isn't followed."""
++    outside = tmp_path / "outside"
++    outside.mkdir()
++    (outside / "secret.txt").write_text("x")
++    ws = tmp_path / "ws"
++    ws.mkdir()
++    (ws / "a.txt").write_text("x")
++    (ws / "link").symlink_to(outside, target_is_directory=True)
++    paths, truncated = await CallerProcessFilesystem(_os_env(ws)).list_file_paths()
++    assert paths == ["a.txt"]
++    assert truncated is False

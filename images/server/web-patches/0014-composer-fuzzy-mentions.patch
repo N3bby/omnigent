@@ -1,0 +1,831 @@
+Fuzzy-search the whole workspace from the composer's "@" menu.
+
+Upstream's "@" menu browses one folder at a time: "@auth" only finds
+auth.ts at the workspace root, and reaching a nested file means opening
+each folder. Once the workspace's file index (server patch
+0011-mention-file-index.patch) has loaded, typing a name now matches every
+file and folder fzf-style, like Claude Code's and Codex's own pickers: the
+characters must appear in order but not together, so "@srvts" finds
+src/server.ts. Matches in the file name, at word and camel-case boundaries,
+and in a row rank higher, files a little above folders, shorter paths
+above longer ones. "@src/au" searches all of src. A bare "@" and "@<folder>/" still browse, so Enter on
+a folder result opens it and Tab attaches it whole. Rows show the matched
+characters in bold and the folder each result is in. Without the index
+(still loading, or an older runner) the menu filters the folder as before.
+The new-session launcher's "@" menu, which reads the host's filesystem, is
+unchanged.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0013.
+
+diff --git a/web/src/components/FileMentionMenu.tsx b/web/src/components/FileMentionMenu.tsx
+index 232c903..b76f38c 100644
+--- a/web/src/components/FileMentionMenu.tsx
++++ b/web/src/components/FileMentionMenu.tsx
+@@ -1,15 +1,26 @@
+-import { useEffect, useRef } from "react";
++import { type ReactNode, useEffect, useRef } from "react";
+ import { FileTextIcon, FolderIcon, PlusIcon } from "lucide-react";
+ import { cn } from "@/lib/utils";
+ import type { WorkspaceFile } from "@/hooks/useWorkspaceChangedFiles";
+ 
++/** A menu row: a workspace entry, plus where a fuzzy search matched its path. */
++export type MentionMenuEntry = WorkspaceFile & {
++  /** Offsets into ``path`` of the characters the search matched. */
++  matchPositions?: number[];
++};
++
+ interface FileMentionMenuProps {
+-  /** Directory currently being browsed ("" = workspace root). */
++  /** Directory currently being browsed or searched ("" = workspace root). */
+   currentDir: string;
++  /**
++   * True when the rows are fuzzy-search results from under ``currentDir``
++   * rather than its own entries. Rows then show the folder each one is in.
++   */
++  searching?: boolean;
+   /** Index of the highlighted row (-1 = none). */
+   activeIndex: number;
+   /** Entries of the current directory (folders first), already filtered + capped. */
+-  entries: WorkspaceFile[];
++  entries: MentionMenuEntry[];
+   /**
+    * True while the directory listing is still fetching (cold-boot root load or
+    * a sub-directory's first load). Renders a loading row so "@" gives feedback
+@@ -22,6 +33,35 @@ interface FileMentionMenuProps {
+   onAttach: (path: string, isDir: boolean) => void;
+ }
+ 
++/** ``text`` with the characters at ``positions`` (offsets from ``offset``) in bold. */
++function highlighted(text: string, offset: number, positions: Set<number>): ReactNode {
++  if (positions.size === 0) return text;
++  const parts: ReactNode[] = [];
++  let run = "";
++  let runMatched = false;
++  const flush = (key: number) => {
++    if (!run) return;
++    parts.push(
++      runMatched ? (
++        <span key={key} className="font-semibold text-foreground">
++          {run}
++        </span>
++      ) : (
++        run
++      ),
++    );
++    run = "";
++  };
++  for (let i = 0; i < text.length; i++) {
++    const matched = positions.has(offset + i);
++    if (matched !== runMatched) flush(i);
++    runMatched = matched;
++    run += text[i];
++  }
++  flush(text.length);
++  return parts;
++}
++
+ /**
+  * Floating drill-down file/folder browser shown when the user types ``@`` in
+  * a native coding-agent session. Folders open (drill in) on click so nested
+@@ -31,6 +71,7 @@ interface FileMentionMenuProps {
+  */
+ export function FileMentionMenu({
+   currentDir,
++  searching = false,
+   activeIndex,
+   entries,
+   loading = false,
+@@ -48,7 +89,15 @@ export function FileMentionMenu({
+     <div className="absolute bottom-full left-0 z-10 mb-2 flex items-end gap-2">
+       <div className="w-80 max-w-[calc(100vw-2rem)] shrink-0 overflow-hidden rounded-[12px] border border-border bg-popover p-2 shadow-menu">
+         <div className="flex items-center justify-between gap-2 px-1.5 py-1 text-sm font-medium text-muted-foreground">
+-          <span className="truncate">{currentDir ? `/${currentDir}` : "Workspace"}</span>
++          <span className="truncate">
++            {searching
++              ? currentDir
++                ? `Search /${currentDir}`
++                : "Search workspace"
++              : currentDir
++                ? `/${currentDir}`
++                : "Workspace"}
++          </span>
+           <span className="shrink-0 text-[10px]">↵ open · ⇥ attach</span>
+         </div>
+         {entries.length === 0 && loading ? (
+@@ -57,6 +106,12 @@ export function FileMentionMenu({
+           <div ref={listRef} role="listbox" className="max-h-80 overflow-y-auto">
+             {entries.map((entry, i) => {
+               const isDir = entry.type === "directory";
++              const matched = new Set(entry.matchPositions ?? []);
++              const nameStart = entry.path.length - entry.name.length;
++              // Search results come from anywhere below currentDir, so each
++              // shows its folder relative to it.
++              const folderStart = currentDir ? currentDir.length + 1 : 0;
++              const folder = searching ? entry.path.slice(folderStart, nameStart) : "";
+               return (
+                 <div
+                   key={`${entry.type}:${entry.path}`}
+@@ -82,10 +137,20 @@ export function FileMentionMenu({
+                     ) : (
+                       <FileTextIcon className="size-3.5 shrink-0 text-slate-500 dark:text-slate-400" />
+                     )}
+-                    <span className="truncate">
+-                      {entry.name}
++                    <span className="min-w-0 truncate">
++                      {highlighted(entry.name, nameStart, matched)}
+                       {isDir ? "/" : ""}
+                     </span>
++                    {folder && (
++                      <span
++                        className="min-w-0 flex-1 truncate text-left text-sm text-muted-foreground"
++                        dir="rtl"
++                      >
++                        {/* rtl keeps the end of a long folder path in view; the
++                            bdi keeps the path itself left-to-right. */}
++                        <bdi>{highlighted(folder, folderStart, matched)}</bdi>
++                      </span>
++                    )}
+                   </button>
+                   {isDir && (
+                     <button
+diff --git a/web/src/hooks/useWorkspaceChangedFiles.ts b/web/src/hooks/useWorkspaceChangedFiles.ts
+index 1afd373..0655c7f 100644
+--- a/web/src/hooks/useWorkspaceChangedFiles.ts
++++ b/web/src/hooks/useWorkspaceChangedFiles.ts
+@@ -583,6 +583,55 @@ export function useWorkspaceFileSearch(
+   });
+ }
+ 
++// ── File index (every path, for the fuzzy "@" picker) ─────────────────────────
++
++export interface WorkspaceFileIndex {
++  /** Every file path in the workspace, relative to its root. */
++  paths: string[];
++  /** True when the runner stopped listing at its limit (50,000 paths). */
++  truncated: boolean;
++}
++
++async function fetchWorkspaceFileIndex(conversationId: string): Promise<WorkspaceFileIndex | null> {
++  const res = await authenticatedFetch(
++    `/v1/sessions/${encodeURIComponent(conversationId)}/resources/environments/${DEFAULT_ENVIRONMENT_ID}/file-index`,
++  );
++  // No OS environment, or a runner from before the file index: the picker
++  // falls back to browsing folders.
++  if (res.status === 404) return null;
++  if (await isRunnerUnavailable503(res)) return null;
++  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
++  const body = (await res.json()) as { paths?: string[]; truncated?: boolean };
++  return { paths: body.paths ?? [], truncated: body.truncated === true };
++}
++
++/**
++ * Every file path in the session's workspace, which the composer's ``@``
++ * picker matches fuzzily as you type. Inside a Git repository it's what
++ * ``git ls-files`` lists, so ignored files stay out.
++ *
++ * ``data`` is ``null`` when the runner can't serve the index; callers fall
++ * back to browsing one folder at a time. Refetched when a turn ends, since
++ * the agent may have added files.
++ *
++ * @param conversationId Session/conversation id, or undefined when not ready.
++ */
++export function useWorkspaceFileIndex(
++  conversationId: string | undefined,
++  options: WorkspaceQueryOptions = {},
++) {
++  const serveable = useWorkspaceServeable(conversationId);
++  const sessionActive = useSessionActive(conversationId);
++  useTrailingInvalidate(conversationId, sessionActive, "workspace-file-index");
++  return useQuery({
++    queryKey: ["workspace-file-index", conversationId],
++    queryFn: () => fetchWorkspaceFileIndex(conversationId!),
++    enabled: (options.enabled ?? true) && !!conversationId && serveable !== false,
++    staleTime: 30_000,
++    retry: false,
++  });
++}
++
+ // ── Directory contents (lazy, on-demand) ──────────────────────────────────────
+ 
+ async function fetchWorkspaceDirectory(
+diff --git a/web/src/lib/fuzzyPathMatch.test.ts b/web/src/lib/fuzzyPathMatch.test.ts
+new file mode 100644
+index 0000000..2dd2243
+--- /dev/null
++++ b/web/src/lib/fuzzyPathMatch.test.ts
+@@ -0,0 +1,99 @@
++import { describe, expect, it } from "vitest";
++import { buildFuzzyPathIndex, fuzzyMatchPaths, fuzzyMentionScope } from "./fuzzyPathMatch";
++
++const PATHS = [
++  "README.md",
++  "src/auth.ts",
++  "src/components/AgentHoverCard.tsx",
++  "src/lib/composerMentions.ts",
++  "src/lib/markdownFence.ts",
++  "src/pages/ChatPage.tsx",
++  "src/pages/ChatPage.test.ts",
++  "tests/auth/test_login.py",
++];
++
++function match(query: string, within = "") {
++  return fuzzyMatchPaths(buildFuzzyPathIndex(PATHS), query, within).map((m) => m.path);
++}
++
++describe("buildFuzzyPathIndex", () => {
++  it("adds every folder on the way to a file, once", () => {
++    const index = buildFuzzyPathIndex(PATHS);
++    expect([...index.dirs].sort()).toEqual([
++      "src",
++      "src/components",
++      "src/lib",
++      "src/pages",
++      "tests",
++      "tests/auth",
++    ]);
++    expect(index.paths.filter((_, i) => index.isDir[i])).toHaveLength(6);
++  });
++});
++
++describe("fuzzyMatchPaths", () => {
++  it("matches the query's characters in order, gaps allowed", () => {
++    expect(match("cmpmen")).toEqual(["src/lib/composerMentions.ts"]);
++  });
++
++  it("ranks an exact file name first", () => {
++    expect(match("chatpage")[0]).toBe("src/pages/ChatPage.tsx");
++    expect(match("auth")[0]).toBe("src/auth.ts");
++  });
++
++  it("prefers a tight match in the name over letters spread across the path", () => {
++    expect(match("men", "src/lib")).toEqual([
++      "src/lib/composerMentions.ts",
++      "src/lib/markdownFence.ts",
++    ]);
++  });
++
++  it("returns where it matched, preferring the file name", () => {
++    const [top] = fuzzyMatchPaths(buildFuzzyPathIndex(PATHS), "auth");
++    expect(top.positions).toEqual([4, 5, 6, 7]);
++  });
++
++  it("ignores case unless the query has an uppercase letter", () => {
++    expect(match("readme")).toEqual(["README.md"]);
++    expect(match("Readme")).toEqual([]);
++    expect(match("CP")).toContain("src/pages/ChatPage.tsx");
++  });
++
++  it("offers folders as well as files", () => {
++    expect(match("components")).toContain("src/components");
++  });
++
++  it("only searches under the given folder, matching the rest of the path", () => {
++    expect(match("auth", "tests")).toEqual(["tests/auth", "tests/auth/test_login.py"]);
++    expect(match("src", "src")).not.toContain("src");
++  });
++
++  it("keeps the best matches up to the cap", () => {
++    const index = buildFuzzyPathIndex(PATHS);
++    expect(fuzzyMatchPaths(index, "s", "", 2)).toHaveLength(2);
++    expect(fuzzyMatchPaths(index, "", "", 10)).toEqual([]);
++  });
++});
++
++describe("fuzzyMentionScope", () => {
++  const index = buildFuzzyPathIndex(PATHS);
++
++  it("browses for a bare @ and for a folder ending in a slash", () => {
++    expect(fuzzyMentionScope(index, "")).toBeNull();
++    expect(fuzzyMentionScope(index, "/")).toBeNull();
++    expect(fuzzyMentionScope(index, "src/lib/")).toBeNull();
++  });
++
++  it("searches everywhere for a name", () => {
++    expect(fuzzyMentionScope(index, "auth")).toEqual({ within: "", query: "auth" });
++  });
++
++  it("searches under a known folder for what follows it", () => {
++    expect(fuzzyMentionScope(index, "src/lib/comp")).toEqual({ within: "src/lib", query: "comp" });
++  });
++
++  it("searches everywhere for the whole text when no such folder exists", () => {
++    expect(fuzzyMentionScope(index, "srv/auth")).toEqual({ within: "", query: "srv/auth" });
++    expect(fuzzyMentionScope(index, "nope/")).toEqual({ within: "", query: "nope/" });
++  });
++});
+diff --git a/web/src/lib/fuzzyPathMatch.ts b/web/src/lib/fuzzyPathMatch.ts
+new file mode 100644
+index 0000000..12c63e4
+--- /dev/null
++++ b/web/src/lib/fuzzyPathMatch.ts
+@@ -0,0 +1,249 @@
++/**
++ * fzf-style fuzzy matching over every path in a workspace, for the composer's
++ * ``@``-file-mention menu. The query's characters must appear in the path in
++ * order but not necessarily together, so ``@ath`` finds ``src/auth.ts``, the
++ * way Claude Code's and Codex's own ``@`` pickers work.
++ *
++ * Kept free of React so the ranking is unit-testable. The index is built once
++ * per file listing; each keystroke then scans it, which stays well under a
++ * frame for tens of thousands of paths.
++ */
++
++/** Every file in the workspace plus the folders derived from them. */
++export interface FuzzyPathIndex {
++  paths: string[];
++  lowerPaths: string[];
++  isDir: boolean[];
++  /** One bit per letter a-z each path contains, to skip hopeless paths fast. */
++  letters: Int32Array;
++  dirs: Set<string>;
++}
++
++/** One ranked match, with the matched characters' offsets for highlighting. */
++export interface FuzzyPathMatch {
++  path: string;
++  isDir: boolean;
++  score: number;
++  positions: number[];
++}
++
++/** Default cap on how many fuzzy matches the menu renders. */
++export const FUZZY_MATCH_CAP = 50;
++
++// fzf's scores: a matched character, the bonus for where it sits, and the
++// cost of skipping characters between matches.
++const SCORE_MATCH = 16;
++const BONUS_AFTER_SLASH = 10;
++const BONUS_BOUNDARY = 8;
++const BONUS_CAMEL = 7;
++const BONUS_CONSECUTIVE = 4;
++const PENALTY_GAP_START = 3;
++const PENALTY_GAP_EXTENSION = 1;
++// Ours on top: matches in the file or folder name beat matches in the folders
++// above it, as in Claude Code's picker.
++const BONUS_IN_NAME = 24;
++const BONUS_NAME_PREFIX = 16;
++const BONUS_EXACT_NAME = 40;
++// A file is what you usually mean, so a folder needs a clearly better match:
++// "auth" puts auth.py ahead of a tests/auth/ folder with a shorter path.
++const PENALTY_FOLDER = 4;
++
++function letterBits(text: string): number {
++  let bits = 0;
++  for (let i = 0; i < text.length; i++) {
++    const c = text.charCodeAt(i);
++    if (c >= 97 && c <= 122) bits |= 1 << (c - 97);
++  }
++  return bits;
++}
++
++/**
++ * Build the index from the workspace's file paths. Every folder on the way
++ * to a file becomes a candidate too, so ``@comp`` can attach ``components/``.
++ */
++export function buildFuzzyPathIndex(filePaths: readonly string[]): FuzzyPathIndex {
++  const dirs = new Set<string>();
++  for (const path of filePaths) {
++    for (let i = path.indexOf("/"); i > 0; i = path.indexOf("/", i + 1)) {
++      dirs.add(path.slice(0, i));
++    }
++  }
++  const paths = [...filePaths, ...dirs];
++  const lowerPaths = paths.map((p) => p.toLowerCase());
++  const letters = new Int32Array(paths.length);
++  lowerPaths.forEach((p, i) => (letters[i] = letterBits(p)));
++  const isDir = paths.map((_, i) => i >= filePaths.length);
++  return { paths, lowerPaths, isDir, letters, dirs };
++}
++
++/** Leftmost positions of ``needle`` in ``text`` as a subsequence, from ``from``. */
++function forwardMatch(text: string, needle: string, from: number): number[] | null {
++  const positions: number[] = [];
++  let at = from - 1;
++  for (let i = 0; i < needle.length; i++) {
++    at = text.indexOf(needle[i], at + 1);
++    if (at < 0) return null;
++    positions.push(at);
++  }
++  return positions;
++}
++
++/**
++ * The tightest match ending where the leftmost one does: walk back from its
++ * last character to find the latest start, then match forward from there.
++ * ``a/b/auth`` for ``auth`` thus matches the filename, not the scattered
++ * ``a…u…t…h``.
++ */
++function tightMatch(text: string, needle: string, from: number): number[] | null {
++  const leftmost = forwardMatch(text, needle, from);
++  if (!leftmost) return null;
++  let at = leftmost[leftmost.length - 1] + 1;
++  for (let i = needle.length - 1; i >= 0; i--) {
++    at = text.lastIndexOf(needle[i], at - 1);
++  }
++  if (at < from) return leftmost;
++  return forwardMatch(text, needle, at) ?? leftmost;
++}
++
++function isSeparator(c: string): boolean {
++  return c === "/" || c === "-" || c === "_" || c === "." || c === " ";
++}
++
++function bonusAt(path: string, lower: string, at: number, from: number): number {
++  if (at === from || path[at - 1] === "/") return BONUS_AFTER_SLASH;
++  if (isSeparator(path[at - 1])) return BONUS_BOUNDARY;
++  // A lowercase-to-uppercase step, e.g. the M in "composerMentions".
++  if (path[at - 1] === lower[at - 1] && path[at] !== lower[at]) return BONUS_CAMEL;
++  return 0;
++}
++
++function scorePositions(
++  path: string,
++  lower: string,
++  positions: number[],
++  from: number,
++  needle: string,
++): number {
++  let score = 0;
++  let chunkBonus = 0;
++  for (let i = 0; i < positions.length; i++) {
++    const at = positions[i];
++    let bonus = bonusAt(path, lower, at, from);
++    const gap = i === 0 ? -1 : at - positions[i - 1] - 1;
++    if (gap === 0) {
++      // As in fzf, a run of consecutive matches keeps the bonus of where it
++      // started, so "Men" in "composerMentions" counts as a camel-case hit.
++      if (bonus >= BONUS_BOUNDARY && bonus > chunkBonus) chunkBonus = bonus;
++      bonus = Math.max(bonus, chunkBonus, BONUS_CONSECUTIVE);
++    } else {
++      chunkBonus = bonus;
++      if (gap > 0) score -= PENALTY_GAP_START + (gap - 1) * PENALTY_GAP_EXTENSION;
++    }
++    // Where the match starts matters most.
++    score += SCORE_MATCH + (i === 0 ? bonus * 2 : bonus);
++  }
++  const nameStart = Math.max(from, lower.lastIndexOf("/") + 1);
++  if (positions[0] >= nameStart) {
++    score += BONUS_IN_NAME;
++    const name = lower.slice(nameStart);
++    const lowerNeedle = needle.toLowerCase();
++    if (name.startsWith(lowerNeedle)) score += BONUS_NAME_PREFIX;
++    const dot = name.lastIndexOf(".");
++    if (name === lowerNeedle || (dot > 0 && name.slice(0, dot) === lowerNeedle)) {
++      score += BONUS_EXACT_NAME;
++    }
++  }
++  // Shorter paths first, all else being equal.
++  return score + Math.max(0, 24 - ((path.length - from) >> 2));
++}
++
++function better(a: FuzzyPathMatch, b: FuzzyPathMatch): boolean {
++  if (a.score !== b.score) return a.score > b.score;
++  if (a.isDir !== b.isDir) return !a.isDir;
++  if (a.path.length !== b.path.length) return a.path.length < b.path.length;
++  return a.path < b.path;
++}
++
++/**
++ * Rank the index's paths against ``query``, best first.
++ *
++ * A query with an uppercase letter matches case-sensitively; otherwise case
++ * is ignored. With ``within`` set (a folder from the index), only paths under
++ * it are candidates and ``query`` is matched against the part after
++ * ``within/``, so ``@src/au`` searches all of ``src`` recursively.
++ *
++ * :param index: From :func:`buildFuzzyPathIndex`.
++ * :param query: The typed text, e.g. ``"auth"``. Empty matches nothing.
++ * :param within: Folder to search under, e.g. ``"src"``; ``""`` for all.
++ * :param cap: Maximum number of matches, e.g. ``50``.
++ */
++export function fuzzyMatchPaths(
++  index: FuzzyPathIndex,
++  query: string,
++  within = "",
++  cap: number = FUZZY_MATCH_CAP,
++): FuzzyPathMatch[] {
++  if (!query || cap <= 0) return [];
++  const caseSensitive = query !== query.toLowerCase();
++  const needle = caseSensitive ? query : query.toLowerCase();
++  const needed = letterBits(query.toLowerCase());
++  const prefix = within ? `${within}/` : "";
++  const top: FuzzyPathMatch[] = [];
++  const { paths, lowerPaths, isDir, letters } = index;
++  for (let i = 0; i < paths.length; i++) {
++    if ((letters[i] & needed) !== needed) continue;
++    const path = paths[i];
++    if (prefix && (!path.startsWith(prefix) || path.length === prefix.length)) continue;
++    const lower = lowerPaths[i];
++    const text = caseSensitive ? path : lower;
++    const from = prefix.length;
++    const anywhere = tightMatch(text, needle, from);
++    if (!anywhere) continue;
++    let positions = anywhere;
++    let score = scorePositions(path, lower, anywhere, from, needle);
++    // A match inside the file or folder name usually beats one spread across
++    // the path, but scoring both lets a strong path match still win.
++    const nameStart = Math.max(from, lower.lastIndexOf("/") + 1);
++    if (anywhere[0] < nameStart) {
++      const inName = tightMatch(text, needle, nameStart);
++      if (inName) {
++        const nameScore = scorePositions(path, lower, inName, from, needle);
++        if (nameScore > score) {
++          positions = inName;
++          score = nameScore;
++        }
++      }
++    }
++    if (isDir[i]) score -= PENALTY_FOLDER;
++    const match = { path, isDir: isDir[i], score, positions };
++    if (top.length === cap && !better(match, top[top.length - 1])) continue;
++    let at = top.length;
++    while (at > 0 && better(match, top[at - 1])) at--;
++    top.splice(at, 0, match);
++    if (top.length > cap) top.pop();
++  }
++  return top;
++}
++
++/**
++ * Decide whether a mention token is a fuzzy search, and over what.
++ *
++ * ``""`` and ``"<folder>/"`` keep browsing that folder, which is how Enter on
++ * a folder drills in. ``"<folder>/rest"`` searches that folder recursively
++ * for ``rest``. Anything else, including a slash path that names no folder
++ * (``"srv/auth"``), searches the whole workspace for the full text.
++ *
++ * :returns: ``{ within, query }`` for :func:`fuzzyMatchPaths`, or ``null``
++ *     to browse instead.
++ */
++export function fuzzyMentionScope(
++  index: FuzzyPathIndex,
++  token: string,
++): { within: string; query: string } | null {
++  const slash = token.lastIndexOf("/");
++  if (slash < 0) return token ? { within: "", query: token } : null;
++  const dir = token.slice(0, slash);
++  const rest = token.slice(slash + 1);
++  if (dir === "" || index.dirs.has(dir)) return rest ? { within: dir, query: rest } : null;
++  return { within: "", query: token };
++}
+diff --git a/web/src/pages/ChatPage.composer.test.tsx b/web/src/pages/ChatPage.composer.test.tsx
+index 53c6448..b918a3b 100644
+--- a/web/src/pages/ChatPage.composer.test.tsx
++++ b/web/src/pages/ChatPage.composer.test.tsx
+@@ -44,6 +44,7 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
+     ...actual,
+     useWorkspaceAllFiles: () => ({ data: undefined }),
+     useWorkspaceDirectory: () => ({ data: undefined }),
++    useWorkspaceFileIndex: () => ({ data: undefined, isLoading: false }),
+   };
+ });
+ 
+diff --git a/web/src/pages/ChatPage.mention.test.tsx b/web/src/pages/ChatPage.mention.test.tsx
+index 0662ffa..3da337d 100644
+--- a/web/src/pages/ChatPage.mention.test.tsx
++++ b/web/src/pages/ChatPage.mention.test.tsx
+@@ -20,11 +20,16 @@ import type { WorkspaceFile } from "@/hooks/useWorkspaceChangedFiles";
+ // Mock returns read from mutable hoisted state so a single test can flip a
+ // listing to "still loading" or swap in a larger set, without re-mocking the
+ // module. ``resetWorkspaceMock`` (called in beforeEach) restores the defaults.
++//
++// The fuzzy-search file index (useWorkspaceFileIndex) defaults to unavailable,
++// so the drill-down tests exercise the fallback; the fuzzy tests set it.
+ const ws = vi.hoisted(() => ({
+   rootEntries: [] as unknown[],
+   srcEntries: [] as unknown[],
+   rootLoading: false,
+   dirLoading: false,
++  fileIndex: null as { paths: string[]; truncated: boolean } | null,
++  fileIndexLoading: false,
+ }));
+ const ROOT_ENTRIES: WorkspaceFile[] = [
+   { path: "src", name: "src", type: "directory", bytes: null, modified_at: null },
+@@ -39,7 +44,13 @@ function resetWorkspaceMock() {
+   ws.srcEntries = SRC_ENTRIES;
+   ws.rootLoading = false;
+   ws.dirLoading = false;
++  ws.fileIndex = null;
++  ws.fileIndexLoading = false;
+ }
++const FILE_INDEX = {
++  paths: ["readme.md", "src/server.ts", "src/client.ts", "src/lib/auth.ts", "test/client.ts"],
++  truncated: false,
++};
+ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
+   const actual = await importOriginal<typeof UseWorkspaceChangedFilesModule>();
+   return {
+@@ -52,6 +63,10 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
+       data: dirPath === "src" ? ws.srcEntries : undefined,
+       isLoading: ws.dirLoading,
+     }),
++    useWorkspaceFileIndex: () => ({
++      data: ws.fileIndexLoading ? undefined : ws.fileIndex,
++      isLoading: ws.fileIndexLoading,
++    }),
+   };
+ });
+ 
+@@ -480,3 +495,95 @@ describe("Composer @-file-mention browser (native sessions)", () => {
+     expect(onSend).toHaveBeenCalledWith("ping @nomatch", undefined);
+   });
+ });
++
++describe("Composer @-file-mention fuzzy search (native sessions)", () => {
++  let convSeq = 0;
++  beforeEach(() => {
++    resetWorkspaceMock();
++    ws.fileIndex = FILE_INDEX;
++    localStorage.clear();
++    useChatStore.setState({
++      conversationId: `conv_fuzzy_${++convSeq}`,
++      sessionHarness: "claude-native",
++      pendingComposerAttachments: [],
++    });
++  });
++  afterEach(() => {
++    cleanup();
++    vi.restoreAllMocks();
++  });
++
++  function rowTexts() {
++    return screen.getAllByRole("option").map((row) => row.textContent);
++  }
++
++  it("still lists the root directory for a bare '@'", () => {
++    renderWithTooltips(<Composer {...composerProps()} />);
++    type("@");
++    expect(screen.getByText("Workspace")).toBeInTheDocument();
++    expect(screen.getByTitle("Open src")).toBeInTheDocument();
++  });
++
++  it("finds a nested file by name without opening its folders", () => {
++    const onSend = vi.fn();
++    renderWithTooltips(<Composer {...composerProps({ onSend })} />);
++    type("@auth");
++    expect(screen.getByText("Search workspace")).toBeInTheDocument();
++    expect(rowTexts()[0]).toBe("auth.tssrc/lib/");
++    fireEvent.click(screen.getByTitle("Attach auth.ts"));
++    type("check this");
++    fireEvent.submit(textarea().closest("form")!);
++    expect(onSend).toHaveBeenCalledWith("[Attached: src/lib/auth.ts]\n\ncheck this", undefined);
++  });
++
++  it("matches characters in order even when they aren't together", () => {
++    renderWithTooltips(<Composer {...composerProps()} />);
++    type("@srvts");
++    expect(rowTexts()).toEqual(["server.tssrc/"]);
++  });
++
++  it("searches recursively under a folder named before the slash", () => {
++    renderWithTooltips(<Composer {...composerProps()} />);
++    type("@src/cli");
++    expect(screen.getByText("Search /src")).toBeInTheDocument();
++    // test/client.ts is outside src, so it isn't offered.
++    expect(rowTexts()).toEqual(["client.ts"]);
++  });
++
++  it("searches the whole workspace when the text before the slash is no folder", () => {
++    renderWithTooltips(<Composer {...composerProps()} />);
++    type("@tst/cli");
++    expect(rowTexts()[0]).toBe("client.tstest/");
++  });
++
++  it("offers folders too, and Enter on one browses it", () => {
++    renderWithTooltips(<Composer {...composerProps()} />);
++    type("@lib");
++    // The row reads "lib/", its folder "src/", then the attach-folder button.
++    expect(rowTexts()[0]).toBe("lib/src/folder");
++    fireEvent.keyDown(textarea(), { key: "Enter" });
++    expect(textarea().value).toBe("@src/lib/");
++  });
++
++  it("attaches a whole folder from the results with Tab", () => {
++    const onSend = vi.fn();
++    renderWithTooltips(<Composer {...composerProps({ onSend })} />);
++    type("@lib");
++    fireEvent.keyDown(textarea(), { key: "Tab" });
++    type("look");
++    fireEvent.submit(textarea().closest("form")!);
++    expect(onSend).toHaveBeenCalledWith("[Attached: src/lib/]\n\nlook", undefined);
++  });
++
++  it("filters the folder meanwhile, and swallows Enter, while the index loads", () => {
++    ws.fileIndexLoading = true;
++    const onSend = vi.fn();
++    renderWithTooltips(<Composer {...composerProps({ onSend })} />);
++    type("@read");
++    expect(screen.getByTitle("Attach readme.md")).toBeInTheDocument();
++    type("@deep");
++    expect(screen.getByText("Loading…")).toBeInTheDocument();
++    fireEvent.keyDown(textarea(), { key: "Enter" });
++    expect(onSend).not.toHaveBeenCalled();
++  });
++});
+diff --git a/web/src/pages/ChatPage.statusLine.test.tsx b/web/src/pages/ChatPage.statusLine.test.tsx
+index 88a140e..3b500e8 100644
+--- a/web/src/pages/ChatPage.statusLine.test.tsx
++++ b/web/src/pages/ChatPage.statusLine.test.tsx
+@@ -24,6 +24,7 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
+     ...actual,
+     useWorkspaceAllFiles: () => ({ data: undefined }),
+     useWorkspaceDirectory: () => ({ data: undefined }),
++    useWorkspaceFileIndex: () => ({ data: undefined, isLoading: false }),
+   };
+ });
+ 
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index 276975f..6d1aeb5 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -206,8 +206,11 @@ import { FilePathAwareMessageResponse } from "@/components/blocks/ChatMarkdown";
+ import {
+   useWorkspaceAllFiles,
+   useWorkspaceDirectory,
++  useWorkspaceFileIndex,
+   type WorkspaceFile,
+ } from "@/hooks/useWorkspaceChangedFiles";
++import { buildFuzzyPathIndex, fuzzyMatchPaths, fuzzyMentionScope } from "@/lib/fuzzyPathMatch";
++import type { MentionMenuEntry } from "@/components/FileMentionMenu";
+ import { ComposerMicButton } from "@/components/ComposerMicButton";
+ import { ComposerAttachments } from "@/components/ComposerAttachments";
+ import { isCostRoutingSession, isSubagentRoutingSession } from "@/components/CostRoutingControl";
+@@ -2908,7 +2911,37 @@ function ComposerImpl(
+   // is how nested files are reached (recursion via navigation, mirroring
+   // the terminal's git-tracked walk). At any level the user can attach a
+   // single file or the whole folder.
+-  const { dir: mentionDir, filter: mentionFilter } = parseMentionToken(mention?.query ?? "");
++  //
++  // Typing a name searches instead: once the workspace's file index has
++  // loaded, "@auth" fuzzy-matches every path, like Claude Code's and Codex's
++  // own pickers, and "@src/au" searches all of src. A bare "@" or "@src/"
++  // still browses (see fuzzyMentionScope). Without the index (loading, or a
++  // runner that can't serve it) the browser filters the folder as before.
++  const mentionQuery = mention?.query ?? "";
++  const { dir: mentionDir, filter: mentionFilter } = parseMentionToken(mentionQuery);
++  const fileIndexQuery = useWorkspaceFileIndex(composerSessionId ?? undefined, {
++    enabled: mentionEnabled && mention != null,
++  });
++  const fileIndex = fileIndexQuery.data;
++  const fuzzyIndex = useMemo(
++    () => (fileIndex ? buildFuzzyPathIndex(fileIndex.paths) : null),
++    [fileIndex],
++  );
++  const fuzzyScope = useMemo(
++    () => (fuzzyIndex ? fuzzyMentionScope(fuzzyIndex, mentionQuery) : null),
++    [fuzzyIndex, mentionQuery],
++  );
++  const fuzzyEntries = useMemo<MentionMenuEntry[] | null>(() => {
++    if (!fuzzyIndex || !fuzzyScope) return null;
++    return fuzzyMatchPaths(fuzzyIndex, fuzzyScope.query, fuzzyScope.within).map((m) => ({
++      path: m.path,
++      name: m.path.slice(m.path.lastIndexOf("/") + 1),
++      type: m.isDir ? "directory" : "file",
++      bytes: null,
++      modified_at: null,
++      matchPositions: m.positions,
++    }));
++  }, [fuzzyIndex, fuzzyScope]);
+   // Root listing reuses the gate's useWorkspaceAllFiles; a sub-directory
+   // uses the lazy per-dir hook (disabled — null path — at the root). Both
+   // return files AND directories with a ``type`` discriminator.
+@@ -2919,9 +2952,12 @@ function ComposerImpl(
+   const mentionSourceEntries: WorkspaceFile[] = mentionDir
+     ? (mentionDirQuery.data ?? [])
+     : (workspaceFilesQuery.data?.data ?? []);
+-  // Folders first, filtered by the typed segment, capped (see rankMentionEntries).
+-  const mentionEntries: WorkspaceFile[] =
+-    mentionEnabled && mention ? rankMentionEntries(mentionSourceEntries, mentionFilter) : [];
++  // Fuzzy matches when searching; otherwise folders first, filtered by the
++  // typed segment, capped (see rankMentionEntries).
++  const mentionEntries: MentionMenuEntry[] =
++    mentionEnabled && mention
++      ? (fuzzyEntries ?? rankMentionEntries(mentionSourceEntries, mentionFilter))
++      : [];
+   // True while a mention token is active but its listing hasn't resolved yet:
+   // the cold-boot root fetch, or a sub-directory's first load after drilling
+   // in. During this window ``mentionEntries`` is transiently empty (so the
+@@ -2929,10 +2965,13 @@ function ComposerImpl(
+   // send the half-typed "@dir/" token as a chat message. A *settled*
+   // zero-match (e.g. "@notafile") is deliberately excluded — sending that
+   // literally is the user's intent.
++  // A typed name is also pending while the file index loads and the folder
++  // filter has nothing to show meanwhile.
+   const mentionListingPending =
+     mentionEnabled &&
+     mention != null &&
+-    (mentionDir ? mentionDirQuery.isLoading : workspaceFilesQuery.isLoading);
++    ((mentionDir ? mentionDirQuery.isLoading : workspaceFilesQuery.isLoading) ||
++      (mentionQuery !== "" && fileIndexQuery.isLoading && mentionEntries.length === 0));
+ 
+   // Shared selection/chip/keyboard glue (see useMentionBrowser). The token
+   // state and the data source above stay here; everything stateful is shared
+@@ -3884,7 +3923,8 @@ function ComposerImpl(
+             so "@" isn't silently dead during runner cold-boot or a drill-in. */}
+               {(mentionOpen || mentionListingPending) && (
+                 <FileMentionMenu
+-                  currentDir={mentionDir}
++                  currentDir={fuzzyScope ? fuzzyScope.within : mentionDir}
++                  searching={fuzzyScope != null}
+                   activeIndex={mentionIndex}
+                   entries={mentionEntries}
+                   loading={mentionListingPending}

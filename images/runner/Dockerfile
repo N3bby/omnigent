@@ -82,8 +82,8 @@ RUN set -eu; \
     done; \
     apt-get purge -y --auto-remove patch; \
     rm -rf /var/lib/apt/lists/* /tmp/omnigent-patches; \
-    python -m compileall -q -f "$site/omnigent/harnesses" "$site/omnigent/git_credential_github.py"; \
-    python -c 'import omnigent.harnesses.claude_native.forwarder, omnigent.harnesses.codex_native.forwarder, omnigent.git_credential_github'
+    python -m compileall -q -f "$site/omnigent/harnesses" "$site/omnigent/runner" "$site/omnigent/git_credential_github.py"; \
+    python -c 'import omnigent.harnesses.claude_native.forwarder, omnigent.harnesses.codex_native.forwarder, omnigent.git_credential_github, omnigent.runner.app'
 # The server starts runner Pods with this Python by full path, past mise's
 # shims (images/server/patches/0005-runner-python.patch).
 RUN /opt/venv/bin/python3 -c 'import omnigent.host, yaml'
