@@ -9,9 +9,9 @@ compact rows, user messages in a borderless grey bubble, "Worked" folds
 followed by a hairline, flat code blocks without line numbers, a rounder
 composer with a round send button and the workspace bar beneath it, also
 when messages are queued above it, its labels on one baseline whatever the
-fonts, a terminal mark instead of the mascot on the new-session screen, and
-rounder menus. The other palettes
-are unchanged. Applies after 0010-fast-mode-command-lifecycle.patch.
+fonts and browser, a terminal mark instead of the mascot on the
+new-session screen, and rounder menus. The other palettes are unchanged.
+Applies after 0010-fast-mode-command-lifecycle.patch.
 Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/web/src/codexTheme.css b/web/src/codexTheme.css
@@ -19,7 +19,7 @@ new file mode 100644
 index 0000000..c2895ac
 --- /dev/null
 +++ b/web/src/codexTheme.css
-@@ -0,0 +1,351 @@
+@@ -0,0 +1,358 @@
 +/* Codex palette: the layout and type changes that go beyond colour.
 + *
 + * themePalette.ts sets the colour tokens for `data-theme="codex"`; this file
@@ -304,6 +304,13 @@ index 0000000..c2895ac
 +    padding-block: 0 8px;
 +    align-content: end;
 +    text-box: trim-end text alphabetic;
++  }
++
++  /* `truncate` makes a label a scroll container, and Firefox doesn't line up
++   * the trimmed text inside one: the monospace name still sat 1-2px high.
++   * Clipping keeps the ellipsis without making a scroll container. */
++  [data-theme="codex"] .composer-workspace-surface .truncate:not(:has(*)) {
++    overflow: clip;
 +  }
 +}
 +

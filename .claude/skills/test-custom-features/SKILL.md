@@ -456,9 +456,10 @@ Hand these to the user; they need their own devices or VM access:
     messages in a grey bubble, a line after **Worked**, a round send button and
     the working directory under the composer, a few pixels clear of its
     shadow. The labels in that bar, including the monospace Tailscale name,
-    sit on one baseline. Queue a message while the agent works: it shows
-    above the composer and the bar stays under it. Switch between light and
-    dark mode, then pick **Omnigent** again: the pink look is back.
+    sit on one baseline, in Firefox as well as Chrome. Queue a message while
+    the agent works: it shows above the composer and the bar stays under it.
+    Switch between light and dark mode, then pick **Omnigent** again: the
+    pink look is back.
 12. **A repository's own Git token:** it needs a real token, so it's left to
     you. For a repository the GitHub App isn't installed on, add it in
     Settings → Repository variables, turn on **Git token** and paste a token
