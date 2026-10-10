@@ -9,6 +9,8 @@ session's runner, so you don't have to explain it yourself.
 - They should install tools with [mise](mise-runtimes.md) before `apt-get`.
 - Only the home directory survives an [idle session](idle-sessions.md)
   stopping.
+- Not to save memories. The home directory belongs to one session, so a new
+  session would never see them.
 - Which name and email to commit as, when git has none set. That happens when
   you haven't connected GitHub.
 - To link files as a Markdown link to the absolute path, so you can open them

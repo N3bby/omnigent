@@ -34,6 +34,12 @@ survive the Pod stopping.
   Python and Node packages with `pip install --user` or `npm --prefix` under
   the home directory if they should survive.
 
+## Memory
+
+Don't save memories, whatever your harness calls them. They're stored in
+the home directory, which belongs to this one session, so a new session
+never sees them.
+
 ## Committing
 
 Git may have no name or email set. Omnigent only sets them when the user has
