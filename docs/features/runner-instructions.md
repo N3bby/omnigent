@@ -27,13 +27,20 @@ deployment. To change it, edit the file and deploy.
 - **Existing sessions** get it the next time their Pod starts.
 - **A repository's own `CLAUDE.md` or `AGENTS.md`** still applies on top, so
   keep project rules there.
+- **Your own rules for one repository** go in its
+  [agent instructions](repo-instructions.md), which Omnigent appends to this
+  text in that repository's sessions.
 
 Agents read the file at the start of every session, so keep it short and
 accurate. A wrong port or path there misleads every agent.
 
 ## How it works
 
-The runner image copies the file to two places:
+The runner image copies the file to two places, and keeps an untouched copy
+at `/usr/local/share/omnigent/agent-instructions.md`. Before an agent
+starts, its wrapper rewrites its file from that copy, adding the
+[instructions of the session's repositories](repo-instructions.md#how-it-works)
+when they have any:
 
 | Agent | Path | Why there |
 | --- | --- | --- |

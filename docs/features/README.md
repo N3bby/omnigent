@@ -37,6 +37,8 @@ Getting your repositories into a session, with what they need to build.
 | [GitHub repository picker](github-repo-picker.md) | Choose repositories from a list | Optional setup step |
 | [Repository variables](repo-env.md) | A repository's own environment variables, such as an npm token, in its sessions | Optional setup step |
 | [A repository's own Git token](repo-git-token.md) | Pick, clone and push a repository the GitHub App can't reach, with its own token | Optional setup step |
+| [A repository's own agent instructions](repo-instructions.md) | Your own instructions for a repository's agents, kept out of its `CLAUDE.md` | Optional setup step |
+| [A repository's setup script](repo-setup-script.md) | A script that sets up each new session on a repository before the agent starts | Optional setup step |
 
 ## Reaching a session from your devices
 

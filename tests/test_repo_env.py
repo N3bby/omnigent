@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import base64
-import importlib.machinery
-import importlib.util
 import json
 import os
 import re
@@ -21,15 +19,6 @@ import omnigent_repo_env as repo_env  # noqa: E402
 
 LOADER = ROOT / "images" / "runner" / "repo-env" / "repo-env.sh"
 DNS_LABEL = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-
-
-def load_setup_script():
-    path = ROOT / "scripts" / "setup-repo-env"
-    loader = importlib.machinery.SourceFileLoader("setup_repo_env", str(path))
-    spec = importlib.util.spec_from_loader("setup_repo_env", loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
 
 
 class RepoKeyTests(unittest.TestCase):
@@ -122,6 +111,21 @@ class PodVolumeTests(unittest.TestCase):
 
     def test_no_repositories_add_nothing(self) -> None:
         self.assertEqual(repo_env.pod_volumes([]), ([], []))
+        self.assertIsNone(repo_env.checkouts_env([]))
+
+    def test_the_pod_learns_where_each_repository_is_checked_out(self) -> None:
+        env = repo_env.checkouts_env([
+            ("https://github.com/kunlabora/roadpass.git", "/home/omnigent/workspace/roadpass"),
+            ("not a repository", "/home/omnigent/workspace/nope"),
+            ("git@gitlab.com:group/sub/api.git", "/home/omnigent/workspace/api"),
+        ])
+        self.assertEqual(env, {
+            "name": "OMNIGENT_REPO_CHECKOUTS",
+            "value": (
+                f"{repo_env.secret_name(ROADPASS)}\t{ROADPASS}\t/home/omnigent/workspace/roadpass\n"
+                f"{repo_env.secret_name('gitlab.com/group/sub/api')}\tgitlab.com/group/sub/api\t/home/omnigent/workspace/api"
+            ),
+        })
 
     def test_server_installs_the_module_and_the_patch_uses_it(self) -> None:
         dockerfile = (ROOT / "images" / "server" / "Dockerfile").read_text()
@@ -299,6 +303,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(decoded(self.core), {"TOKEN": "abc\n", "URL": "https://x"})
         self.assertEqual(entry, {
             "repository": ROADPASS, "names": ["TOKEN", "URL"],
+            "instructions": None, "setup_script": None,
             "updated_at": "2026-10-08T12:00:00+00:00", "updated_by": "levi",
         })
 
@@ -336,6 +341,39 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(repo_env.variable_names(self.core, ROADPASS), ["TOKEN"])
         self.assertEqual(repo_env.variable_names(self.core, "github.com/a/b"), [])
 
+    def test_stores_instructions_and_a_setup_script_beside_the_variables(self) -> None:
+        entry = repo_env.save_repository(
+            self.core, ROADPASS, {"TOKEN": "abc"},
+            instructions="Use pnpm.\r\nNever npm.\r\n", setup_script="#!/bin/sh\nmise install\n",
+        )
+        self.assertEqual(decoded(self.core), {
+            "TOKEN": "abc", "agent-instructions.md": "Use pnpm.\nNever npm.\n", "setup.sh": "#!/bin/sh\nmise install\n",
+        })
+        self.assertEqual(entry["names"], ["TOKEN"])
+        self.assertEqual(entry["instructions"], "Use pnpm.\nNever npm.\n")
+        self.assertEqual(entry["setup_script"], "#!/bin/sh\nmise install\n")
+        self.assertEqual(repo_env.variable_names(self.core, ROADPASS), ["TOKEN"])
+        self.assertEqual(repo_env.repository_summary(self.core, ROADPASS),
+                         {"names": ["TOKEN"], "instructions": True, "setup_script": True})
+        self.assertEqual(repo_env.repository_summary(self.core, "github.com/a/b"),
+                         {"names": [], "instructions": False, "setup_script": False})
+        # Left out, they stay; blank or None removes them.
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None})
+        self.assertEqual(set(decoded(self.core)), {"TOKEN", "agent-instructions.md", "setup.sh"})
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None}, instructions="  \n", setup_script=None)
+        self.assertEqual(decoded(self.core), {"TOKEN": "abc"})
+
+    def test_a_repository_can_have_only_instructions_or_a_script(self) -> None:
+        repo_env.save_repository(self.core, ROADPASS, {}, instructions="Rules.")
+        self.assertEqual(decoded(self.core), {"agent-instructions.md": "Rules."})
+        repo_env.save_repository(self.core, ROADPASS, {}, instructions=None, setup_script="make\n")
+        self.assertEqual(decoded(self.core), {"setup.sh": "make\n"})
+        with self.assertRaisesRegex(ValueError, "at least one variable, agent instructions or a setup script"):
+            repo_env.save_repository(self.core, ROADPASS, {}, setup_script="")
+        with self.assertRaisesRegex(ValueError, "at most 64 KB"):
+            repo_env.save_repository(self.core, ROADPASS, {}, instructions="x" * (64 * 1024 + 1))
+        self.assertEqual(decoded(self.core), {"setup.sh": "make\n"})
+
     def test_delete_is_fine_when_nothing_is_there(self) -> None:
         repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc"})
         repo_env.delete_repository(self.core, ROADPASS)
@@ -369,9 +407,12 @@ class LoaderTests(unittest.TestCase):
                 "LITERAL": "$(echo ran) 'q'",
                 "MULTI": "a\nb\n",
                 "bad-name": "skipped",
+                "agent-instructions.md": "not a variable",
+                "setup.sh": "not a variable",
             })
-            out = self.run_loader(Path(tmp), 'printf "%s|%s|[%s]|%s" "$GOVFLANDERS_NPM_TOKEN" "$LITERAL" "$MULTI" "${omnigent_repo_env_file-unset}"')
-        self.assertEqual(out, "abc123|$(echo ran) 'q'|[a\nb\n]|unset")
+            out = self.run_loader(Path(tmp), 'printf "%s|%s|[%s]|%s|" "$GOVFLANDERS_NPM_TOKEN" "$LITERAL" "$MULTI" "${omnigent_repo_env_file-unset}"; env')
+        self.assertTrue(out.startswith("abc123|$(echo ran) 'q'|[a\nb\n]|unset|"))
+        self.assertNotIn("not a variable", out)
 
     def test_nothing_mounted_is_fine(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -388,53 +429,8 @@ class LoaderTests(unittest.TestCase):
                 self.assertLess(load, text.index("exec "))
 
 
-class SetupScriptTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.script = load_setup_script()
-        self.calls: list[tuple[list[str], str | None]] = []
-
-    def fake_run(self, existing: bool):
-        def run(argv, **kwargs):
-            self.calls.append((argv, kwargs.get("input")))
-            stdout = "secret/x\n" if existing and argv[1] == "get" else ""
-            return subprocess.CompletedProcess(argv, 0, stdout=stdout)
-        return run
-
-    def run_script(self, argv: list[str], existing: bool, cwd: str) -> None:
-        with mock.patch.object(sys, "argv", ["setup-repo-env", *argv]), \
-             mock.patch.object(self.script.subprocess, "run", self.fake_run(existing)), \
-             mock.patch.dict(os.environ, {"MISE_ORIGINAL_CWD": cwd}), \
-             mock.patch("sys.stdout"):
-            self.script.main()
-
-    def test_stores_a_file_relative_to_where_mise_was_run(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "roadpass.env").write_text("GOVFLANDERS_NPM_TOKEN=abc123\n")
-            self.run_script(["git@github.com:kunlabora/roadpass.git", "roadpass.env"], existing=False, cwd=tmp)
-        (argv, stdin), = [c for c in self.calls if c[0][1] != "get"]
-        self.assertEqual(argv[1:], ["create", "-f", "-"])
-        self.assertNotIn("abc123", " ".join(argv))
-        secret = json.loads(stdin)
-        self.assertEqual(secret["metadata"]["name"], repo_env.secret_name("github.com/kunlabora/roadpass"))
-        self.assertEqual(secret["metadata"]["namespace"], "omnigent-sandboxes")
-        self.assertEqual(secret["metadata"]["labels"], {"omnigent.dev/repo-env": "true"})
-        self.assertEqual(secret["metadata"]["annotations"], {"omnigent.dev/repository": "github.com/kunlabora/roadpass"})
-        self.assertEqual(secret["stringData"], {"GOVFLANDERS_NPM_TOKEN": "abc123"})
-
-    def test_replaces_an_existing_secret_from_stdin(self) -> None:
-        with mock.patch.object(sys, "stdin") as stdin:
-            stdin.isatty.return_value = False
-            stdin.read.return_value = "A=1\n"
-            self.run_script(["kunlabora/roadpass"], existing=True, cwd=".")
-        self.assertEqual([c[0][1] for c in self.calls], ["get", "replace"])
-
-    def test_delete(self) -> None:
-        self.run_script(["--delete", "kunlabora/roadpass"], existing=True, cwd=".")
-        (argv, _), = self.calls
-        self.assertEqual(argv[1:4], ["delete", "secret", repo_env.secret_name("github.com/kunlabora/roadpass")])
-
-    def test_task_and_credential_status(self) -> None:
-        self.assertIn("run = './scripts/setup-repo-env'", (ROOT / ".mise.toml").read_text())
+class CredentialStatusTests(unittest.TestCase):
+    def test_lists_the_repositories_with_variables(self) -> None:
         self.assertIn("-l omnigent.dev/repo-env", (ROOT / "scripts" / "credential-status").read_text())
 
 

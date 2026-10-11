@@ -92,10 +92,34 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(delete.status_code, 403)
         names = self.call("GET", "/v1/repo-env/names", user="member",
                           params={"repository": "https://github.com/kunlabora/roadpass.git"})
-        self.assertEqual(names.json(), {"repository": ROADPASS, "names": ["TOKEN"]})
+        self.assertEqual(names.json(), {
+            "repository": ROADPASS, "names": ["TOKEN"], "instructions": False, "setup_script": False,
+        })
         self.assertEqual(self.call("GET", "/v1/repo-env/names", user=None, params={"repository": ROADPASS}).status_code, 401)
         bad = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": "nope"})
-        self.assertEqual(bad.json(), {"repository": None, "names": []})
+        self.assertEqual(bad.json(), {"repository": None, "names": [], "instructions": False, "setup_script": False})
+
+    def test_instructions_and_script_come_back_to_admins_only(self) -> None:
+        saved = self.call("PUT", "/v1/repo-env", json={
+            "repository": ROADPASS, "variables": {},
+            "instructions": "Use pnpm.", "setup_script": "mise install\n",
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual((saved.json()["instructions"], saved.json()["setup_script"]), ("Use pnpm.", "mise install\n"))
+        listed = self.call("GET", "/v1/repo-env").json()["data"][0]
+        self.assertEqual((listed["names"], listed["instructions"]), ([], "Use pnpm."))
+        names = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": ROADPASS})
+        self.assertEqual(names.json(), {"repository": ROADPASS, "names": [], "instructions": True, "setup_script": True})
+        self.assertNotIn("pnpm", names.text)
+        # A page that doesn't send them keeps them; null removes one.
+        self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"A": "1"}})
+        self.assertEqual(set(decoded(self.core)), {"A", "agent-instructions.md", "setup.sh"})
+        self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"A": None}, "setup_script": None})
+        self.assertEqual(set(decoded(self.core)), {"A", "agent-instructions.md"})
+        empty = self.call("PUT", "/v1/repo-env", json={
+            "repository": ROADPASS, "variables": {}, "instructions": "", "setup_script": None,
+        })
+        self.assertEqual(empty.status_code, 400)
 
     def test_errors_are_messages_the_page_can_show(self) -> None:
         reserved = self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"PATH": "/x"}})

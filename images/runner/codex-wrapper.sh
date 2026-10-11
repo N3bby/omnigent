@@ -5,6 +5,15 @@ set -eu
 # shellcheck source=SCRIPTDIR/repo-env/repo-env.sh
 . /usr/local/lib/omnigent/repo-env.sh
 
+# The instructions of the repositories this session started with, after the
+# runner's own, once their setup scripts are done or have had their time.
+# Omnigent links each session's CODEX_HOME/AGENTS.md to this file.
+# shellcheck source=SCRIPTDIR/repo-env/agent-instructions.sh
+. /usr/local/lib/omnigent/agent-instructions.sh
+omnigent_wait_for_repo_setup
+omnigent_agent_instructions /opt/codex-home/AGENTS.md \
+    || echo "codex-wrapper: could not add the repository instructions to /opt/codex-home/AGENTS.md" >&2
+
 real_codex=/usr/local/bin/codex-real
 # The image's own Node, not whatever a project's mise config pins: Codex starts
 # in the project directory, where the mise shims come first on PATH.

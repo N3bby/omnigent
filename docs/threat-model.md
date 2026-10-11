@@ -70,6 +70,13 @@ the runner namespace, which limits what a compromised server could do there.
   session on a repository gets its variables. Sessions on other repositories
   don't, because a Pod only mounts the Secrets of the repositories it starts
   with, and runners can't read Secrets themselves.
+- **A repository's setup script runs in everyone's sessions on it.** It runs
+  as root in the session's Pod with the repository's variables, before the
+  agent starts, so it can do whatever the agent could. Only admins can
+  change it, and its text, like the
+  [agent instructions](features/repo-instructions.md), never reaches
+  non-admins. It doesn't get the Pod's launch token. See
+  [a repository's setup script](features/repo-setup-script.md).
 - **A repository's Git token is shared too.** A repository with a
   [`GIT_TOKEN` variable](features/repo-git-token.md)
   is in everyone's repository picker, and anyone who starts a session on it
@@ -80,7 +87,7 @@ the runner namespace, which limits what a compromised server could do there.
   limit that to the repository variables, so the server can also read the
   runner credentials there. It could already hand those to any runner Pod it
   starts, so a compromised server gains little. The page itself never sends a
-  value back to the browser, and only admins can change variables.
+  variable's value back to the browser, and only admins can change variables.
 - **Agent logins are shared.** Every runner uses the same Claude token and
   Codex login, so one compromised runner can use them.
 - **Agents skip permission prompts** by default (`claude_bypass_permissions`

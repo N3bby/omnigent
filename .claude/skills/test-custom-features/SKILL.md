@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, and a repository's own Git token. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -270,8 +270,9 @@ PASS  codex still runs in that project
 PASS  backend at /opt/jetbrains/intellij is executable
 PASS  backend is IntelliJ IDEA Ultimate 263.6259.32
 == Agents know the runner
-PASS  /etc/claude-code/CLAUDE.md matches images/runner/agent-instructions.md
-PASS  /opt/codex-home/AGENTS.md matches images/runner/agent-instructions.md
+PASS  /usr/local/share/omnigent/agent-instructions.md matches images/runner/agent-instructions.md
+PASS  /etc/claude-code/CLAUDE.md starts with images/runner/agent-instructions.md
+PASS  /opt/codex-home/AGENTS.md starts with images/runner/agent-instructions.md
 SKIP  a Codex session's CODEX_HOME has the AGENTS.md (no Codex session in this Pod)
 == Repository variables
 PASS  loader matches images/runner/repo-env/repo-env.sh
@@ -279,6 +280,14 @@ PASS  login shells load repository variables
 PASS  claude wrapper loads repository variables
 PASS  codex wrapper loads repository variables
 SKIP  the agent has this session's repository variables (none stored for this session's repository)
+== Repository instructions and setup scripts
+PASS  setup service matches images/runner/repo-env/repo-setup.sh
+PASS  Pod start runs the setup scripts
+PASS  instructions writer matches images/runner/repo-env/agent-instructions.sh
+PASS  claude wrapper adds the repository instructions
+PASS  codex wrapper adds the repository instructions
+PASS  the Pod knows where its repositories are checked out: github.com/n3bby/omnigent
+SKIP  the agent has this session's repository instructions and setup script (none stored for this session's repositories)
 
 runner checks: passed
 ```
@@ -307,8 +316,11 @@ What a failure usually means:
 | `the Pod starts with Omnigent's Python` | `images/server/patches/0005-runner-python.patch` was dropped, or this session's Pod started before the deploy; `PID 1 is python3` means a Python pinned for the home directory (`mise use -g python@…`) stops the Pod from starting |
 | `git's GitHub helper runs Omnigent's Python` | `images/runner/patches/0002-git-helper-python.patch` was dropped, or this session predates the deploy; `runs python3` means git uses whichever Python mise picks, so pushes fail in projects that pin Python |
 | `… is told to use mise` | `images/runner/agent-instructions.md` lost its mise advice, or isn't installed; see the agent-instructions rows |
-| `… matches images/runner/agent-instructions.md` | the file changed in this checkout after the image was built, so deploy it, or this session started before the deploy; `missing` means `images/runner/Dockerfile` no longer copies it |
+| `… matches images/runner/agent-instructions.md`, `… starts with images/runner/agent-instructions.md` | the file changed in this checkout after the image was built, so deploy it, or this session started before the deploy; `missing` means `images/runner/Dockerfile` no longer copies it |
 | repository variables loader or wrappers | `images/runner/Dockerfile` no longer installs `images/runner/repo-env/repo-env.sh`, or a wrapper lost its `. /usr/local/lib/omnigent/repo-env.sh` line |
+| setup service, Pod start, instructions writer, `… adds the repository instructions` | `images/runner/Dockerfile` no longer installs a file from `images/runner/repo-env/`, or a wrapper lost its `omnigent_agent_instructions` line |
+| `the Pod knows where its repositories are checked out` (SKIP in a session with a repository) | `images/server/patches/0012-repo-checkouts.patch` was dropped, so the Pod has no `OMNIGENT_REPO_CHECKOUTS`, or this session predates the deploy |
+| `Claude Code has the instructions of …`, `the setup script of … ran` | the agent started before the Secret was stored, or `omnigent-repo-setup` didn't start: see `/run/omnigent-repo-setup.log` |
 | `the agent has this session's repository variables` | the Secret is mounted, but the agent didn't load it: the agent started before the Secret was stored, or the wrapper isn't the `claude`/`codex` Omnigent runs |
 | `a Codex session's CODEX_HOME has the AGENTS.md` | upstream stopped linking `AGENTS.md` into each session's private `CODEX_HOME` (`_CODEX_HOME_GLOBAL_INSTRUCTION_FILES` in `omnigent/inner/codex_executor.py`) |
 
@@ -432,14 +444,7 @@ Hand these to the user; they need their own devices or VM access:
    published-port lines as `PASS`.
 6. **Model picker on a fresh install:** empty until the first session has run,
    then filled.
-7. **Repository variables:** pick a repository with no variables yet
-   (`mise run credential-status` lists those that have them), because storing
-   replaces them all. From your machine, run `echo FEATURE_CHECK=ok | mise run
-   setup-repo-env <owner/repo>` and start a session on that repository: its
-   agent prints `ok` for `echo $FEATURE_CHECK`, and a session on another
-   repository prints nothing. Then `mise run setup-repo-env --delete
-   <owner/repo>`.
-8. **Repository variables page:** in Settings → Repository variables, add a
+7. **Repository variables page:** in Settings → Repository variables, add a
    repository with no variables yet and `FEATURE_CHECK=page`. Picking it in
    a new session shows **1 variable**, and the session's agent prints `page`.
    Edit it, leave the value blank and save: the agent of a new session still
@@ -448,21 +453,21 @@ Hand these to the user; they need their own devices or VM access:
    the page fits the screen without sideways scrolling, a long repository
    wraps instead of being cut off, and editing shows each name above its
    value.
-9. **Repository picker on a phone:** in a new session, open the repository
+8. **Repository picker on a phone:** in a new session, open the repository
    chip, then **Choose a repository…**. The whole picker, search field
    included, is on screen and the keyboard stays closed. Tapping the search
    field opens the keyboard, and typing filters the list.
-10. **Fast mode:** it changes how fast and how expensively the agent runs, so
-    it's left to you. In a Claude session, send `/fast`. The chat shows the
-    command with `Fast mode ON`, or why fast mode isn't available for the
-    model, and a lightning bolt appears left of the model selector; hovering
-    it says `Fast mode is on. Send /fast to turn it off.` Send `/fast off`:
-    the bolt goes. In a Codex session, `/fast` and `/fast off` add and remove
-    the bolt the same way, without a reply. On both harnesses, an idle chat
-    stays idle after the command, with no stuck “Pondering…” indicator or
-    pending user bubble. Repeat during a response: it continues normally,
-    and `/fast` bypasses the message queue.
-11. **Codex theme:** in Settings → Appearance, pick **Codex** under Color
+9. **Fast mode:** it changes how fast and how expensively the agent runs, so
+   it's left to you. In a Claude session, send `/fast`. The chat shows the
+   command with `Fast mode ON`, or why fast mode isn't available for the
+   model, and a lightning bolt appears left of the model selector; hovering
+   it says `Fast mode is on. Send /fast to turn it off.` Send `/fast off`:
+   the bolt goes. In a Codex session, `/fast` and `/fast off` add and remove
+   the bolt the same way, without a reply. On both harnesses, an idle chat
+   stays idle after the command, with no stuck “Pondering…” indicator or
+   pending user bubble. Repeat during a response: it continues normally,
+   and `/fast` bypasses the message queue.
+10. **Codex theme:** in Settings → Appearance, pick **Codex** under Color
     theme. The sidebar turns flat grey without pink, and a session shows your
     messages in a grey bubble, a line after **Worked**, a round send button and
     the working directory under the composer, a few pixels clear of its
@@ -473,7 +478,7 @@ Hand these to the user; they need their own devices or VM access:
     the agent works: it shows above the composer and the bar stays under it.
     Switch between light and dark mode, then pick **Omnigent** again: the
     pink look is back.
-12. **A repository's own Git token:** it needs a real token, so it's left to
+11. **A repository's own Git token:** it needs a real token, so it's left to
     you. For a repository the GitHub App isn't installed on, add it in
     Settings → Repository variables, turn on **Git token** and paste a token
     for it. The card lists **Git token** apart from the variables. After a
@@ -482,6 +487,20 @@ Hand these to the user; they need their own devices or VM access:
     `git fetch` and `git push --dry-run` in the checkout, while `.git/config`
     holds no token. Then edit it and turn **Git token** off: the repository
     leaves the picker.
+
+12. **A repository's agent instructions and setup script:** in Settings →
+    Repository variables, add a repository with no variables yet, turn on
+    **Agent instructions** with `When asked for the feature check word, answer
+    "pelican".` and **Setup script** with `echo feature-check > /tmp/feature-check-setup; sleep 5`.
+    The card lists **instructions · setup script** with their first lines;
+    after a reload, editing shows the same text back. The new-session form
+    shows two icons next to the repository, and its popover names both. In a
+    new session on it, ask the agent for the feature check word: `pelican`.
+    Ask it how the setup script went: it finished, with exit status 0, and
+    `/tmp/feature-check-setup` holds `feature-check`. Both fields are syntax
+    highlighted, and the colours stay on the text as you type and scroll. On a
+    phone, the editor fits the screen and the script's lines don't wrap. Then
+    remove the repository.
 
 ## 7. Clean up
 

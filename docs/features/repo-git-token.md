@@ -37,10 +37,6 @@ The repository's card then lists **Git token** above its variables:
 
 ![Settings → Repository variables, with a Git token and two variables for kunlabora/roadpass](../images/repo-token-settings.webp)
 
-From the command line, the token is the variable `GIT_TOKEN`:
-`mise run setup-repo-env kunlabora/roadpass` with a `GIT_TOKEN=…` line works
-too. See [repository variables](repo-env.md#from-the-command-line).
-
 Start a new session and pick the repository.
 
 ## Good to know

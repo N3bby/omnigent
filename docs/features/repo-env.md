@@ -35,33 +35,8 @@ being cut off, and each variable's name sits above its value.
   <img src="../images/repo-env-mobile-add.webp" width="300" alt="Adding a repository on a phone: each variable's name above its value">
 </p>
 
-### From the command line
-
-The same variables can be set from your machine. The page and the command
-store them in the same place, so you can use either.
-
-```bash
-mise run setup-repo-env kunlabora/roadpass ../roadpass-env/roadpass.env
-```
-
-Or leave out the file and paste `NAME=value` lines. What you paste isn't
-shown, and Ctrl-D ends it.
-
-```bash
-mise run setup-repo-env kunlabora/roadpass
-```
-
-- **The repository** can be `owner/repo` on github.com, or any clone URL.
-  `git@github.com:Kunlabora/RoadPass.git` and
-  `https://github.com/kunlabora/roadpass` are the same repository.
-- **The file** has one `NAME=value` per line, like a `.env` file. Comments,
-  blank lines, `export` and quotes around a value are fine. Nothing is
-  expanded: `$HOME` stays `$HOME`.
-- **Running it again replaces** all the repository's variables with the new
-  ones, including any added on the page.
-- **To remove them:** `mise run setup-repo-env --delete kunlabora/roadpass`.
-- **To see which repositories have variables:** `mise run credential-status`.
-  It lists names, never values.
+To see which repositories have variables from your machine, run
+`mise run credential-status`. It lists names, never values.
 
 ## Using them
 
@@ -91,6 +66,12 @@ file doesn't exist, and mise skips it, so the session's variables stay.
 
 Turn on its **Git token**: see
 [a repository's own Git token](repo-git-token.md).
+
+## Instructions and a setup script
+
+The same page gives a repository your own
+[agent instructions](repo-instructions.md) and a
+[setup script](repo-setup-script.md) that runs before the agent starts.
 
 ## Good to know
 
@@ -136,8 +117,8 @@ There's nothing to turn off. A repository without variables starts as before.
 - **The name:** `images/server/omnigent_repo_env.py` turns any way of
   writing the repository into `host/owner/repo` in lower case. The name is a
   readable part plus a hash of that, so `my_repo` and `my.repo` don't share
-  one. `scripts/setup-repo-env`, the Pod and the page use this same file,
-  and the page repeats its rules in TypeScript to preview the match.
+  one. The server and the Pod use this same file, and the page repeats its
+  rules in TypeScript to preview the match.
 - **The Pod** (`images/server/patches/0004-repo-env.patch`): when the
   server creates a runner Pod, it mounts the Secret for each of the session's
   repositories at `/run/omnigent/repo-env/<Secret name>/`, on the host
@@ -145,6 +126,11 @@ There's nothing to turn off. A repository without variables starts as before.
   mounts nothing. A wake re-creates the Pod with the same repositories.
 - **`GIT_TOKEN`**: see [how it works](repo-git-token.md#how-it-works) on
   its own page.
+- **`agent-instructions.md` and `setup.sh`**: the same Secret holds the
+  repository's [agent instructions](repo-instructions.md#how-it-works) and
+  [setup script](repo-setup-script.md#how-it-works) under these keys. They
+  aren't variable names, so the loader skips them, and listing leaves them
+  out of `names`.
 - **The agent** (`images/runner/repo-env/repo-env.sh`): the `claude` and
   `codex` wrappers source it before starting the real CLI, and it exports each
   mounted file as a variable. It's also `/etc/profile.d/omnigent-repo-env.sh`,

@@ -50,7 +50,15 @@ COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
 COPY mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh
 COPY repo-env/repo-env.sh /usr/local/lib/omnigent/repo-env.sh
 COPY repo-env/repo-env.sh /etc/profile.d/omnigent-repo-env.sh
+# A repository's setup script runs at Pod start; its instructions are added
+# by the agent wrappers (docs/features/repo-setup-script.md, repo-instructions.md).
+COPY --chmod=0755 repo-env/repo-setup.sh /usr/local/bin/omnigent-repo-setup
+COPY repo-env/repo-setup-profile.sh /etc/profile.d/omnigent-repo-setup.sh
+COPY repo-env/agent-instructions.sh /usr/local/lib/omnigent/agent-instructions.sh
 # Claude Code's managed instructions; Codex gets the same file as AGENTS.md.
+# The wrappers rewrite both from the pristine copy, adding the repositories'
+# instructions.
+COPY --chmod=0644 agent-instructions.md /usr/local/share/omnigent/agent-instructions.md
 COPY --chmod=0644 agent-instructions.md /etc/claude-code/CLAUDE.md
 
 WORKDIR /opt/omnigent-agent-clis

@@ -2,8 +2,10 @@
 
 Admins list, save and remove repositories' variables. Values only go from the
 browser to the Secret, never back: listing returns names, and saving a name
-without a value keeps the value it has. Anyone signed in can see the names of
-a repository's variables, which the new-session form shows next to the
+without a value keeps the value it has. A repository's agent instructions and
+setup script aren't secret, so admins read them back to edit them. Anyone
+signed in can see the names of a repository's variables, and whether it has
+instructions or a script, which the new-session form shows next to the
 repository.
 
 A repository with a ``GIT_TOKEN`` variable is also in the repository picker,
@@ -13,8 +15,8 @@ token. ``0010-repo-git-token.patch`` calls :func:`add_token_repositories` and
 
 The server image installs this file as the top-level
 ``omnigent_repo_env_api`` module, and ``0006-repo-env-routes.patch`` mounts
-the router under ``/v1``. The Secrets are the ones ``scripts/setup-repo-env``
-writes, through the functions in ``omnigent_repo_env``.
+the router under ``/v1``. It reads and writes the Secrets through the
+functions in ``omnigent_repo_env``.
 """
 
 from __future__ import annotations
@@ -44,11 +46,15 @@ class SaveRepositoryRequest(BaseModel):
     """Body for ``PUT /v1/repo-env``.
 
     ``variables`` maps each name to its new value, or to ``null`` to keep the
-    current one. Names left out are removed.
+    current one. Names left out are removed. ``instructions`` and
+    ``setup_script`` are the whole text, or ``null`` or blank to remove it;
+    left out, they stay as they are.
     """
 
     repository: str
     variables: dict[str, str | None]
+    instructions: str | None = None
+    setup_script: str | None = None
 
 
 @functools.cache
@@ -147,22 +153,33 @@ def create_repo_env_router(
 
     @router.get("/repo-env/names")
     async def variable_names(request: Request, repository: str) -> dict[str, Any]:
-        """The names of one repository's variables, for anyone signed in."""
+        """
+        The names of one repository's variables, and whether it has agent
+        instructions or a setup script, for anyone signed in. Never the text.
+        """
         await signed_in(request)
         try:
             key = repo_env.repo_key(repository)
         except ValueError:
-            return {"repository": None, "names": []}
-        names = await _kubernetes(lambda: repo_env.variable_names(core(), key))
-        return {"repository": key, "names": names}
+            return {"repository": None, "names": [], "instructions": False, "setup_script": False}
+        summary = await _kubernetes(lambda: repo_env.repository_summary(core(), key))
+        return {"repository": key, **summary}
 
     @router.put("/repo-env")
     async def save_repository(request: Request, body: SaveRepositoryRequest) -> dict[str, Any]:
         """Store a repository's variables, replacing what it had (admin only)."""
         user_id = await admin(request)
         key = _key(body.repository)
+        # A page from before the instructions and the script keeps them.
+        sent = body.model_fields_set
+        texts = {
+            field: getattr(body, field) if field in sent else repo_env.KEEP
+            for field in ("instructions", "setup_script")
+        }
         return await _kubernetes(
-            lambda: repo_env.save_repository(core(), key, body.variables, updated_by=user_id)
+            lambda: repo_env.save_repository(
+                core(), key, body.variables, updated_by=user_id, **texts
+            )
         )
 
     @router.delete("/repo-env")

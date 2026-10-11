@@ -1,0 +1,1366 @@
+Edit a repository's agent instructions and setup script on Settings → Repository variables.
+
+A repository's own agent instructions, which the runner appends to its own,
+and its setup script, which runs in the checkout before the agent starts, are
+stored with its variables (omnigent_repo_env). The editor has a switch and a
+text field for each, under the Git token and the variables; unlike values, the
+text comes back to be edited, and switching a stored one off removes it on
+save. The card lists them in its summary and shows their first lines. The
+new-session badge adds an icon for each, and its popover says what they do.
+"Add variable" and "Paste .env" move under the variables, and Cancel and Save
+to the bottom of the editor. On a phone the fields take the full width, and
+the script scrolls sideways instead of wrapping.
+Both fields are highlighted with Shiki, which the chat's code blocks already
+load lazily (HighlightedTextarea): the instructions as Markdown, the script as
+shell or as the language its #! line names. The field stays a native
+textarea with transparent text over a highlighted copy, so typing, selection
+and phone keyboards work as before.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0014.
+
+diff --git a/web/src/components/HighlightedTextarea.test.tsx b/web/src/components/HighlightedTextarea.test.tsx
+new file mode 100644
+index 0000000..1d0cc35
+--- /dev/null
++++ b/web/src/components/HighlightedTextarea.test.tsx
+@@ -0,0 +1,66 @@
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { useState } from "react";
++import { afterEach, describe, expect, it } from "vitest";
++import { HighlightedTextarea, type HighlightLanguage, scriptLanguage } from "./HighlightedTextarea";
++
++afterEach(cleanup);
++
++function Editor({ initial, language }: { initial: string; language: HighlightLanguage }) {
++  const [value, setValue] = useState(initial);
++  return (
++    <HighlightedTextarea
++      value={value}
++      language={language}
++      onChange={(e) => setValue(e.target.value)}
++      aria-label="Editor"
++    />
++  );
++}
++
++describe("scriptLanguage", () => {
++  it("follows the #! line, and is shell without one", () => {
++    expect(scriptLanguage("mise install\n")).toBe("shellscript");
++    expect(scriptLanguage("#!/bin/bash\nset -e\n")).toBe("shellscript");
++    expect(scriptLanguage("#!/usr/bin/env bash\n")).toBe("shellscript");
++    expect(scriptLanguage("#!/usr/bin/env python3\n")).toBe("python");
++    expect(scriptLanguage("#!/usr/bin/python3.13\n")).toBe("python");
++    expect(scriptLanguage("#!/usr/bin/env -S node --no-warnings\n")).toBe("javascript");
++    expect(scriptLanguage("#!/usr/bin/env ruby\n")).toBe("ruby");
++    expect(scriptLanguage("#!/usr/bin/env lua\n")).toBe("text");
++  });
++});
++
++describe("HighlightedTextarea", () => {
++  it("highlights a copy of the text under the textarea, and keeps it in step", async () => {
++    const { container } = render(<Editor initial={"echo hi # greet\n"} language="shellscript" />);
++    const textarea = screen.getByRole("textbox", { name: "Editor" });
++    const copy = container.querySelector("pre")!;
++    expect(copy).toHaveAttribute("aria-hidden");
++    // Plain until Shiki has loaded, then coloured spans of the same text.
++    expect(copy.textContent).toBe("echo hi # greet\n ");
++    await waitFor(() => expect(container.querySelector("[data-highlighted]")).not.toBeNull(), {
++      timeout: 10_000,
++    });
++    expect(copy.textContent).toBe("echo hi # greet\n ");
++    const comment = [...copy.querySelectorAll("span[style]")].find((s) =>
++      s.textContent?.includes("# greet"),
++    ) as HTMLElement;
++    expect(comment.style.getPropertyValue("--shiki-dark")).toMatch(/^#/);
++
++    fireEvent.change(textarea, { target: { value: "ls -la" } });
++    expect(copy.textContent).toBe("ls -la");
++  });
++
++  it("scrolls the copy with the textarea, and doesn't wrap code when asked", () => {
++    const { container } = render(
++      <HighlightedTextarea value="a" language="text" wrap={false} onChange={() => {}} />,
++    );
++    const textarea = container.querySelector("textarea")!;
++    const copy = container.querySelector("pre")!;
++    expect(textarea).toHaveAttribute("wrap", "off");
++    textarea.scrollTop = 40;
++    textarea.scrollLeft = 25;
++    fireEvent.scroll(textarea);
++    expect([copy.scrollTop, copy.scrollLeft]).toEqual([40, 25]);
++  });
++});
+diff --git a/web/src/components/HighlightedTextarea.tsx b/web/src/components/HighlightedTextarea.tsx
+new file mode 100644
+index 0000000..cbe281d
+--- /dev/null
++++ b/web/src/components/HighlightedTextarea.tsx
+@@ -0,0 +1,188 @@
++/**
++ * A textarea with syntax highlighting, for the repository variables page's
++ * agent instructions and setup script (added by this deployment).
++ *
++ * It stays a native textarea, so typing, selection, the keyboard and
++ * autocorrect work as anywhere else, on phones too. Its own text is
++ * transparent; a copy of the text highlighted by Shiki sits under it, in the
++ * same font, padding and wrapping, and follows its scrolling. Until Shiki has
++ * loaded (lazily, like the chat's code blocks), the copy is plain text.
++ */
++
++import {
++  type ComponentProps,
++  type CSSProperties,
++  useEffect,
++  useMemo,
++  useRef,
++  useState,
++} from "react";
++import type { BundledLanguage, BundledTheme, HighlighterGeneric, ThemedToken } from "shiki";
++import { Textarea } from "@/components/ui/textarea";
++import { cn } from "@/lib/utils";
++
++export type HighlightLanguage = BundledLanguage | "text";
++
++const THEMES = { light: "github-light", dark: "github-dark" } as const;
++
++// Interpreters a setup script's #! line may name, and their Shiki language.
++const INTERPRETERS: [RegExp, BundledLanguage][] = [
++  [/^(ba|z|k|da)?sh$/, "shellscript"],
++  [/^python[0-9.]*$/, "python"],
++  [/^(node|deno|bun)$/, "javascript"],
++  [/^ruby$/, "ruby"],
++  [/^perl$/, "perl"],
++];
++
++/**
++ * The language of a script: from its ``#!`` line, or shell without one, as
++ * the runner runs it with bash.
++ *
++ * @example scriptLanguage("#!/usr/bin/env python3\n…") // "python"
++ */
++export function scriptLanguage(script: string): HighlightLanguage {
++  const shebang = /^#!\s*(\S+)(?:\s+(?:-\S+\s+)*(\S+))?/.exec(script);
++  if (!shebang) return "shellscript";
++  // "#!/usr/bin/env python3" names the interpreter after env.
++  const program = shebang[1].endsWith("/env") ? shebang[2] : shebang[1];
++  const name = program?.split("/").pop() ?? "";
++  return INTERPRETERS.find(([pattern]) => pattern.test(name))?.[1] ?? "text";
++}
++
++let highlighter: Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> | null = null;
++
++/** One Shiki highlighter for every editor, with each language loaded on first use. */
++async function loadLanguage(
++  language: BundledLanguage,
++): Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> {
++  highlighter ??= import("shiki").then(({ createHighlighter }) =>
++    createHighlighter({ themes: [THEMES.light, THEMES.dark], langs: [] }),
++  );
++  const loaded = await highlighter;
++  if (!loaded.getLoadedLanguages().includes(language)) await loaded.loadLanguage(language);
++  return loaded;
++}
++
++/** The highlighter once ``language`` is ready, or null until then (or for plain text). */
++function useHighlighter(language: HighlightLanguage) {
++  const [ready, setReady] = useState<{
++    language: HighlightLanguage;
++    highlighter: HighlighterGeneric<BundledLanguage, BundledTheme>;
++  } | null>(null);
++  useEffect(() => {
++    if (language === "text") return;
++    let current = true;
++    loadLanguage(language)
++      .then((loaded) => {
++        if (current) setReady({ language, highlighter: loaded });
++      })
++      // Without highlighting the text is still there, in the plain copy.
++      .catch((error: unknown) => console.warn("Couldn't load syntax highlighting:", error));
++    return () => {
++      current = false;
++    };
++  }, [language]);
++  return ready?.language === language ? ready.highlighter : null;
++}
++
++/** The text's lines as highlighted tokens, each keyed by where it starts. */
++function tokenize(
++  loaded: HighlighterGeneric<BundledLanguage, BundledTheme> | null,
++  text: string,
++  language: HighlightLanguage,
++): { start: number; tokens: ThemedToken[] }[] | null {
++  if (!loaded || language === "text") return null;
++  let tokens: ThemedToken[][];
++  try {
++    tokens = loaded.codeToTokens(text, {
++      lang: language,
++      themes: THEMES,
++      defaultColor: false,
++    }).tokens;
++  } catch {
++    return null;
++  }
++  let start = 0;
++  return text.split("\n").map((line, i) => {
++    const keyed = { start, tokens: tokens[i] ?? [] };
++    start += line.length + 1;
++    return keyed;
++  });
++}
++
++export function HighlightedTextarea({
++  value,
++  language,
++  wrap = true,
++  className,
++  onScroll,
++  ...props
++}: Omit<ComponentProps<typeof Textarea>, "value" | "wrap"> & {
++  value: string;
++  language: HighlightLanguage;
++  /** Soft-wrap long lines; off, they scroll sideways, as for code. */
++  wrap?: boolean;
++}) {
++  const copy = useRef<HTMLPreElement>(null);
++  const loaded = useHighlighter(language);
++  const lines = useMemo(() => tokenize(loaded, value, language), [loaded, value, language]);
++  // Shared by the textarea and the copy, so their text lines up exactly. The
++  // copy's own styles come after the caller's, which mustn't undo them.
++  const layout = cn(
++    "m-0 border px-2.5 py-2 text-ui md:text-ui [font-family:inherit] [scrollbar-gutter:stable]",
++    wrap ? "whitespace-pre-wrap wrap-break-word" : "whitespace-pre",
++  );
++  return (
++    <div
++      className="relative rounded-lg bg-transparent dark:bg-input/30"
++      data-language={language}
++      data-highlighted={lines ? "" : undefined}
++    >
++      <pre
++        ref={copy}
++        aria-hidden
++        className={cn(
++          layout,
++          className,
++          "pointer-events-none absolute inset-0 overflow-hidden border-transparent text-foreground",
++        )}
++      >
++        {lines
++          ? lines.map((line, i) => (
++              <span key={line.start}>
++                {line.tokens.map((token) => (
++                  <span
++                    key={token.offset}
++                    style={token.htmlStyle as CSSProperties}
++                    className="text-[var(--shiki-light)] dark:text-[var(--shiki-dark)]"
++                  >
++                    {token.content}
++                  </span>
++                ))}
++                {i < lines.length - 1 && "\n"}
++              </span>
++            ))
++          : value}
++        {/* A last empty line still takes its height, as in the textarea. */}
++        {value.endsWith("\n") && " "}
++      </pre>
++      <Textarea
++        value={value}
++        wrap={wrap ? "soft" : "off"}
++        onScroll={(e) => {
++          if (copy.current) {
++            copy.current.scrollTop = e.currentTarget.scrollTop;
++            copy.current.scrollLeft = e.currentTarget.scrollLeft;
++          }
++          onScroll?.(e);
++        }}
++        className={cn(
++          layout,
++          "relative bg-transparent text-transparent caret-foreground selection:bg-primary/25 selection:text-transparent dark:bg-transparent",
++          className,
++        )}
++        {...props}
++      />
++    </div>
++  );
++}
+diff --git a/web/src/components/RepoEnvBadge.test.tsx b/web/src/components/RepoEnvBadge.test.tsx
+index e62b78f..532c14f 100644
+--- a/web/src/components/RepoEnvBadge.test.tsx
++++ b/web/src/components/RepoEnvBadge.test.tsx
+@@ -6,9 +6,16 @@ import * as identity from "@/lib/identity";
+ 
+ vi.mock("@/lib/identity", () => ({ authenticatedFetch: vi.fn() }));
+ 
+-function renderBadge(url: string, names: string[]) {
++function renderBadge(url: string, names: string[], instructions = false, setupScript = false) {
+   vi.mocked(identity.authenticatedFetch).mockResolvedValue(
+-    new Response(JSON.stringify({ repository: "github.com/kunlabora/roadpass", names })),
++    new Response(
++      JSON.stringify({
++        repository: "github.com/kunlabora/roadpass",
++        names,
++        instructions,
++        setup_script: setupScript,
++      }),
++    ),
+   );
+   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+   return render(
+@@ -33,6 +40,26 @@ describe("RepoEnvBadge", () => {
+     );
+   });
+ 
++  it("mentions the instructions and setup script, with or without variables", async () => {
++    renderBadge("https://github.com/kunlabora/roadpass.git", ["TOKEN"], true, true);
++    fireEvent.click(
++      await screen.findByRole("button", {
++        name: "1 variable, agent instructions and a setup script for this repository",
++      }),
++    );
++    expect(await screen.findByText("Agent instructions")).toBeInTheDocument();
++    expect(
++      screen.getByText("Runs in the checkout once, before the agent starts."),
++    ).toBeInTheDocument();
++    cleanup();
++    renderBadge("https://github.com/kunlabora/roadpass.git", [], false, true);
++    fireEvent.click(
++      await screen.findByRole("button", { name: "a setup script for this repository" }),
++    );
++    expect(await screen.findByText("Setup script")).toBeInTheDocument();
++    expect(screen.queryByText("The agent gets these in its environment:")).not.toBeInTheDocument();
++  });
++
+   it("shows nothing without variables, and asks nothing for a non-repository", async () => {
+     const { container } = renderBadge("https://github.com/a/b", []);
+     await vi.waitFor(() => expect(identity.authenticatedFetch).toHaveBeenCalled());
+diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
+index 12239ea..8669d7f 100644
+--- a/web/src/components/RepoEnvBadge.tsx
++++ b/web/src/components/RepoEnvBadge.tsx
+@@ -1,50 +1,107 @@
+ /**
+  * "2 variables" next to a repository in the new-session form, when the
+- * repository has variables (added by this deployment). Clicking it lists
+- * their names; values never reach the browser. Renders nothing for a
+- * repository without variables, or while the names load.
++ * repository has variables (added by this deployment), with an icon each for
++ * its agent instructions and setup script. Clicking it lists the variables'
++ * names and what the instructions and script do; values and text never reach
++ * the browser. Renders nothing for a repository without any, or while they
++ * load.
+  */
+ 
+-import { VariableIcon } from "lucide-react";
++import type { ReactNode } from "react";
++import { ScrollTextIcon, SquareTerminalIcon, VariableIcon } from "lucide-react";
+ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+ import { useRepoEnvNames } from "@/hooks/useRepoEnv";
+ 
++/** ``["2 variables", "agent instructions"]`` → ``"2 variables and agent instructions"``. */
++function joinAnd(parts: string[]): string {
++  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
++}
++
+ export function RepoEnvBadge({ url }: { url: string }) {
+-  const { data: names } = useRepoEnvNames(url);
+-  if (!names?.length) return null;
++  const { data } = useRepoEnvNames(url);
++  if (!data) return null;
++  const { names, instructions, setup_script: setupScript } = data;
++  if (!names.length && !instructions && !setupScript) return null;
+   const label = `${names.length} variable${names.length === 1 ? "" : "s"}`;
++  const parts = [
++    ...(names.length ? [label] : []),
++    ...(instructions ? ["agent instructions"] : []),
++    ...(setupScript ? ["a setup script"] : []),
++  ];
+   return (
+     <Popover>
+       <PopoverTrigger asChild>
+         <button
+           type="button"
+           className="flex shrink-0 items-center justify-center gap-1 rounded-sm px-1 text-sm text-muted-foreground transition-colors hover:text-foreground max-md:pointer-coarse:min-h-9 max-md:pointer-coarse:min-w-9"
+-          aria-label={`${label} for this repository`}
++          aria-label={`${joinAnd(parts)} for this repository`}
+           data-testid="repo-env-badge"
+         >
+-          <VariableIcon className="size-3.5" />
+-          {/* Phones show only the count, leaving the row's room to the
+-          repository's name. */}
+-          <span className="max-sm:hidden">{label}</span>
+-          <span className="sm:hidden">{names.length}</span>
++          {names.length > 0 && (
++            <>
++              <VariableIcon className="size-3.5" />
++              {/* Phones show only the count, leaving the row's room to the
++              repository's name. */}
++              <span className="max-sm:hidden">{label}</span>
++              <span className="sm:hidden">{names.length}</span>
++            </>
++          )}
++          {instructions && <ScrollTextIcon className="size-3.5" />}
++          {setupScript && <SquareTerminalIcon className="size-3.5" />}
+         </button>
+       </PopoverTrigger>
+       <PopoverContent
+         align="end"
+         collisionPadding={8}
+-        className="w-64 max-w-[calc(100vw-1rem)] p-3"
++        className="flex w-72 max-w-[calc(100vw-1rem)] flex-col gap-3 p-3"
+       >
+-        <p className="mb-2 text-sm text-muted-foreground">
+-          The agent gets these in its environment:
+-        </p>
+-        <ul className="flex flex-col gap-0.5">
+-          {names.map((name) => (
+-            <li key={name} className="truncate font-mono text-sm">
+-              {name}
+-            </li>
+-          ))}
+-        </ul>
++        {names.length > 0 && (
++          <div>
++            <p className="mb-2 text-sm text-muted-foreground">
++              The agent gets these in its environment:
++            </p>
++            <ul className="flex flex-col gap-0.5">
++              {names.map((name) => (
++                <li key={name} className="truncate font-mono text-sm">
++                  {name}
++                </li>
++              ))}
++            </ul>
++          </div>
++        )}
++        {instructions && (
++          <BadgeItem icon={<ScrollTextIcon className="ui-icon" />} title="Agent instructions">
++            Added to the end of the agent's instructions.
++          </BadgeItem>
++        )}
++        {setupScript && (
++          <BadgeItem icon={<SquareTerminalIcon className="ui-icon" />} title="Setup script">
++            Runs in the checkout once, before the agent starts.
++          </BadgeItem>
++        )}
+       </PopoverContent>
+     </Popover>
+   );
+ }
++
++function BadgeItem({
++  icon,
++  title,
++  children,
++}: {
++  icon: ReactNode;
++  title: string;
++  children: ReactNode;
++}) {
++  return (
++    <div className="flex gap-2">
++      <span className="flex h-[1lh] shrink-0 items-center text-sm text-muted-foreground">
++        {icon}
++      </span>
++      <div className="min-w-0 text-sm">
++        <p className="font-medium">{title}</p>
++        <p className="text-muted-foreground">{children}</p>
++      </div>
++    </div>
++  );
++}
+diff --git a/web/src/hooks/useRepoEnv.ts b/web/src/hooks/useRepoEnv.ts
+index 54f384a..afa384a 100644
+--- a/web/src/hooks/useRepoEnv.ts
++++ b/web/src/hooks/useRepoEnv.ts
+@@ -16,8 +16,9 @@ export function useRepoEnv() {
+ }
+ 
+ /**
+- * The names of the variables sessions on ``url`` get, for the new-session
+- * form. Empty for a URL that isn't a repository.
++ * The names of the variables sessions on ``url`` get, and whether it has
++ * agent instructions or a setup script, for the new-session form. Disabled
++ * for a URL that isn't a repository.
+  */
+ export function useRepoEnvNames(url: string) {
+   const key = repoKey(url);
+@@ -37,12 +38,23 @@ function useInvalidate() {
+   };
+ }
+ 
+-/** Store a repository's variables; null keeps a variable's current value. */
++/**
++ * Store a repository's variables, null keeping a variable's current value,
++ * and its agent instructions and setup script, null removing them.
++ */
+ export function useSaveRepoEnv() {
+   const invalidate = useInvalidate();
+   return useMutation({
+-    mutationFn: (args: { repository: string; variables: Record<string, string | null> }) =>
+-      saveRepoEnv(args.repository, args.variables),
++    mutationFn: (args: {
++      repository: string;
++      variables: Record<string, string | null>;
++      instructions: string | null;
++      setup_script: string | null;
++    }) =>
++      saveRepoEnv(args.repository, args.variables, {
++        instructions: args.instructions,
++        setup_script: args.setup_script,
++      }),
+     onSuccess: invalidate,
+   });
+ }
+diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
+index 4449014..96cad72 100644
+--- a/web/src/lib/repoEnv.ts
++++ b/web/src/lib/repoEnv.ts
+@@ -1,6 +1,7 @@
+ /**
+  * Repository variables: environment variables for sessions started on a
+- * repository (``/v1/repo-env``, added by this deployment).
++ * repository (``/v1/repo-env``, added by this deployment), and the
++ * repository's own agent instructions and setup script.
+  *
+  * Values only go to the server. Listing returns names, and saving a name
+  * with ``null`` keeps its current value. ``repoKey`` and ``checkVariableName``
+@@ -16,6 +17,10 @@ export interface RepoEnvEntry {
+   repository: string;
+   /** Variable names, sorted. Never values. */
+   names: string[];
++  /** Appended to the runner's agent instructions in its sessions, or null. */
++  instructions: string | null;
++  /** Runs in the checkout before the agent starts, once per session, or null. */
++  setup_script: string | null;
+   /** ISO-8601 time of the last change, or null. */
+   updated_at: string | null;
+   /** Who last saved them from this page, or null (e.g. the CLI). */
+@@ -139,13 +144,31 @@ export async function fetchRepoEnv(): Promise<RepoEnvEntry[]> {
+   return ((await res.json()) as { data: RepoEnvEntry[] }).data;
+ }
+ 
+-/** The names of one repository's variables, for anyone signed in. */
+-export async function fetchRepoEnvNames(repository: string): Promise<string[]> {
++/** What sessions on a repository get, from ``GET /v1/repo-env/names``. */
++export interface RepoEnvSummary {
++  /** Variable names, sorted. */
++  names: string[];
++  /** Whether it has agent instructions. */
++  instructions: boolean;
++  /** Whether it has a setup script. */
++  setup_script: boolean;
++}
++
++/**
++ * The names of one repository's variables, and whether it has agent
++ * instructions or a setup script, for anyone signed in. Never their text.
++ */
++export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSummary> {
+   const res = await authenticatedFetch(
+     `/v1/repo-env/names?repository=${encodeURIComponent(repository)}`,
+   );
+   if (!res.ok) throw new Error(await errorMessage(res));
+-  return ((await res.json()) as { names: string[] }).names;
++  const body = (await res.json()) as Partial<RepoEnvSummary>;
++  return {
++    names: body.names ?? [],
++    instructions: body.instructions ?? false,
++    setup_script: body.setup_script ?? false,
++  };
+ }
+ 
+ /**
+@@ -153,15 +176,18 @@ export async function fetchRepoEnvNames(repository: string): Promise<string[]> {
+  *
+  * @param variables Each name's new value, or null to keep the current one.
+  *   Names left out are removed.
++ * @param texts The agent instructions and setup script, each the whole text
++ *   or null to remove it.
+  */
+ export async function saveRepoEnv(
+   repository: string,
+   variables: Record<string, string | null>,
++  texts: { instructions: string | null; setup_script: string | null },
+ ): Promise<RepoEnvEntry> {
+   const res = await authenticatedFetch("/v1/repo-env", {
+     method: "PUT",
+     headers: { "Content-Type": "application/json" },
+-    body: JSON.stringify({ repository, variables }),
++    body: JSON.stringify({ repository, variables, ...texts }),
+   });
+   if (!res.ok) throw new Error(await errorMessage(res));
+   return (await res.json()) as RepoEnvEntry;
+diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
+index 922787e..aa820ce 100644
+--- a/web/src/pages/RepoVariablesPage.test.tsx
++++ b/web/src/pages/RepoVariablesPage.test.tsx
+@@ -20,8 +20,10 @@ vi.mock("@/components/ui/toast", () => ({ showToast: vi.fn() }));
+ 
+ const ROADPASS = "github.com/kunlabora/roadpass";
+ 
+-// What the fake server holds: repository → name → value.
++// What the fake server holds: repository → name → value, and each
++// repository's agent instructions and setup script.
+ let stored: Record<string, Record<string, string>>;
++let texts: Record<string, { instructions: string | null; setup_script: string | null }>;
+ let requests: { method: string; url: string; body?: unknown }[];
+ 
+ function json(status: number, body: unknown): Response {
+@@ -35,6 +37,8 @@ function entry(repository: string) {
+   return {
+     repository,
+     names: Object.keys(stored[repository]).sort(),
++    instructions: texts[repository]?.instructions ?? null,
++    setup_script: texts[repository]?.setup_script ?? null,
+     updated_at: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+     updated_by: "levi",
+   };
+@@ -57,7 +61,16 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
+       }
+       next[name] = value ?? current[name];
+     }
++    const kept = texts[body.repository] ?? { instructions: null, setup_script: null };
++    const nextTexts = { ...kept };
++    for (const field of ["instructions", "setup_script"] as const) {
++      if (field in body) nextTexts[field] = body[field]?.trim() ? body[field] : null;
++    }
++    if (!Object.keys(next).length && !nextTexts.instructions && !nextTexts.setup_script) {
++      return json(400, { error: { message: "give at least one variable" } });
++    }
+     stored[body.repository] = next;
++    texts[body.repository] = nextTexts;
+     return json(200, entry(body.repository));
+   }
+   if (method === "DELETE") {
+@@ -81,6 +94,7 @@ beforeEach(() => {
+   stored = {
+     [ROADPASS]: { GOVFLANDERS_NPM_TOKEN: "secret-token", NPM_CONFIG_REGISTRY: "https://r" },
+   };
++  texts = {};
+   requests = [];
+   vi.mocked(identity.resolveIdentity).mockResolvedValue("levi");
+   vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(true);
+@@ -129,6 +143,8 @@ describe("RepoVariablesPage", () => {
+     expect(requests.find((r) => r.method === "PUT")!.body).toEqual({
+       repository: ROADPASS,
+       variables: { GOVFLANDERS_NPM_TOKEN: null, NPM_CONFIG_REGISTRY: "https://new" },
++      instructions: null,
++      setup_script: null,
+     });
+     expect(stored[ROADPASS]).toEqual({
+       GOVFLANDERS_NPM_TOKEN: "secret-token",
+@@ -220,6 +236,8 @@ describe("RepoVariablesPage", () => {
+     expect(requests.find((r) => r.method === "PUT")!.body).toEqual({
+       repository: ROADPASS,
+       variables: { GOVFLANDERS_NPM_TOKEN: null, NPM_CONFIG_REGISTRY: null, GIT_TOKEN: null },
++      instructions: null,
++      setup_script: null,
+     });
+     expect(stored[ROADPASS].GIT_TOKEN).toBe("github_pat_secret");
+ 
+@@ -272,6 +290,113 @@ describe("RepoVariablesPage", () => {
+     expect(stored["github.com/kunlabora/other"]).toEqual({ GIT_TOKEN: "github_pat_other" });
+   });
+ 
++  it("shows a repository's instructions and setup script on its card", async () => {
++    texts[ROADPASS] = {
++      instructions: "Use pnpm, never npm.\n\nAsk before touching infra/.\n",
++      setup_script: "#!/usr/bin/env bash\nmise install\n",
++    };
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    expect(
++      within(card).getByText(/2 variables · instructions · setup script · updated 3d ago/),
++    ).toBeInTheDocument();
++    const instructions = within(card).getByRole("region", { name: "Agent instructions" });
++    expect(within(instructions).getByText("· 3 lines")).toBeInTheDocument();
++    // The preview skips blank lines.
++    expect(instructions.querySelector("pre")!.textContent).toBe(
++      "Use pnpm, never npm.\nAsk before touching infra/.",
++    );
++    const script = within(card).getByRole("region", { name: "Setup script" });
++    expect(script.querySelector("pre")).toHaveClass("font-mono");
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Remove variables for kunlabora/roadpass" }),
++    );
++    expect(
++      within(card).getByText(/Remove 2 variables, the agent instructions and the setup script for/),
++    ).toBeInTheDocument();
++  });
++
++  it("edits the instructions and the script, and removes one switched off", async () => {
++    texts[ROADPASS] = { instructions: "Old rules.\n", setup_script: "make\n" };
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++    );
++    const editor = within(card).getByTestId("repo-env-editor");
++    expect(within(editor).getByRole("switch", { name: "Agent instructions" })).toBeChecked();
++    const instructions = within(editor).getByRole("textbox", { name: "Agent instructions" });
++    expect(instructions).toHaveValue("Old rules.\n");
++    expect(
++      within(editor).getByTestId("repo-env-instructions").querySelector("[data-language]"),
++    ).toHaveAttribute("data-language", "markdown");
++    fireEvent.change(instructions, { target: { value: "New rules.\n" } });
++    fireEvent.click(within(editor).getByRole("switch", { name: "Setup script" }));
++    expect(
++      within(editor).getByText("Saving removes the current setup script."),
++    ).toBeInTheDocument();
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true));
++    expect(requests.find((r) => r.method === "PUT")!.body).toEqual({
++      repository: ROADPASS,
++      variables: { GOVFLANDERS_NPM_TOKEN: null, NPM_CONFIG_REGISTRY: null },
++      instructions: "New rules.\n",
++      setup_script: null,
++    });
++    expect(texts[ROADPASS]).toEqual({ instructions: "New rules.\n", setup_script: null });
++  });
++
++  it("adds a repository with only a setup script, once it has text", async () => {
++    renderPage();
++    await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
++    const editor = screen.getByTestId("repo-env-editor");
++    const save = within(editor).getByRole("button", { name: "Save" });
++    fireEvent.change(within(editor).getByLabelText("Repository"), {
++      target: { value: "kunlabora/other" },
++    });
++    expect(save).toBeDisabled();
++    fireEvent.click(within(editor).getByRole("switch", { name: "Setup script" }));
++    expect(within(editor).getByText("Write the script, or switch it off.")).toBeInTheDocument();
++    expect(save).toBeDisabled();
++    const script = within(editor).getByRole("textbox", { name: "Setup script" });
++    expect(script).toHaveAttribute("wrap", "off");
++    // Highlighted as shell, or as what its #! line names.
++    const highlighted = within(editor).getByTestId("repo-env-setup-script");
++    fireEvent.change(script, { target: { value: "#!/usr/bin/env python3\nprint(1)\n" } });
++    expect(highlighted.querySelector("[data-language]")).toHaveAttribute("data-language", "python");
++    fireEvent.change(script, { target: { value: "mise install\n" } });
++    expect(highlighted.querySelector("[data-language]")).toHaveAttribute(
++      "data-language",
++      "shellscript",
++    );
++    expect(save).toBeEnabled();
++    fireEvent.click(save);
++    await waitFor(() => expect(texts["github.com/kunlabora/other"]).toBeDefined());
++    expect(stored["github.com/kunlabora/other"]).toEqual({});
++    expect(texts["github.com/kunlabora/other"]).toEqual({
++      instructions: null,
++      setup_script: "mise install\n",
++    });
++    expect(
++      await screen.findByRole("article", { name: "github.com/kunlabora/other" }),
++    ).toHaveTextContent("setup script");
++  });
++
++  it("won't save instructions over the server's limit", async () => {
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++    );
++    fireEvent.click(within(card).getByRole("switch", { name: "Agent instructions" }));
++    fireEvent.change(within(card).getByRole("textbox", { name: "Agent instructions" }), {
++      target: { value: "x".repeat(64 * 1024 + 1) },
++    });
++    expect(within(card).getByText("Keep the instructions under 64 KB.")).toBeInTheDocument();
++    expect(within(card).getByRole("button", { name: "Save" })).toBeDisabled();
++  });
++
+   it("removes a repository after confirming", async () => {
+     renderPage();
+     const card = await screen.findByRole("article", { name: ROADPASS });
+diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
+index bff95f4..8e5282d 100644
+--- a/web/src/pages/RepoVariablesPage.tsx
++++ b/web/src/pages/RepoVariablesPage.tsx
+@@ -6,14 +6,18 @@
+  * Sessions started on a repository get its variables in their agent's
+  * environment. Values are write-only: the server lists names, and editing
+  * keeps a value whose field is left blank. The server stores each repository
+- * as the Kubernetes Secret that ``mise run setup-repo-env`` writes, so the two
+- * are interchangeable. A repository's Git token is its ``GIT_TOKEN`` variable,
+- * shown and edited apart from the others, behind its own switch.
++ * as a Kubernetes Secret, which the runner Pod mounts. A repository's Git
++ * token is its ``GIT_TOKEN`` variable, shown and edited apart from the
++ * others, behind its own switch.
++ *
++ * A repository can also have its own agent instructions, which the runner
++ * appends to its own, and a setup script, which runs in the checkout before
++ * the agent starts. Unlike values, their text comes back to be edited.
+  *
+  * Gated on the client by an admin check AND on the server by the routes.
+  */
+ 
+-import { type ReactNode, useEffect, useState } from "react";
++import { type ReactNode, useEffect, useId, useState } from "react";
+ import { useQuery } from "@tanstack/react-query";
+ import {
+   ClipboardPasteIcon,
+@@ -21,11 +25,18 @@ import {
+   KeyRoundIcon,
+   PencilIcon,
+   PlusIcon,
++  ScrollTextIcon,
+   SearchIcon,
++  SquareTerminalIcon,
+   Trash2Icon,
+   XIcon,
+ } from "lucide-react";
+ import { PageScroll } from "@/components/PageScroll";
++import {
++  HighlightedTextarea,
++  type HighlightLanguage,
++  scriptLanguage,
++} from "@/components/HighlightedTextarea";
+ import { Button } from "@/components/ui/button";
+ import { Input } from "@/components/ui/input";
+ import { Switch } from "@/components/ui/switch";
+@@ -55,23 +66,56 @@ function splitToken(names: string[]): { variables: string[]; token: boolean } {
+   return { variables: names.filter((n) => n !== GIT_TOKEN), token: names.includes(GIT_TOKEN) };
+ }
+ 
+-/** ``"2 variables · Git token"``, for a repository's card. */
+-function summary(names: string[]): string {
+-  const { variables, token } = splitToken(names);
+-  const parts = variables.length || !token ? [plural(variables.length, "variable")] : [];
++/** ``"2 variables · Git token · instructions · setup script"``, for a repository's card. */
++function summary(entry: RepoEnvEntry): string {
++  const { variables, token } = splitToken(entry.names);
++  const others = token || entry.instructions !== null || entry.setup_script !== null;
++  const parts = variables.length || !others ? [plural(variables.length, "variable")] : [];
+   if (token) parts.push("Git token");
++  if (entry.instructions !== null) parts.push("instructions");
++  if (entry.setup_script !== null) parts.push("setup script");
+   return parts.join(" · ");
+ }
+ 
+-/** ``"the Git token and 2 variables"``, for sentences. */
+-function describe(names: string[]): string {
+-  const { variables, token } = splitToken(names);
+-  if (!token) return plural(variables.length, "variable");
+-  return variables.length
+-    ? `the Git token and ${plural(variables.length, "variable")}`
+-    : "the Git token";
++/** ``["a", "b", "c"]`` → ``"a, b and c"``. */
++function joinAnd(parts: string[]): string {
++  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
++}
++
++/** ``"the Git token, 2 variables and the agent instructions"``, for sentences. */
++function describe(entry: RepoEnvEntry): string {
++  const { variables, token } = splitToken(entry.names);
++  const parts = [
++    ...(token ? ["the Git token"] : []),
++    ...(variables.length ? [plural(variables.length, "variable")] : []),
++    ...(entry.instructions !== null ? ["the agent instructions"] : []),
++    ...(entry.setup_script !== null ? ["the setup script"] : []),
++  ];
++  return parts.length ? joinAnd(parts) : plural(0, "variable");
+ }
+ 
++/** Only variables, so "Remove all 2 variables" reads right. */
++function onlyVariables(entry: RepoEnvEntry): boolean {
++  return (
++    !splitToken(entry.names).token && entry.instructions === null && entry.setup_script === null
++  );
++}
++
++/** The text without its blank lines, so a preview's three lines all say something. */
++function preview(text: string): string {
++  return text
++    .split("\n")
++    .filter((line) => line.trim())
++    .join("\n");
++}
++
++function lineCount(text: string): number {
++  return text.replace(/\n+$/, "").split("\n").length;
++}
++
++/** The server's limit on the instructions and on the script (``TEXT_LIMIT``). */
++const TEXT_LIMIT = 64 * 1024;
++
+ /**
+  * ``kunlabora/roadpass`` with a line-break opportunity after each slash, on
+  * narrow screens. Hidden from sm, where the name truncates instead: Chrome
+@@ -166,8 +210,9 @@ function RepoVariables() {
+         <div className="min-w-0 max-w-xl">
+           <h1 className="text-2xl font-semibold">Repository variables</h1>
+           <p className="mt-1 text-ui text-muted-foreground">
+-            Environment variables for sessions started on a repository, such as a private registry
+-            token. Once saved, a value can be replaced but not shown again.
++            What sessions started on a repository get: environment variables such as a private
++            registry token, your own agent instructions, and a setup script that runs before the
++            agent starts. Once saved, a variable's value can be replaced but not shown again.
+           </p>
+         </div>
+         {!adding && (
+@@ -238,7 +283,7 @@ function RepoVariables() {
+               <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-ui text-muted-foreground">
+                 {list.length
+                   ? "No repository matches that filter."
+-                  : "No repository has variables yet. Add one to give its sessions a token or setting."}
++                  : "No repository has variables yet. Add one to give its sessions a token, instructions or a setup script."}
+               </p>
+             )}
+           </div>
+@@ -246,8 +291,9 @@ function RepoVariables() {
+       )}
+ 
+       <p className="mt-6 max-w-xl text-sm text-muted-foreground">
+-        New sessions on a repository get its variables. A running session gets changes the next time
+-        it wakes from being idle. Sessions on other repositories never see them.
++        New sessions on a repository get its variables, instructions and setup script. A running
++        session gets changes the next time it wakes from being idle, but doesn't run the setup
++        script again. Sessions on other repositories never see them.
+       </p>
+     </PageScroll>
+   );
+@@ -301,7 +347,7 @@ function RepositoryCard({
+           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
+           title={absoluteTime(updated)}
+         >
+-          {summary(entry.names)}
++          {summary(entry)}
+           {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
+           {entry.updated_by && ` by ${entry.updated_by}`}
+         </span>
+@@ -338,12 +384,8 @@ function RepositoryCard({
+         ) : confirming ? (
+           <div className="flex flex-wrap items-center justify-between gap-3">
+             <p className="text-ui">
+-              Remove{" "}
+-              {splitToken(entry.names).token
+-                ? describe(entry.names)
+-                : `all ${describe(entry.names)}`}{" "}
+-              for <span className="font-medium">{path}</span>? New sessions on it start without
+-              them.
++              Remove {onlyVariables(entry) ? `all ${describe(entry)}` : describe(entry)} for{" "}
++              <span className="font-medium">{path}</span>? New sessions on it start without them.
+             </p>
+             <div className="ml-auto flex gap-2">
+               <Button
+@@ -365,33 +407,88 @@ function RepositoryCard({
+             </div>
+           </div>
+         ) : (
+-          <ul className="flex flex-col">
+-            {splitToken(entry.names).token && (
+-              <li className="flex items-center gap-3 py-0.5 text-ui">
+-                <span className="flex min-w-0 items-center gap-1.5 text-sm">
+-                  <KeyRoundIcon className="ui-icon shrink-0 text-muted-foreground" />
+-                  Git token
+-                </span>
+-                <span className="text-muted-foreground" aria-label="hidden value">
+-                  ••••••••
+-                </span>
+-              </li>
++          <div className="flex flex-col gap-2.5">
++            {entry.names.length > 0 && (
++              <ul className="flex flex-col">
++                {splitToken(entry.names).token && (
++                  <li className="flex items-center gap-3 py-0.5 text-ui">
++                    <span className="flex min-w-0 items-center gap-1.5 text-sm">
++                      <KeyRoundIcon className="ui-icon shrink-0 text-muted-foreground" />
++                      Git token
++                    </span>
++                    <span className="text-muted-foreground" aria-label="hidden value">
++                      ••••••••
++                    </span>
++                  </li>
++                )}
++                {splitToken(entry.names).variables.map((name) => (
++                  <li key={name} className="flex items-center gap-3 py-0.5 text-ui">
++                    <span className="min-w-0 truncate font-mono text-sm">{name}</span>
++                    <span className="text-muted-foreground" aria-label="hidden value">
++                      ••••••••
++                    </span>
++                  </li>
++                ))}
++              </ul>
+             )}
+-            {splitToken(entry.names).variables.map((name) => (
+-              <li key={name} className="flex items-center gap-3 py-0.5 text-ui">
+-                <span className="min-w-0 truncate font-mono text-sm">{name}</span>
+-                <span className="text-muted-foreground" aria-label="hidden value">
+-                  ••••••••
+-                </span>
+-              </li>
+-            ))}
+-          </ul>
++            {entry.instructions !== null && (
++              <TextPreview
++                icon={<ScrollTextIcon className="ui-icon" />}
++                title="Agent instructions"
++                text={entry.instructions}
++              />
++            )}
++            {entry.setup_script !== null && (
++              <TextPreview
++                icon={<SquareTerminalIcon className="ui-icon" />}
++                title="Setup script"
++                text={entry.setup_script}
++                mono
++              />
++            )}
++          </div>
+         )}
+       </div>
+     </article>
+   );
+ }
+ 
++/** The first lines of a repository's instructions or script, on its card. */
++function TextPreview({
++  icon,
++  title,
++  text,
++  mono = false,
++}: {
++  icon: ReactNode;
++  title: string;
++  text: string;
++  mono?: boolean;
++}) {
++  const lines = lineCount(text);
++  return (
++    <section className="min-w-0" aria-label={title}>
++      <div className="flex items-center gap-1.5 text-sm">
++        <span className="flex shrink-0 text-muted-foreground">{icon}</span>
++        {title}
++        <span className="text-muted-foreground">· {plural(lines, "line")}</span>
++      </div>
++      {/* The padding sits outside the clamped box, so a fourth line never
++      peeks out below the third. */}
++      <div className="mt-1 rounded-md bg-muted/50 px-2.5 py-1.5">
++        <pre
++          className={cn(
++            "line-clamp-3 text-sm whitespace-pre-wrap text-muted-foreground wrap-anywhere",
++            mono ? "font-mono" : "font-sans",
++          )}
++        >
++          {preview(text)}
++        </pre>
++      </div>
++    </section>
++  );
++}
++
+ const NO_REPOSITORIES: string[] = [];
+ 
+ interface Row {
+@@ -443,6 +540,12 @@ function VariablesEditor({
+   const tokenStored = entry ? splitToken(entry.names).token : false;
+   const [tokenOn, setTokenOn] = useState(tokenStored);
+   const [token, setToken] = useState("");
++  // Their text comes back to be edited. Switched off, saving removes them;
++  // the text stays in case they're switched on again.
++  const [instructionsOn, setInstructionsOn] = useState(entry ? entry.instructions !== null : false);
++  const [instructions, setInstructions] = useState(entry?.instructions ?? "");
++  const [scriptOn, setScriptOn] = useState(entry ? entry.setup_script !== null : false);
++  const [script, setScript] = useState(entry?.setup_script ?? "");
+   const [pasting, setPasting] = useState(false);
+   const [pasteText, setPasteText] = useState("");
+   const [pasteError, setPasteError] = useState<string | null>(null);
+@@ -454,13 +557,31 @@ function VariablesEditor({
+   const named = rows.filter((r) => r.name);
+   const missingValue = named.some((r) => !r.existing && !r.value);
+   const missingToken = tokenOn && !tokenStored && !token;
++  const instructionsError = textError(instructionsOn, instructions, "instructions");
++  const scriptError = textError(scriptOn, script, "script");
++  // Under its field once there's text; until then, why Save waits.
++  const blank = [instructionsOn && !instructions.trim(), scriptOn && !script.trim()];
++  const hint = missingValue
++    ? "Give every new variable a value."
++    : missingToken
++      ? "Give the Git token a value."
++      : blank[0]
++        ? instructionsError
++        : blank[1]
++          ? scriptError
++          : pasting
++            ? "Add the pasted lines first."
++            : null;
+   const canSave =
+     key !== null &&
+     !alreadyThere &&
+-    (named.length > 0 || tokenOn) &&
++    (named.length > 0 || tokenOn || instructionsOn || scriptOn) &&
+     errors.every((e) => e === null) &&
+     !missingValue &&
+     !missingToken &&
++    instructionsError === null &&
++    scriptError === null &&
++    !pasting &&
+     !save.isPending;
+ 
+   function update(id: number, patch: Partial<Row>) {
+@@ -512,14 +633,19 @@ function VariablesEditor({
+     if (tokenOn) variables[GIT_TOKEN] = tokenStored && !token ? null : token;
+     setSaveError(null);
+     save.mutate(
+-      { repository: key, variables },
++      {
++        repository: key,
++        variables,
++        instructions: instructionsOn ? instructions : null,
++        setup_script: scriptOn ? script : null,
++      },
+       {
+         onSuccess: (saved) => {
+           const path = splitKey(saved.repository)[1];
+           showToast(
+             entry
+-              ? `Saved the variables for ${path}.`
+-              : `Saved ${describe(saved.names)} for ${path}. New sessions on it get them.`,
++              ? `Saved the changes for ${path}.`
++              : `Saved ${describe(saved)} for ${path}. New sessions on it get them.`,
+           );
+           onClose();
+         },
+@@ -530,7 +656,7 @@ function VariablesEditor({
+ 
+   return (
+     <form
+-      className="flex flex-col gap-3"
++      className="flex flex-col gap-4"
+       onSubmit={(e) => {
+         e.preventDefault();
+         submit();
+@@ -548,7 +674,7 @@ function VariablesEditor({
+         />
+       )}
+ 
+-      <div className="flex flex-col gap-2" data-testid="repo-env-git-token">
++      <div className={SECTION} data-testid="repo-env-git-token">
+         <div className="flex items-center gap-2">
+           <Switch
+             id="repo-env-git-token"
+@@ -582,7 +708,7 @@ function VariablesEditor({
+         )}
+       </div>
+ 
+-      <div className="flex flex-col gap-2">
++      <div className={SECTION}>
+         <span className="text-sm font-medium text-muted-foreground">Variables</span>
+         {pasting ? (
+           <>
+@@ -660,10 +786,7 @@ function VariablesEditor({
+             </div>
+           ))
+         )}
+-      </div>
+-
+-      {!pasting && (
+-        <div className="flex flex-wrap items-center justify-between gap-2">
++        {!pasting && (
+           <div className="flex gap-1">
+             <Button
+               type="button"
+@@ -686,36 +809,65 @@ function VariablesEditor({
+               Paste .env
+             </Button>
+           </div>
+-          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+-            {missingValue ? (
+-              <span className="text-sm text-muted-foreground">
+-                Give every new variable a value.
+-              </span>
+-            ) : (
+-              missingToken && (
+-                <span className="text-sm text-muted-foreground">Give the Git token a value.</span>
+-              )
+-            )}
+-            <Button
+-              type="button"
+-              variant="outline"
+-              onClick={onClose}
+-              disabled={save.isPending}
+-              className={TOUCH_HEIGHT}
+-            >
+-              Cancel
+-            </Button>
+-            <Button
+-              type="submit"
+-              disabled={!canSave}
+-              loading={save.isPending}
+-              className={TOUCH_HEIGHT}
+-            >
+-              Save
+-            </Button>
+-          </div>
+-        </div>
+-      )}
++        )}
++      </div>
++
++      <TextSetting
++        id="repo-env-instructions"
++        label="Agent instructions"
++        on={instructionsOn}
++        onToggle={setInstructionsOn}
++        stored={entry?.instructions != null}
++        text={instructions}
++        onText={setInstructions}
++        error={instructionsError}
++        language="markdown"
++        placeholder={
++          "- Use pnpm, never npm.\n- The API runs on port 8080; start it with `mise run api`.\n- Ask before changing anything under infra/."
++        }
++        componentId="settings.repo_env.instructions"
++      >
++        Your own instructions for this repository, for what doesn't belong in its CLAUDE.md or
++        AGENTS.md. Claude Code and Codex get them after the runner's instructions, under a note that
++        says where they come from.
++      </TextSetting>
++
++      <TextSetting
++        id="repo-env-setup-script"
++        label="Setup script"
++        on={scriptOn}
++        onToggle={setScriptOn}
++        stored={entry?.setup_script != null}
++        text={script}
++        onText={setScript}
++        error={scriptError}
++        placeholder={
++          "#!/usr/bin/env bash\nset -euo pipefail\nmise install\npnpm install --frozen-lockfile"
++        }
++        language={scriptLanguage(script)}
++        mono
++        componentId="settings.repo_env.setup_script"
++      >
++        Runs once in each new session's checkout, after the clone and before the agent starts, with
++        the repository's variables. Without a <code className="font-mono">#!</code> line it runs
++        with bash. The agent is told how it went.
++      </TextSetting>
++
++      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
++        {hint && <span className="mr-auto text-sm text-muted-foreground">{hint}</span>}
++        <Button
++          type="button"
++          variant="outline"
++          onClick={onClose}
++          disabled={save.isPending}
++          className={TOUCH_HEIGHT}
++        >
++          Cancel
++        </Button>
++        <Button type="submit" disabled={!canSave} loading={save.isPending} className={TOUCH_HEIGHT}>
++          Save
++        </Button>
++      </div>
+       {saveError && (
+         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui text-destructive">
+           {saveError}
+@@ -725,6 +877,107 @@ function VariablesEditor({
+   );
+ }
+ 
++/** Sections of the editor, one under the other with a rule between. */
++const SECTION = "flex flex-col gap-2 not-first:border-t not-first:border-border not-first:pt-4";
++
++/** Why the instructions or script can't be saved as they are, or null. */
++function textError(on: boolean, text: string, what: "instructions" | "script"): string | null {
++  if (!on) return null;
++  if (!text.trim()) {
++    return what === "instructions"
++      ? "Write the instructions, or switch them off."
++      : "Write the script, or switch it off.";
++  }
++  if (new TextEncoder().encode(text).length > TEXT_LIMIT) {
++    return `Keep the ${what} under ${TEXT_LIMIT / 1024} KB.`;
++  }
++  return null;
++}
++
++/**
++ * The agent instructions or the setup script: a switch, what it does, and
++ * the text while it's on. Switching off a stored one says saving removes it.
++ */
++function TextSetting({
++  id,
++  label,
++  on,
++  onToggle,
++  stored,
++  text,
++  onText,
++  error,
++  placeholder,
++  language,
++  mono = false,
++  componentId,
++  children,
++}: {
++  id: string;
++  label: string;
++  on: boolean;
++  onToggle: (on: boolean) => void;
++  stored: boolean;
++  text: string;
++  onText: (text: string) => void;
++  error: string | null;
++  placeholder: string;
++  /** What to highlight the text as. */
++  language: HighlightLanguage;
++  mono?: boolean;
++  componentId: string;
++  children: ReactNode;
++}) {
++  const descriptionId = useId();
++  return (
++    <div className={SECTION} data-testid={id}>
++      <div className="flex items-center gap-2">
++        <Switch
++          id={id}
++          checked={on}
++          onCheckedChange={onToggle}
++          aria-describedby={descriptionId}
++          componentId={componentId}
++        />
++        <label htmlFor={id} className="text-sm font-medium text-muted-foreground">
++          {label}
++        </label>
++      </div>
++      <p id={descriptionId} className="text-sm text-muted-foreground">
++        {children}
++      </p>
++      {on ? (
++        <>
++          <HighlightedTextarea
++            value={text}
++            language={language}
++            onChange={(e) => onText(e.target.value)}
++            placeholder={placeholder}
++            aria-label={label}
++            aria-invalid={error && text.trim() ? true : undefined}
++            spellCheck={!mono}
++            autoCapitalize="off"
++            autoCorrect={mono ? "off" : undefined}
++            // A script's long lines scroll sideways rather than wrap.
++            wrap={!mono}
++            className={cn(
++              "min-h-28 max-h-[28rem] overflow-y-auto leading-relaxed",
++              mono && "font-mono text-sm md:text-sm",
++            )}
++          />
++          {error && text.trim() && <p className="text-sm text-destructive">{error}</p>}
++        </>
++      ) : (
++        stored && (
++          <p className="text-sm text-muted-foreground">
++            Saving removes the current {label.toLowerCase()}.
++          </p>
++        )
++      )}
++    </div>
++  );
++}
++
+ /** Pick the repository: a GitHub repository of yours, or any clone URL. */
+ function RepositoryPicker({
+   query,

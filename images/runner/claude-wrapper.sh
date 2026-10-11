@@ -24,6 +24,14 @@ export DISABLE_AUTOUPDATER=1
 # shellcheck source=SCRIPTDIR/repo-env/repo-env.sh
 . /usr/local/lib/omnigent/repo-env.sh
 
+# The instructions of the repositories this session started with, after the
+# runner's own, once their setup scripts are done or have had their time.
+# shellcheck source=SCRIPTDIR/repo-env/agent-instructions.sh
+. /usr/local/lib/omnigent/agent-instructions.sh
+omnigent_wait_for_repo_setup
+omnigent_agent_instructions /etc/claude-code/CLAUDE.md \
+    || echo "claude-wrapper: could not add the repository instructions to /etc/claude-code/CLAUDE.md" >&2
+
 # Keep bypass in Claude's shift+tab cycle whatever mode the session launches
 # in, so the web picker can always switch back to it, e.g. after approving a
 # plan moved the session to auto. Subcommands such as `claude mcp` accept it.

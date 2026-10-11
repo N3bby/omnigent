@@ -241,13 +241,16 @@ check "backend is IntelliJ IDEA Ultimate $build" python3 -c 'import json, sys; i
 
 echo "== Agents know the runner"
 instructions="$root/images/runner/agent-instructions.md"
+check "/usr/local/share/omnigent/agent-instructions.md matches images/runner/agent-instructions.md" cmp -s "$instructions" /usr/local/share/omnigent/agent-instructions.md
+# The wrappers append the repositories' own instructions, so each agent's
+# file starts with the runner's.
 for copy in /etc/claude-code/CLAUDE.md /opt/codex-home/AGENTS.md; do
-  if cmp -s "$instructions" "$copy"; then
-    pass "$copy matches images/runner/agent-instructions.md"
+  if head -c "$(wc -c < "$instructions")" "$copy" 2>/dev/null | cmp -s - "$instructions"; then
+    pass "$copy starts with images/runner/agent-instructions.md"
   elif [[ -f "$copy" ]]; then
-    fail "$copy matches images/runner/agent-instructions.md" "differs; the image predates this checkout, or this session predates the deploy"
+    fail "$copy starts with images/runner/agent-instructions.md" "differs; the image predates this checkout, or this session predates the deploy"
   else
-    fail "$copy matches images/runner/agent-instructions.md" "missing"
+    fail "$copy starts with images/runner/agent-instructions.md" "missing"
   fi
 done
 # Omnigent gives each Codex session a private CODEX_HOME and links AGENTS.md
@@ -265,7 +268,8 @@ check "login shells load repository variables" cmp -s "$root/images/runner/repo-
 check "claude wrapper loads repository variables" grep -q '^\. /usr/local/lib/omnigent/repo-env.sh$' /usr/local/bin/claude
 check "codex wrapper loads repository variables" grep -q '^\. /usr/local/lib/omnigent/repo-env.sh$' /usr/local/bin/codex
 # Only names: the values are secrets.
-mapfile -t repo_env_names < <(find /run/omnigent/repo-env -mindepth 2 -maxdepth 2 -name '[A-Za-z_]*' -printf '%f\n' 2>/dev/null | sort -u)
+# agent-instructions.md and setup.sh aren't variables.
+mapfile -t repo_env_names < <(find /run/omnigent/repo-env -mindepth 2 -maxdepth 2 -name '[A-Za-z_]*' ! -name '*[!A-Za-z0-9_]*' -printf '%f\n' 2>/dev/null | sort -u)
 if ((${#repo_env_names[@]})); then
   missing=()
   for name in "${repo_env_names[@]}"; do [[ -v "$name" ]] || missing+=("$name"); done
@@ -276,6 +280,39 @@ if ((${#repo_env_names[@]})); then
   fi
 else
   skip "the agent has this session's repository variables" "none stored for this session's repository"
+fi
+
+echo "== Repository instructions and setup scripts"
+check "setup service matches images/runner/repo-env/repo-setup.sh" cmp -s "$root/images/runner/repo-env/repo-setup.sh" /usr/local/bin/omnigent-repo-setup
+check "Pod start runs the setup scripts" cmp -s "$root/images/runner/repo-env/repo-setup-profile.sh" /etc/profile.d/omnigent-repo-setup.sh
+check "instructions writer matches images/runner/repo-env/agent-instructions.sh" cmp -s "$root/images/runner/repo-env/agent-instructions.sh" /usr/local/lib/omnigent/agent-instructions.sh
+check "claude wrapper adds the repository instructions" grep -q '^omnigent_agent_instructions /etc/claude-code/CLAUDE.md' /usr/local/bin/claude
+check "codex wrapper adds the repository instructions" grep -q '^omnigent_agent_instructions /opt/codex-home/AGENTS.md' /usr/local/bin/codex
+checkouts=/run/omnigent-repo-setup/checkouts
+if [[ -f "$checkouts" ]]; then
+  pass "the Pod knows where its repositories are checked out: $(cut -f2 "$checkouts" | paste -sd' ')"
+  found=0
+  while IFS=$'\t' read -r secret repository checkout; do
+    dir=/run/omnigent/repo-env/$secret
+    if [[ -s "$dir/agent-instructions.md" ]]; then
+      found=1
+      check "Claude Code has the instructions of $repository" grep -qxF "## $repository" /etc/claude-code/CLAUDE.md
+    fi
+    if [[ -f "$dir/setup.sh" ]]; then
+      found=1
+      state="/home/omnigent/.local/state/omnigent-repo-setup/${checkout##*/}"
+      if [[ -f "$state.exit" ]]; then
+        pass "the setup script of $repository ran: exit status $(cat "$state.exit"), log $state.log"
+      elif [[ -f "$state.log" ]]; then
+        skip "the setup script of $repository ran" "still running; see $state.log"
+      else
+        fail "the setup script of $repository ran" "no log; see /run/omnigent-repo-setup.log"
+      fi
+    fi
+  done < "$checkouts"
+  ((found)) || skip "the agent has this session's repository instructions and setup script" "none stored for this session's repositories"
+else
+  skip "the Pod knows where its repositories are checked out" "this session started without a repository, or predates the deploy"
 fi
 
 echo

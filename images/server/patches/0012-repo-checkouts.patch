@@ -1,0 +1,37 @@
+Tell the runner Pod where each repository is checked out.
+
+The host container gets OMNIGENT_REPO_CHECKOUTS, one line per repository the
+session starts with: its variables Secret's name, the repository and its
+checkout directory (omnigent_repo_env.checkouts_env). The runner runs a
+repository's setup script in that directory and names the repository above its
+agent instructions (images/runner/repo-env/). A wake re-renders the Pod
+template with the recorded repositories, so it survives a suspend.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0011.
+
+diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
+index 4ac17b5..bbcaf3d 100644
+--- a/omnigent/onboarding/sandboxes/kubernetes.py
++++ b/omnigent/onboarding/sandboxes/kubernetes.py
+@@ -58,6 +58,7 @@ from collections.abc import Mapping, Sequence
+ from typing import TYPE_CHECKING, ClassVar, Literal, cast
+ 
+ import click
++from omnigent_repo_env import checkouts_env as _repo_env_checkouts
+ from omnigent_repo_env import clone_command as _repo_env_clone_command
+ from omnigent_repo_env import pod_volumes as _repo_env_volumes
+ 
+@@ -978,6 +979,14 @@ def build_job_manifest(
+         },
+     ]
+     host_env.extend({"name": name, "value": value} for name, value in env_literals.items())
++    # Where each repository is checked out, for its setup script and agent
++    # instructions (images/runner/repo-env/ in this deployment).
++    repo_checkouts = _repo_env_checkouts(
++        (repo.url, f"{workspace}/{dirname}")
++        for repo, dirname in zip(repos, clone_dir_names(repos), strict=True)
++    )
++    if repo_checkouts is not None:
++        host_env.append(repo_checkouts)
+ 
+     host_container: dict[str, object] = {
+         "name": _CONTAINER_NAME,

@@ -6,10 +6,16 @@ so the server finds it from the clone URL alone and mounts it into the runner
 Pod, and the runner's agent wrappers export each file as a variable.
 
 The server image installs this file as the top-level ``omnigent_repo_env``
-module, and ``scripts/setup-repo-env`` imports it from here, so both sides
-derive the same Secret name from the same repository. The server's Settings
-page (``omnigent_repo_env_api``) reads and writes the Secrets with the
-functions at the end, which take a Kubernetes ``CoreV1Api``.
+module, so the Pod and the Settings page derive the same Secret name from the
+same repository. The Settings page (``omnigent_repo_env_api``) reads and
+writes the Secrets with the functions at the end, which take a Kubernetes
+``CoreV1Api``.
+
+The same Secret can hold the repository's own agent instructions and a setup
+script, under keys that aren't variable names, so the loader skips them. The
+runner appends the instructions to its own and runs the script in the
+checkout (``images/runner/repo-env/``). It finds the checkout from
+``OMNIGENT_REPO_CHECKOUTS``, which the server sets on the runner Pod.
 """
 
 from __future__ import annotations
@@ -37,6 +43,19 @@ DEFAULT_HOST = "github.com"
 # instead of the user's GitHub App token, and is listed in the repository
 # picker for everyone who has connected GitHub.
 TOKEN_VARIABLE = "GIT_TOKEN"
+# The repository's own agent instructions, which the runner appends to its
+# own, and the script it runs in the checkout before the agent starts. A
+# variable name can't contain a dot, so these never clash with a variable.
+INSTRUCTIONS_KEY = "agent-instructions.md"
+SETUP_SCRIPT_KEY = "setup.sh"
+_TEXT_KEYS = (INSTRUCTIONS_KEY, SETUP_SCRIPT_KEY)
+# Agents read the instructions at the start of every session.
+TEXT_LIMIT = 64 * 1024
+# On the runner Pod's host container: one line per repository the session
+# starts with, "<Secret name>\t<repository>\t<checkout>".
+CHECKOUTS_ENV = "OMNIGENT_REPO_CHECKOUTS"
+# Passed to save_repository to leave the instructions or the script as they are.
+KEEP: Any = object()
 
 _PREFIX = "omnigent-repo-env-"
 _HASH_LENGTH = 8
@@ -190,6 +209,31 @@ def pod_volumes(urls: Iterable[str]) -> tuple[list[dict[str, object]], list[dict
     return volumes, mounts
 
 
+def checkouts_env(checkouts: Iterable[tuple[str, str]]) -> dict[str, str] | None:
+    """
+    The runner Pod's ``OMNIGENT_REPO_CHECKOUTS``: where each repository is checked out.
+
+    The runner runs a repository's setup script in its checkout, and names the
+    repository and checkout above its instructions. A URL that can't be
+    normalised is skipped, like in :func:`pod_volumes`.
+
+    :param checkouts: ``(clone URL, checkout directory)`` for each repository
+        the session starts with.
+    :returns: The env entry for the host container, or ``None`` without any
+        repository.
+    """
+    lines = []
+    for url, directory in checkouts:
+        try:
+            key = repo_key(url)
+        except ValueError:
+            continue
+        if "\t" in directory or "\n" in directory:
+            continue
+        lines.append(f"{secret_name(key)}\t{key}\t{directory}")
+    return {"name": CHECKOUTS_ENV, "value": "\n".join(lines)} if lines else None
+
+
 def token_file(url: str) -> str | None:
     """
     Where a runner Pod finds a repository's ``GIT_TOKEN``, if it has one.
@@ -269,11 +313,23 @@ def _updated_at(secret: Any) -> str | None:
     return latest.isoformat()
 
 
+def _names(secret: Any) -> list[str]:
+    """The names of the Secret's variables, without its instructions and script."""
+    return sorted(name for name in secret.data or {} if name not in _TEXT_KEYS)
+
+
+def _text(secret: Any, key: str) -> str | None:
+    value = (secret.data or {}).get(key)
+    return base64.b64decode(value).decode() if value else None
+
+
 def _entry(secret: Any) -> dict[str, Any]:
     annotations = secret.metadata.annotations or {}
     return {
         "repository": annotations.get(ANNOTATION, secret.metadata.name),
-        "names": sorted(secret.data or {}),
+        "names": _names(secret),
+        "instructions": _text(secret, INSTRUCTIONS_KEY),
+        "setup_script": _text(secret, SETUP_SCRIPT_KEY),
         "updated_at": _updated_at(secret),
         "updated_by": annotations.get(UPDATED_BY_ANNOTATION),
     }
@@ -285,8 +341,10 @@ def list_repositories(core: Any) -> list[dict[str, Any]]:
 
     :param core: A Kubernetes ``CoreV1Api``.
     :returns: e.g. ``[{"repository": "github.com/kunlabora/roadpass",
-        "names": ["GOVFLANDERS_NPM_TOKEN"], "updated_at": "2026-10-08T…",
-        "updated_by": "levi"}]``, sorted by repository. Never values.
+        "names": ["GOVFLANDERS_NPM_TOKEN"], "instructions": "Use pnpm…",
+        "setup_script": None, "updated_at": "2026-10-08T…",
+        "updated_by": "levi"}]``, sorted by repository. Never a variable's
+        value; the instructions and the script come back to be edited.
     """
     secrets = core.list_namespaced_secret(NAMESPACE, label_selector=LABEL).items
     return sorted((_entry(s) for s in secrets), key=lambda entry: entry["repository"])
@@ -344,13 +402,40 @@ def variable_names(core: Any, key: str) -> list[str]:
     :param core: A Kubernetes ``CoreV1Api``.
     :param key: A key from :func:`repo_key`.
     """
+    return repository_summary(core, key)["names"]
+
+
+def repository_summary(core: Any, key: str) -> dict[str, Any]:
+    """
+    What sessions on a repository get, without any value or text.
+
+    :param core: A Kubernetes ``CoreV1Api``.
+    :param key: A key from :func:`repo_key`.
+    :returns: e.g. ``{"names": ["GOVFLANDERS_NPM_TOKEN"], "instructions": True,
+        "setup_script": False}``.
+    """
     try:
         secret = core.read_namespaced_secret(secret_name(key), NAMESPACE)
     except Exception as exc:
         if _not_found(exc):
-            return []
+            return {"names": [], "instructions": False, "setup_script": False}
         raise
-    return sorted(secret.data or {})
+    data = secret.data or {}
+    return {
+        "names": _names(secret),
+        "instructions": INSTRUCTIONS_KEY in data,
+        "setup_script": SETUP_SCRIPT_KEY in data,
+    }
+
+
+def _clean_text(text: str | None, what: str) -> str | None:
+    """Text as stored: Unix line ends, or ``None`` when there's nothing but space."""
+    if text is None or not text.strip():
+        return None
+    text = text.replace("\r\n", "\n")
+    if len(text.encode()) > TEXT_LIMIT:
+        raise ValueError(f"the {what} can be at most {TEXT_LIMIT // 1024} KB")
+    return text
 
 
 def save_repository(
@@ -358,6 +443,9 @@ def save_repository(
     key: str,
     variables: Mapping[str, str | None],
     updated_by: str | None = None,
+    *,
+    instructions: str | None = KEEP,
+    setup_script: str | None = KEEP,
 ) -> dict[str, Any]:
     """
     Store a repository's variables, replacing the ones it had.
@@ -370,14 +458,20 @@ def save_repository(
     :param key: A key from :func:`repo_key`.
     :param variables: e.g. ``{"GOVFLANDERS_NPM_TOKEN": None, "NEW": "value"}``.
     :param updated_by: The user saving them, kept as an annotation.
+    :param instructions: The repository's agent instructions; ``None`` or
+        blank removes them, and :data:`KEEP` leaves them as they are.
+    :param setup_script: The repository's setup script, likewise.
     :returns: The repository's entry, as in :func:`list_repositories`.
-    :raises ValueError: On an empty set, a name :func:`check_variable_name`
-        rejects, or ``None`` for a variable the repository doesn't have.
+    :raises ValueError: When there'd be nothing left to store, on a name
+        :func:`check_variable_name` rejects, ``None`` for a variable the
+        repository doesn't have, or text over :data:`TEXT_LIMIT` bytes.
     """
-    if not variables:
-        raise ValueError("give at least one variable, or remove the repository")
     for name in variables:
         check_variable_name(name)
+    texts = {
+        INSTRUCTIONS_KEY: instructions if instructions is KEEP else _clean_text(instructions, "agent instructions"),
+        SETUP_SCRIPT_KEY: setup_script if setup_script is KEEP else _clean_text(setup_script, "setup script"),
+    }
     name = secret_name(key)
     try:
         current = core.read_namespaced_secret(name, NAMESPACE)
@@ -394,6 +488,17 @@ def save_repository(
             data[variable] = current_data[variable]
         else:
             raise ValueError(f"{variable} has no value yet")
+    for text_key, text in texts.items():
+        if text is KEEP:
+            if text_key in current_data:
+                data[text_key] = current_data[text_key]
+        elif text is not None:
+            data[text_key] = base64.b64encode(text.encode()).decode()
+    if not data:
+        raise ValueError(
+            "give at least one variable, agent instructions or a setup script, "
+            "or remove the repository"
+        )
     annotations = {ANNOTATION: key}
     if updated_by:
         annotations[UPDATED_BY_ANNOTATION] = updated_by
