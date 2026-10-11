@@ -36,6 +36,10 @@ If you can't, give the repository its own token: see
   and the keyboard only opens when you tap the search field.
 
   ![The repository picker open on a phone](../images/repo-picker-mobile.webp)
+- **It stays put.** The picker's popovers open below their button, or above
+  it when there's more room there, and stay on that side while you type,
+  pick repositories or open the keyboard. When they run out of room they
+  scroll.
 
 ## Turning it off
 
@@ -50,5 +54,7 @@ It's an optional setup step. Without it, there's no picker.
 - The server image adds the `hvac` Python client, so the server can talk to
   Vault.
 - `images/server/web-patches/0006-mobile-repo-picker.patch` keeps the picker
-  on a phone's screen. The same fix applies to the branch picker next to a
-  picked repository.
+  on a phone's screen and keeps its popovers from flipping to the other side
+  of their button. Radix flips a popover whenever it stops fitting, and the
+  picker's size changes as you use it. The same fix applies to the branch
+  picker next to a picked repository.

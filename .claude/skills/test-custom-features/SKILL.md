@@ -459,7 +459,9 @@ Hand these to the user; they need their own devices or VM access:
 8. **Repository picker on a phone:** in a new session, open the repository
    chip, then **Choose a repository…**. The whole picker, search field
    included, is on screen and the keyboard stays closed. Tapping the search
-   field opens the keyboard, and typing filters the list.
+   field opens the keyboard, and typing filters the list. Neither popover
+   moves to the other side of its trigger while you type, pick a repository,
+   or tap the URL field.
 9. **Fast mode:** it changes how fast and how expensively the agent runs, so
    it's left to you. In a Claude session, send `/fast`. The chat shows the
    command with `Fast mode ON`, or why fast mode isn't available for the

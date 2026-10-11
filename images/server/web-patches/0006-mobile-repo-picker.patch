@@ -1,20 +1,28 @@
-Keep the GitHub repository picker on screen on phones.
+Keep the GitHub repository picker on screen and in place on phones.
 
 The repo and branch comboboxes in the new-session form open a popover of a
 search field and a list up to 18rem tall, about 330px in all. A phone has less
 room than that both above and below the picker, so Radix flipped the popover
-to the top and it ran off the top of the screen, search field first. The
-popover is now capped at the room Radix finds (8px off the screen edges) and
-the list scrolls inside it. On touch screens the search field also isn't
-focused on open, so the on-screen keyboard doesn't pop up and pan the page;
-tapping the field focuses it. Desktop, with room to spare, is unchanged.
+to the top and it ran off the top of the screen, search field first. Radix
+also flips a popover whenever it stops fitting where it is, and checks again
+on every size change, so the repository chip's popover and the comboboxes in
+it jumped from side to side as the chip's popover grew with each repo added,
+a list shrank as the search filtered it, and a phone's keyboard came and went.
+Now each popover picks its side once, when it opens (below, unless there's too
+little room below and more above), doesn't flip, and is capped at the room on
+that side, 8px off the screen edges, so it shrinks and scrolls instead of
+running off the screen or moving. Above its trigger, a combobox also keeps
+the height it opened with, so the search field doesn't slide down as the list
+filters. On touch screens the search field also isn't focused on open, so the
+on-screen keyboard doesn't pop up and pan the page; tapping the field focuses
+it. Desktop, with room to spare, is unchanged.
 Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0005.
 
 diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
-index 43c57e5..d5fc46a 100644
+index 43c57e5..4e46564 100644
 --- a/web/src/shell/NewChatDialog.test.tsx
 +++ b/web/src/shell/NewChatDialog.test.tsx
-@@ -6697,6 +6697,72 @@ describe("NewChatLandingScreen", () => {
+@@ -6697,6 +6697,120 @@ describe("NewChatLandingScreen", () => {
      expect(screen.queryByTestId("new-chat-landing-repo-select")).toBeNull();
    });
  
@@ -84,45 +92,192 @@ index 43c57e5..d5fc46a 100644
 +    );
 +  });
 +
++  it("keeps the repo pickers on the side they opened on", async () => {
++    // The repo chip and the "Add repository" combobox sit near the bottom of
++    // the 768px-tall window, with more room above them.
++    const realRect = HTMLElement.prototype.getBoundingClientRect;
++    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
++      this: HTMLElement,
++    ) {
++      const testId = this.dataset.testid;
++      if (testId === "new-chat-landing-repo-chip" || testId === "new-chat-landing-repo-select") {
++        return DOMRect.fromRect({ x: 16, y: 600, width: 200, height: 32 });
++      }
++      return realRect.call(this);
++    });
++    await openRepoPicker();
++    const repoPopover = screen.getByTestId("new-chat-landing-repo-popover");
++    const comboboxPopover = screen
++      .getByTestId("new-chat-landing-repo-search")
++      .closest("[data-slot=popover-content]");
++    expect(repoPopover.getAttribute("data-side")).toBe("top");
++    expect(comboboxPopover?.getAttribute("data-side")).toBe("top");
++    // Above its trigger, the dropdown keeps the height it opened with, so the
++    // search field doesn't slide down as the list filters.
++    expect((comboboxPopover as HTMLElement | null)?.style.minHeight).toContain(
++      "var(--radix-popover-content-available-height)",
++    );
++    // Capped at the room on that side; it scrolls rather than flip as it grows.
++    expect(repoPopover.className).toContain("max-h-(--radix-popover-content-available-height)");
++    expect(repoPopover.className).toContain("overflow-y-auto");
++    fireEvent.click(screen.getByRole("option", { name: /octo\/hello/ }));
++    await screen.findByTestId("new-chat-landing-repo-row");
++    expect(screen.getByTestId("new-chat-landing-repo-popover").getAttribute("data-side")).toBe(
++      "top",
++    );
++  });
++
++  it("opens the repo pickers below when there's room", async () => {
++    await openRepoPicker();
++    expect(screen.getByTestId("new-chat-landing-repo-popover").getAttribute("data-side")).toBe(
++      "bottom",
++    );
++    expect(
++      screen
++        .getByTestId("new-chat-landing-repo-search")
++        .closest("[data-slot=popover-content]")
++        ?.getAttribute("data-side"),
++    ).toBe("bottom");
++  });
++
    it("creates a managed session without host_id/workspace and no provisioning subtext", async () => {
      // Controlled promise so the in-flight state is observable
      // deterministically before the create resolves.
 diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
-index a9fec1e..5bfeb56 100644
+index a9fec1e..f88002a 100644
 --- a/web/src/shell/NewChatDialog.tsx
 +++ b/web/src/shell/NewChatDialog.tsx
-@@ -1025,6 +1025,38 @@ export function deriveRepoName(url: string): string | null {
+@@ -6,7 +6,16 @@ import {
+   HarnessPickerConfigPage,
+   HarnessPickerSubContent,
+ } from "@/components/composer/HarnessPicker";
+-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
++import {
++  type CSSProperties,
++  type ReactNode,
++  type RefObject,
++  useCallback,
++  useEffect,
++  useMemo,
++  useRef,
++  useState,
++} from "react";
+ import { useNavigate, useSearchParams } from "@/lib/routing";
+ import {
+   ComposerWorkspaceBar,
+@@ -1025,6 +1034,119 @@ export function deriveRepoName(url: string): string | null {
  const COMBOBOX_TRIGGER_CLASS =
    "flex w-full items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors hover:border-ring/60 focus-visible:border-ring";
  
 +/**
-+ * Shared popover props for the repo/branch comboboxes, so they fit on a phone.
++ * Keeps a popover on the side of its trigger it opened on.
 + *
-+ * - The popover is capped at the room Radix finds next to the trigger
-+ *   (``--radix-popover-content-available-height``, kept 8px off the screen
-+ *   edges); the list shrinks and scrolls when there's less than its usual
-+ *   18rem. Without the cap, a phone has room for the full popover neither
-+ *   above nor below the trigger, so Radix flips it to the top and it runs off
-+ *   the top of the screen.
++ * Radix flips a popover to the other side of its trigger whenever it stops
++ * fitting where it is, and checks again on every size change. The repository
++ * picker changes size all the time: it grows when a repo is added, its list
++ * shrinks as the search filters it, and a phone's keyboard takes half the
++ * screen when a field is focused. So it kept jumping from one side to the
++ * other. Instead, the side is picked once, on open: below, unless there's
++ * less than ``roomWanted`` below and more room above. Radix's flipping is
++ * off, and the popover is capped at the room on that side, 8px off the
++ * screen edges (``STEADY_POPOVER_CLASS``), so it shrinks and scrolls rather
++ * than move.
++ *
++ * @param roomWanted Height in px the popover usually needs.
++ * @returns ``triggerRef`` for the trigger, ``pickSide`` to call when the
++ *   popover opens, and ``contentProps`` to spread onto its ``PopoverContent``.
++ */
++function useSteadyPopoverSide(roomWanted: number): {
++  triggerRef: RefObject<HTMLButtonElement | null>;
++  pickSide: () => void;
++  contentProps: { side: "top" | "bottom"; avoidCollisions: false; collisionPadding: number };
++} {
++  const triggerRef = useRef<HTMLButtonElement>(null);
++  const [side, setSide] = useState<"top" | "bottom">("bottom");
++  const pickSide = useCallback(() => {
++    const rect = triggerRef.current?.getBoundingClientRect();
++    if (!rect) return;
++    const above = rect.top;
++    const below = window.innerHeight - rect.bottom;
++    setSide(below >= roomWanted || below >= above ? "bottom" : "top");
++  }, [roomWanted]);
++  return {
++    triggerRef,
++    pickSide,
++    contentProps: { side, avoidCollisions: false, collisionPadding: 8 },
++  };
++}
++
++/** Caps a ``useSteadyPopoverSide`` popover at the room next to its trigger. */
++const STEADY_POPOVER_CLASS =
++  "max-h-(--radix-popover-content-available-height) max-w-(--radix-popover-content-available-width)";
++
++/**
++ * Popover state and props for the repo/branch comboboxes, so they fit on a
++ * phone and stay put while you type.
++ *
++ * - The popover stays on one side of the trigger (``useSteadyPopoverSide``),
++ *   and the list shrinks and scrolls when there's less room than its usual
++ *   18rem. It used to flip to whichever side fit, so filtering the list made
++ *   it jump.
++ * - Above the trigger, it keeps the height it opened with. Its bottom edge
++ *   sits on the trigger, so as the search filtered the list, the popover got
++ *   shorter and the search field slid down under your fingers.
 + * - On touch screens the search field isn't focused on open, so the on-screen
 + *   keyboard doesn't pop up and pan the page. Tapping the field focuses it.
 + *
-+ * @returns Props to spread onto the combobox's ``PopoverContent``.
++ * @returns ``open`` and ``setOpen`` for the ``Popover``, ``triggerRef`` for
++ *   its trigger and ``contentProps`` to spread onto its ``PopoverContent``.
 + */
-+function useComboboxContentProps(): {
-+  align: "start";
-+  className: string;
-+  collisionPadding: number;
-+  onOpenAutoFocus: (event: Event) => void;
++function useComboboxPopover(): {
++  open: boolean;
++  setOpen: (open: boolean) => void;
++  triggerRef: RefObject<HTMLButtonElement | null>;
++  contentProps: ReturnType<typeof useSteadyPopoverSide>["contentProps"] & {
++    align: "start";
++    className: string;
++    style: CSSProperties | undefined;
++    onOpenAutoFocus: (event: Event) => void;
++  };
 +} {
++  const [open, setOpenState] = useState(false);
++  // The popover's height when it opened, measured in ``onOpenAutoFocus``.
++  const [openedHeight, setOpenedHeight] = useState<number | null>(null);
 +  const isCoarsePointer = useIsCoarsePointer();
++  // A search field and an 18rem list.
++  const { triggerRef, pickSide, contentProps } = useSteadyPopoverSide(336);
++  const setOpen = useCallback(
++    (next: boolean) => {
++      if (next) {
++        pickSide();
++        setOpenedHeight(null);
++      }
++      setOpenState(next);
++    },
++    [pickSide],
++  );
 +  return {
-+    align: "start",
-+    className:
-+      "max-h-(--radix-popover-content-available-height) w-(--radix-popover-trigger-width) min-w-72 p-0",
-+    collisionPadding: 8,
-+    onOpenAutoFocus: (event) => {
-+      if (isCoarsePointer) event.preventDefault();
++    open,
++    setOpen,
++    triggerRef,
++    contentProps: {
++      ...contentProps,
++      align: "start",
++      className: cn(
++        STEADY_POPOVER_CLASS,
++        "w-(--radix-popover-trigger-width) min-w-[min(18rem,var(--radix-popover-content-available-width))] p-0",
++      ),
++      // Still capped at the room above the trigger, so a keyboard opening
++      // shrinks it.
++      style:
++        contentProps.side === "top" && openedHeight !== null
++          ? { minHeight: `min(${openedHeight}px, var(--radix-popover-content-available-height))` }
++          : undefined,
++      onOpenAutoFocus: (event) => {
++        // Radix fires this on the popover element once it's mounted.
++        if (event.target instanceof HTMLElement) setOpenedHeight(event.target.offsetHeight);
++        if (isCoarsePointer) event.preventDefault();
++      },
 +    },
 +  };
 +}
@@ -130,37 +285,90 @@ index a9fec1e..5bfeb56 100644
  /**
   * Searchable combobox for picking one of the caller's GitHub repos.
   *
-@@ -1049,6 +1081,7 @@ function SandboxRepoCombobox({
+@@ -1047,12 +1169,13 @@ function SandboxRepoCombobox({
+   value: string;
+   onSelect: (repo: GithubRepo | null) => void;
  }): ReactNode {
-   const [open, setOpen] = useState(false);
+-  const [open, setOpen] = useState(false);
++  const { open, setOpen, triggerRef, contentProps } = useComboboxPopover();
    const selected = repos.find((r) => r.full_name === value) ?? null;
-+  const comboboxContentProps = useComboboxContentProps();
    return (
      <Popover open={open} onOpenChange={setOpen}>
        <PopoverTrigger asChild>
-@@ -1064,7 +1097,7 @@ function SandboxRepoCombobox({
+         <button
++          ref={triggerRef}
+           type="button"
+           role="combobox"
+           aria-expanded={open}
+@@ -1064,7 +1187,7 @@ function SandboxRepoCombobox({
            <ChevronsUpDownIcon className="ml-auto size-3.5 shrink-0 opacity-50" />
          </button>
        </PopoverTrigger>
 -      <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-72 p-0">
-+      <PopoverContent {...comboboxContentProps}>
++      <PopoverContent {...contentProps}>
          <Command>
            <CommandInput
              placeholder="Search repositories…"
-@@ -1125,6 +1158,7 @@ function SandboxRepoBranchSelect({
+@@ -1124,7 +1247,7 @@ function SandboxRepoBranchSelect({
+   defaultBranch: string | null;
    onChange: (branch: string) => void;
  }): ReactNode {
-   const [open, setOpen] = useState(false);
-+  const comboboxContentProps = useComboboxContentProps();
+-  const [open, setOpen] = useState(false);
++  const { open, setOpen, triggerRef, contentProps } = useComboboxPopover();
    const { data, isPending } = useQuery({
      queryKey: ["github-branches", fullName],
      queryFn: () => fetchGithubBranches(fullName),
-@@ -1156,7 +1190,7 @@ function SandboxRepoBranchSelect({
+@@ -1144,6 +1267,7 @@ function SandboxRepoBranchSelect({
+     <Popover open={open} onOpenChange={setOpen}>
+       <PopoverTrigger asChild>
+         <button
++          ref={triggerRef}
+           type="button"
+           role="combobox"
+           aria-expanded={open}
+@@ -1156,7 +1280,7 @@ function SandboxRepoBranchSelect({
            <ChevronsUpDownIcon className="ml-auto size-3.5 shrink-0 opacity-50" />
          </button>
        </PopoverTrigger>
 -      <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-72 p-0">
-+      <PopoverContent {...comboboxContentProps}>
++      <PopoverContent {...contentProps}>
          <Command>
            <CommandInput
              placeholder="Search branches…"
+@@ -2455,6 +2579,10 @@ export function NewChatLandingScreen() {
+   }, []);
+   // Free-text URL being typed into the "paste a URL" adder (not yet added).
+   const [pendingRepoUrl, setPendingRepoUrl] = useState<string>("");
++  // The repository chip's popover stays on the side it opened on as repos are
++  // added and the keyboard comes and goes. It's about 400px tall with a repo
++  // picked.
++  const repoPopover = useSteadyPopoverSide(400);
+   // When the server advertises the GitHub App and the caller has connected
+   // their account, offer a picker over their repos instead of only the
+   // free-text URL. The /repos endpoint returns `connected: false` when the
+@@ -5863,9 +5991,10 @@ export function NewChatLandingScreen() {
+               before the sandbox exists, so the workspace is specified as
+               a git repository URL (+ optional branch) the server clones
+               at create time. Blank = empty server-created workspace. */}
+-              <Popover>
++              <Popover onOpenChange={(open) => open && repoPopover.pickSide()}>
+                 <PopoverTrigger asChild>
+                   <button
++                    ref={repoPopover.triggerRef}
+                     type="button"
+                     aria-label={`Sandbox repositories: ${
+                       sandboxRepoSelections.length > 0 ? sandboxRepoLabel : "None selected"
+@@ -5886,7 +6015,12 @@ export function NewChatLandingScreen() {
+                     <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />
+                   </button>
+                 </PopoverTrigger>
+-                <PopoverContent align="start" className="w-96 p-3">
++                <PopoverContent
++                  {...repoPopover.contentProps}
++                  align="start"
++                  className={cn(STEADY_POPOVER_CLASS, "w-96 overflow-y-auto p-3")}
++                  data-testid="new-chat-landing-repo-popover"
++                >
+                   <div className="flex flex-col gap-2">
+                     <div className="flex items-center gap-1.5">
+                       <span className="text-sm font-medium text-foreground">
