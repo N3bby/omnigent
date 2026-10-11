@@ -70,6 +70,7 @@ PASS  images/runner/patches/0003-claude-bypass-switch.patch
 PASS  images/runner/patches/0004-fast-mode.patch
 PASS  images/runner/patches/0005-fast-mode-command-lifecycle.patch
 PASS  images/runner/patches/0006-mention-file-index.patch
+PASS  images/runner/patches/0007-native-turn-idle-watchdog.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -82,6 +83,7 @@ PASS  images/server/patches/0008-fast-mode.patch
 PASS  images/server/patches/0009-fast-mode-command-lifecycle.patch
 PASS  images/server/patches/0010-repo-git-token.patch
 PASS  images/server/patches/0011-mention-file-index.patch
+PASS  images/server/patches/0012-repo-checkouts.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -97,6 +99,7 @@ PASS  images/server/web-patches/0011-codex-theme.patch
 PASS  images/server/web-patches/0012-repo-git-token-field.patch
 PASS  images/server/web-patches/0013-remove-sidebar-quick-actions.patch
 PASS  images/server/web-patches/0014-composer-fuzzy-mentions.patch
+PASS  images/server/web-patches/0015-repo-instructions-setup.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under

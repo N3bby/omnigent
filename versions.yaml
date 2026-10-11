@@ -1,4 +1,7 @@
 # One source of truth for deployable software and build inputs.
+# Upgrading Omnigent? Rebase or delete the patches in images/*/patches/ and
+# images/server/web-patches/; docs/features/README.md lists the backported
+# upstream fixes to delete.
 omnigent: "v0.15.0"
 omnigent_commit: "c8b9b85f822f2c9203ff995c10f3cc49d064bbe5"
 omnigent_host_base_digest: "sha256:f3dee09609ccecbebd6841c30b33f0160eaf3d2758d535b2e3993c1a3df5664a"

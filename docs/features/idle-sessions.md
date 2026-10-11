@@ -55,7 +55,9 @@ Set these in `environments/production.toml` and deploy:
 - **The deadline moves while the session is active.** While a runner is
   connected, the server keeps pushing the Sandbox's `shutdownTime` forward.
   - The runner exits once it has been idle for `runner_agent_idle_seconds`
-    (Omnigent's `keep_warm_s`).
+    (Omnigent's `keep_warm_s`). A turn that's still running isn't idle,
+    however long it takes, including a Claude or Codex turn in its terminal
+    (`images/runner/patches/0007-native-turn-idle-watchdog.patch`).
   - When the session has been idle for `runner_idle_shutdown_seconds`, the
     deadline passes and the controller deletes the Pod. The Sandbox and its
     volume stay.
