@@ -55,7 +55,9 @@ You can't.
 | Server | `images/server/patches/0011-mention-file-index.patch` | Passes that route through to the runner, with the same access check as the other file reads |
 | Web UI | `images/server/web-patches/0014-composer-fuzzy-mentions.patch` | Loads the list once, matches it as you type, and shows the results in the `@` menu |
 
-The matching runs in the browser, so each keystroke takes a millisecond or
-two even with tens of thousands of files. The scoring follows fzf's. Upstream
-Omnigent's `@` menu only filtered the folder you were in, so reaching a
-nested file meant opening every folder on the way.
+The matching runs in the browser. Once it has 50 results, it skips any path
+whose best possible score can't beat the 50th, before matching it. On the
+Linux kernel's 96,000 files a keystroke takes under a millisecond on average
+and about 3 ms at worst. The scoring follows fzf's. Upstream Omnigent's `@`
+menu only filtered the folder you were in, so reaching a nested file meant
+opening every folder on the way.

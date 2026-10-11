@@ -161,11 +161,11 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx` | 742 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx` | 743 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py` | 20 passed |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
-and 15 backend cases; fuzzy `@` file search adds 21 frontend and 5 backend
+and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
 cases. These are selected suites, not the entire upstream test suite. The
 fast-mode backend uses mocked CLI transports: a pass verifies command routing
 and lifecycle handling, not live Claude/Codex availability or billing. The

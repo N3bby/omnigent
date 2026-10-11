@@ -1,19 +1,21 @@
 Fuzzy-search the whole workspace from the composer's "@" menu.
 
-Upstream's "@" menu browses one folder at a time: "@auth" only finds
-auth.ts at the workspace root, and reaching a nested file means opening
-each folder. Once the workspace's file index (server patch
-0011-mention-file-index.patch) has loaded, typing a name now matches every
-file and folder fzf-style, like Claude Code's and Codex's own pickers: the
-characters must appear in order but not together, so "@srvts" finds
-src/server.ts. Matches in the file name, at word and camel-case boundaries,
-and in a row rank higher, files a little above folders, shorter paths
-above longer ones. "@src/au" searches all of src. A bare "@" and "@<folder>/" still browse, so Enter on
-a folder result opens it and Tab attaches it whole. Rows show the matched
-characters in bold and the folder each result is in. Without the index
-(still loading, or an older runner) the menu filters the folder as before.
-The new-session launcher's "@" menu, which reads the host's filesystem, is
-unchanged.
+Upstream's "@" menu browses one folder at a time: "@auth" only finds auth.ts
+at the workspace root, and reaching a nested file means opening each folder.
+Once the workspace's file index (server patch 0011-mention-file-index.patch)
+has loaded, typing a name now matches every file and folder fzf-style, like
+Claude Code's and Codex's own pickers: the characters must appear in order
+but not together, so "@srvts" finds src/server.ts. Matches in the file name,
+at word and camel-case boundaries, and in a row rank higher, files a little
+above folders, shorter paths above longer ones. "@src/au" searches all of
+src. A bare "@" and "@<folder>/" still browse, so Enter on a folder result
+opens it and Tab attaches it whole. Rows show the matched characters in bold
+and the folder each result is in. Once 50 results are in hand, a path whose
+best possible score can't beat the 50th is skipped before it's matched,
+which keeps a keystroke near a millisecond on a kernel-sized workspace.
+Without the index (still loading, or an older runner) the menu filters the
+folder as before. The new-session launcher's "@" menu, which reads the
+host's filesystem, is unchanged.
 Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0013.
 
 diff --git a/web/src/components/FileMentionMenu.tsx b/web/src/components/FileMentionMenu.tsx
@@ -209,10 +211,10 @@ index 1afd373..0655c7f 100644
  async function fetchWorkspaceDirectory(
 diff --git a/web/src/lib/fuzzyPathMatch.test.ts b/web/src/lib/fuzzyPathMatch.test.ts
 new file mode 100644
-index 0000000..2dd2243
+index 0000000..d7e4a9f
 --- /dev/null
 +++ b/web/src/lib/fuzzyPathMatch.test.ts
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,111 @@
 +import { describe, expect, it } from "vitest";
 +import { buildFuzzyPathIndex, fuzzyMatchPaths, fuzzyMentionScope } from "./fuzzyPathMatch";
 +
@@ -283,6 +285,18 @@ index 0000000..2dd2243
 +    expect(match("src", "src")).not.toContain("src");
 +  });
 +
++  it("skips paths early without changing the results", () => {
++    // Once the list is full, paths that can't beat its last entry are skipped
++    // before matching. A short list must still be the long list's head.
++    const index = buildFuzzyPathIndex(PATHS);
++    for (const query of ["a", "s", "ts", "auth", "Chat", "test"]) {
++      const all = fuzzyMatchPaths(index, query, "", 100);
++      for (const cap of [1, 2, 3]) {
++        expect(fuzzyMatchPaths(index, query, "", cap)).toEqual(all.slice(0, cap));
++      }
++    }
++  });
++
 +  it("keeps the best matches up to the cap", () => {
 +    const index = buildFuzzyPathIndex(PATHS);
 +    expect(fuzzyMatchPaths(index, "s", "", 2)).toHaveLength(2);
@@ -314,10 +328,10 @@ index 0000000..2dd2243
 +});
 diff --git a/web/src/lib/fuzzyPathMatch.ts b/web/src/lib/fuzzyPathMatch.ts
 new file mode 100644
-index 0000000..12c63e4
+index 0000000..013c89c
 --- /dev/null
 +++ b/web/src/lib/fuzzyPathMatch.ts
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,311 @@
 +/**
 + * fzf-style fuzzy matching over every path in a workspace, for the composer's
 + * ``@``-file-mention menu. The query's characters must appear in the path in
@@ -336,6 +350,10 @@ index 0000000..12c63e4
 +  isDir: boolean[];
 +  /** One bit per letter a-z each path contains, to skip hopeless paths fast. */
 +  letters: Int32Array;
++  /** Where each path's file or folder name starts, after its last "/". */
++  nameStarts: Int32Array;
++  /** Like ``letters``, for the file or folder name alone. */
++  nameLetters: Int32Array;
 +  dirs: Set<string>;
 +}
 +
@@ -391,9 +409,29 @@ index 0000000..12c63e4
 +  const paths = [...filePaths, ...dirs];
 +  const lowerPaths = paths.map((p) => p.toLowerCase());
 +  const letters = new Int32Array(paths.length);
-+  lowerPaths.forEach((p, i) => (letters[i] = letterBits(p)));
++  const nameStarts = new Int32Array(paths.length);
++  const nameLetters = new Int32Array(paths.length);
++  lowerPaths.forEach((p, i) => {
++    // One pass: the path's letters, and the name's, restarted at each "/".
++    let bits = 0;
++    let nameBits = 0;
++    let nameStart = 0;
++    for (let at = 0; at < p.length; at++) {
++      const c = p.charCodeAt(at);
++      if (c >= 97 && c <= 122) {
++        bits |= 1 << (c - 97);
++        nameBits |= 1 << (c - 97);
++      } else if (c === 47) {
++        nameBits = 0;
++        nameStart = at + 1;
++      }
++    }
++    letters[i] = bits;
++    nameStarts[i] = nameStart;
++    nameLetters[i] = nameBits;
++  });
 +  const isDir = paths.map((_, i) => i >= filePaths.length);
-+  return { paths, lowerPaths, isDir, letters, dirs };
++  return { paths, lowerPaths, isDir, letters, nameStarts, nameLetters, dirs };
 +}
 +
 +/** Leftmost positions of ``needle`` in ``text`` as a subsequence, from ``from``. */
@@ -416,24 +454,37 @@ index 0000000..12c63e4
 + */
 +function tightMatch(text: string, needle: string, from: number): number[] | null {
 +  const leftmost = forwardMatch(text, needle, from);
-+  if (!leftmost) return null;
-+  let at = leftmost[leftmost.length - 1] + 1;
++  // One letter can't be matched any tighter.
++  if (!leftmost || needle.length === 1) return leftmost;
++  const end = leftmost[leftmost.length - 1];
++  // A tighter match starts at a later copy of the first letter, with room for
++  // the other letters before ``end``. Without one, it's the leftmost match.
++  const next = text.indexOf(needle[0], leftmost[0] + 1);
++  if (next < 0 || next > end - (needle.length - 1)) return leftmost;
++  let at = end + 1;
 +  for (let i = needle.length - 1; i >= 0; i--) {
 +    at = text.lastIndexOf(needle[i], at - 1);
 +  }
-+  if (at < from) return leftmost;
++  // The latest start is never before the leftmost one. When they're the same,
++  // matching forward again would only rebuild the leftmost match.
++  if (at <= leftmost[0]) return leftmost;
 +  return forwardMatch(text, needle, at) ?? leftmost;
 +}
 +
-+function isSeparator(c: string): boolean {
-+  return c === "/" || c === "-" || c === "_" || c === "." || c === " ";
++/** "/", "-", "_", "." or a space, by character code. */
++function isSeparator(c: number): boolean {
++  return c === 47 || c === 45 || c === 95 || c === 46 || c === 32;
 +}
 +
 +function bonusAt(path: string, lower: string, at: number, from: number): number {
-+  if (at === from || path[at - 1] === "/") return BONUS_AFTER_SLASH;
-+  if (isSeparator(path[at - 1])) return BONUS_BOUNDARY;
++  if (at === from) return BONUS_AFTER_SLASH;
++  const before = path.charCodeAt(at - 1);
++  if (before === 47) return BONUS_AFTER_SLASH;
++  if (isSeparator(before)) return BONUS_BOUNDARY;
 +  // A lowercase-to-uppercase step, e.g. the M in "composerMentions".
-+  if (path[at - 1] === lower[at - 1] && path[at] !== lower[at]) return BONUS_CAMEL;
++  if (before === lower.charCodeAt(at - 1) && path.charCodeAt(at) !== lower.charCodeAt(at)) {
++    return BONUS_CAMEL;
++  }
 +  return 0;
 +}
 +
@@ -442,6 +493,7 @@ index 0000000..12c63e4
 +  lower: string,
 +  positions: number[],
 +  from: number,
++  nameStart: number,
 +  needle: string,
 +): number {
 +  let score = 0;
@@ -462,7 +514,6 @@ index 0000000..12c63e4
 +    // Where the match starts matters most.
 +    score += SCORE_MATCH + (i === 0 ? bonus * 2 : bonus);
 +  }
-+  const nameStart = Math.max(from, lower.lastIndexOf("/") + 1);
 +  if (positions[0] >= nameStart) {
 +    score += BONUS_IN_NAME;
 +    const name = lower.slice(nameStart);
@@ -508,26 +559,51 @@ index 0000000..12c63e4
 +  const needle = caseSensitive ? query : query.toLowerCase();
 +  const needed = letterBits(query.toLowerCase());
 +  const prefix = within ? `${within}/` : "";
++  const lowerNeedle = needle.toLowerCase();
++  // The most the letters can score, before any name bonus: the first at the
++  // biggest position bonus (doubled), the rest at the biggest too, no gaps.
++  const maxLetters =
++    SCORE_MATCH + 2 * BONUS_AFTER_SLASH + (needle.length - 1) * (SCORE_MATCH + BONUS_AFTER_SLASH);
 +  const top: FuzzyPathMatch[] = [];
-+  const { paths, lowerPaths, isDir, letters } = index;
++  const { paths, lowerPaths, isDir, letters, nameStarts, nameLetters } = index;
 +  for (let i = 0; i < paths.length; i++) {
 +    if ((letters[i] & needed) !== needed) continue;
 +    const path = paths[i];
 +    if (prefix && (!path.startsWith(prefix) || path.length === prefix.length)) continue;
 +    const lower = lowerPaths[i];
-+    const text = caseSensitive ? path : lower;
 +    const from = prefix.length;
++    const nameStart = Math.max(from, nameStarts[i]);
++    // Once the top list is full, skip a path whose best possible score can't
++    // beat its last entry, before matching it at all. Only a name that starts
++    // with the query can earn the name prefix and exact-name bonuses.
++    if (top.length === cap) {
++      let best = maxLetters + Math.max(0, 24 - ((path.length - from) >> 2));
++      // Name bonuses need every letter of the query in the name.
++      if ((nameLetters[i] & needed) === needed) {
++        best += BONUS_IN_NAME;
++        if (lower.startsWith(lowerNeedle, nameStart)) {
++          best += BONUS_NAME_PREFIX;
++          const end = nameStart + lowerNeedle.length;
++          if (end === lower.length || (lower[end] === "." && lower.lastIndexOf(".") === end)) {
++            best += BONUS_EXACT_NAME;
++          }
++        }
++      }
++      if (isDir[i]) best -= PENALTY_FOLDER;
++      // Strictly below: an equal score could still win the tie-break.
++      if (best < top[cap - 1].score) continue;
++    }
++    const text = caseSensitive ? path : lower;
 +    const anywhere = tightMatch(text, needle, from);
 +    if (!anywhere) continue;
 +    let positions = anywhere;
-+    let score = scorePositions(path, lower, anywhere, from, needle);
++    let score = scorePositions(path, lower, anywhere, from, nameStart, needle);
 +    // A match inside the file or folder name usually beats one spread across
 +    // the path, but scoring both lets a strong path match still win.
-+    const nameStart = Math.max(from, lower.lastIndexOf("/") + 1);
-+    if (anywhere[0] < nameStart) {
++    if (anywhere[0] < nameStart && (nameLetters[i] & needed) === needed) {
 +      const inName = tightMatch(text, needle, nameStart);
 +      if (inName) {
-+        const nameScore = scorePositions(path, lower, inName, from, needle);
++        const nameScore = scorePositions(path, lower, inName, from, nameStart, needle);
 +        if (nameScore > score) {
 +          positions = inName;
 +          score = nameScore;
