@@ -467,7 +467,9 @@ Hand these to the user; they need their own devices or VM access:
     messages in a grey bubble, a line after **Worked**, a round send button and
     the working directory under the composer, a few pixels clear of its
     shadow. The labels in that bar, including the monospace Tailscale name,
-    sit on one baseline, in Firefox as well as Chrome. Queue a message while
+    sit on one baseline, in Firefox as well as Chrome. A code block's wrap,
+    copy and download buttons sit in one row in the middle of its header,
+    evenly spaced and without a backdrop. Queue a message while
     the agent works: it shows above the composer and the bar stays under it.
     Switch between light and dark mode, then pick **Omnigent** again: the
     pink look is back.

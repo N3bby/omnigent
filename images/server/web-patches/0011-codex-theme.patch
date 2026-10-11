@@ -16,10 +16,10 @@ Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/web/src/codexTheme.css b/web/src/codexTheme.css
 new file mode 100644
-index 0000000..c2895ac
+index 0000000..11cdce8
 --- /dev/null
 +++ b/web/src/codexTheme.css
-@@ -0,0 +1,358 @@
+@@ -0,0 +1,374 @@
 +/* Codex palette: the layout and type changes that go beyond colour.
 + *
 + * themePalette.ts sets the colour tokens for `data-theme="codex"`; this file
@@ -169,8 +169,24 @@ index 0000000..c2895ac
 +  margin-top: -2.25rem;
 +}
 +
++/* Chat code blocks overlay their wrap and copy buttons just left of
++ * Streamdown's download button (ChatCodeBlockPre in message.tsx), placed for
++ * the default header. Move them with it: down to the taller header's middle,
++ * and right by the card padding removed above, so the three keep one row and
++ * one 2px gap. */
++[data-theme="codex"] .chat-code-block > [data-streamdown="code-block"] + div {
++  top: 0.25rem;
++  right: calc(2.375rem + 2px);
++}
++
 +[data-theme="codex"] [data-streamdown="code-block-actions"] {
 +  border-color: transparent;
++  background: transparent;
++  backdrop-filter: none;
++}
++
++/* Flat like download, without the backdrop that matched its pill. */
++[data-theme="codex"] .chat-code-block > [data-streamdown="code-block"] + div button {
 +  background: transparent;
 +  backdrop-filter: none;
 +}

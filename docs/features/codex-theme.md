@@ -23,7 +23,8 @@ It changes more than the colours:
   text.
 - **"Worked" is followed by a thin line** that marks where the agent's work
   for a turn ends.
-- **Flat code blocks** with a small language label and no line numbers.
+- **Flat code blocks** with a small language label, no line numbers, and
+  their wrap, copy and download buttons in one row.
 - **A rounder composer** with a soft shadow and a round send button. The
   working directory, branch and Tailscale name move underneath it and stay
   there when messages are queued. Queued messages and the sub-agent tray
