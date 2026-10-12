@@ -119,6 +119,9 @@ class LoginTests(unittest.TestCase):
         self.assertFalse(spec["automountServiceAccountToken"])
         self.assertEqual(spec["activeDeadlineSeconds"], 900)
         self.assertNotIn("volumes", spec)
+        # Without the runner's config, Codex may keep the login out of auth.json.
+        self.assertIn("cp /opt/codex-home/config.toml /tmp/codex-login/config.toml",
+                      spec["containers"][0]["command"][2])
         for bad in ["../pod", "a" * 31, "pod"]:
             with self.assertRaises(ValueError):
                 login.pod_name(bad)

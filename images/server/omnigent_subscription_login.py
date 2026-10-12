@@ -58,6 +58,8 @@ def _start(core, name, account_id=None, provider="codex"):
                                      "seccompProfile": {"type": "RuntimeDefault"}},
                  "containers": [{"name": "login", "image": image,
                      "command": ["sh", "-c", "mkdir -p /tmp/codex-login; "
+                         # As in setup-codex: its config stores the login in auth.json.
+                         "cp /opt/codex-home/config.toml /tmp/codex-login/config.toml; "
                          "node /usr/local/bin/codex-real login --device-auth || exit $?; touch /tmp/login-done; sleep 900"]
                          if provider == "codex" else ["sh", "-c", "/opt/venv/bin/python /usr/local/lib/omnigent/subscription-login.py; sleep 900"],
                      "env": [{"name": "HOME", "value": "/home/omnigent"},
