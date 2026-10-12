@@ -77,5 +77,5 @@ run = './scripts/setup-github-app'
 description = "Run repository validation and tests"
 run = [
   { task = "check" },
-  "python -m unittest discover -s tests -v",
+  "uv run --no-project --with pyte==0.8.2 python -m unittest discover -s tests -v",
 ]

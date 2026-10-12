@@ -78,8 +78,8 @@ def main() -> None:
         "request_cpu": as_cpu(cpu_milli(cfg["runner_cpu_request"]) * concurrency + 500),
         "request_memory": as_mi(binary_mi(cfg["runner_memory_request"]) * concurrency + 512),
         "request_storage": as_mi(binary_mi(cfg["runner_ephemeral_request"]) * concurrency + 1024),
-        "limit_cpu": as_cpu(cpu_milli(cfg["runner_cpu_limit"]) * concurrency + 1000),
-        "limit_memory": as_mi(binary_mi(cfg["runner_memory_limit"]) * concurrency + 1024),
+        "limit_cpu": as_cpu(cpu_milli(cfg["runner_cpu_limit"]) * concurrency + 3000),
+        "limit_memory": as_mi(binary_mi(cfg["runner_memory_limit"]) * concurrency + 3072),
         "limit_storage": as_mi(binary_mi(cfg["runner_ephemeral_limit"]) * concurrency + 1024),
     }
 
@@ -95,6 +95,7 @@ def main() -> None:
             "OMNIGENT_ACCOUNTS_AUTO_OPEN=0",
             f"OMNIGENT_ACCOUNTS_BASE_URL=https://{cfg['hostname']}",
             "CODEX_HOME=/opt/codex-home",
+            f"OMNIGENT_SUBSCRIPTION_LOGIN_IMAGE={runner_ref}",
             f"OMNIGENT_CODEX_BYPASS_APPROVALS={bypass}",
             f"OMNIGENT_CLAUDE_BYPASS_PERMISSIONS={claude_bypass}",
             "OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH=/data/artifacts/.deployment/sandbox-model-catalogs.json",

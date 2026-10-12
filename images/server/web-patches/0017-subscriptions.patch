@@ -1,0 +1,972 @@
+diff --git a/web/src/lib/subscriptions.ts b/web/src/lib/subscriptions.ts
+new file mode 100644
+index 000000000..e7bd6ff39
+--- /dev/null
++++ b/web/src/lib/subscriptions.ts
+@@ -0,0 +1,48 @@
++import { authenticatedFetch } from "./identity";
++
++export type Provider = "claude" | "codex";
++export interface Subscription {
++  id: string;
++  provider: Provider;
++  name: string;
++  active: boolean;
++  updated_at: string;
++}
++export interface Subscriptions {
++  data: Subscription[];
++  active: Partial<Record<Provider, string>>;
++}
++export interface Login {
++  id?: string;
++  status: "starting" | "waiting" | "complete" | "expired" | "exchanging" | "failed";
++  url?: string;
++  code?: string;
++  subscriptions?: Subscriptions;
++}
++
++export class SubscriptionRequestError extends Error {
++  readonly status: number;
++  constructor(message: string, status: number) {
++    super(message);
++    this.status = status;
++  }
++}
++
++export async function subscriptionRequest<T>(
++  path = "",
++  method = "GET",
++  body?: unknown,
++): Promise<T> {
++  const response = await authenticatedFetch(`/v1/subscriptions${path}`, {
++    method,
++    headers: body ? { "Content-Type": "application/json" } : undefined,
++    body: body ? JSON.stringify(body) : undefined,
++  });
++  const data = await response.json();
++  if (!response.ok)
++    throw new SubscriptionRequestError(
++      data.error?.message ?? "Couldn't reach subscriptions. Try again.",
++      response.status,
++    );
++  return data as T;
++}
+diff --git a/web/src/pages/SettingsPage.tsx b/web/src/pages/SettingsPage.tsx
+index 2f63959b2..3338d7ec7 100644
+--- a/web/src/pages/SettingsPage.tsx
++++ b/web/src/pages/SettingsPage.tsx
+@@ -268,6 +268,9 @@ const PoliciesPage = lazy(() =>
+ const SharingPage = lazy(() =>
+   import("@/pages/SharingPage").then((m) => ({ default: m.SharingPage })),
+ );
++const SubscriptionsPage = lazy(() =>
++  import("@/pages/SubscriptionsPage").then((m) => ({ default: m.SubscriptionsPage })),
++);
+ const RepoVariablesPage = lazy(() =>
+   import("@/pages/RepoVariablesPage").then((m) => ({ default: m.RepoVariablesPage })),
+ );
+@@ -301,7 +304,8 @@ export function SettingsPage() {
+     section === "members" ||
+     section === "policies" ||
+     section === "sharing" ||
+-    section === "repo-env"
++    section === "repo-env" ||
++    section === "subscriptions"
+   ) {
+     return (
+       <Suspense fallback={null}>
+@@ -311,6 +315,8 @@ export function SettingsPage() {
+           <PoliciesPage />
+         ) : section === "sharing" ? (
+           <SharingPage />
++        ) : section === "subscriptions" ? (
++          <SubscriptionsPage />
+         ) : (
+           <RepoVariablesPage />
+         )}
+diff --git a/web/src/pages/SubscriptionsPage.test.tsx b/web/src/pages/SubscriptionsPage.test.tsx
+new file mode 100644
+index 000000000..2618ae751
+--- /dev/null
++++ b/web/src/pages/SubscriptionsPage.test.tsx
+@@ -0,0 +1,185 @@
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { SubscriptionsPage } from "./SubscriptionsPage";
++import * as identity from "@/lib/identity";
++
++vi.mock("@/lib/CapabilitiesContext", () => ({ useServerInfo: () => ({ single_user: false }) }));
++vi.mock("@/lib/identity", () => ({
++  resolveIdentity: vi.fn(),
++  getCurrentIsAdmin: vi.fn(),
++  authenticatedFetch: vi.fn(),
++}));
++const accounts = [
++  { id: "personal", provider: "claude", name: "Personal", active: true, updated_at: "2026-10-12" },
++  { id: "work", provider: "claude", name: "Work", active: false, updated_at: "2026-10-12" },
++];
++const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status });
++function renderPage() {
++  return render(
++    <QueryClientProvider
++      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
++    >
++      <SubscriptionsPage />
++    </QueryClientProvider>,
++  );
++}
++beforeEach(() => {
++  vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(true);
++  vi.mocked(identity.resolveIdentity).mockResolvedValue("admin");
++  vi.mocked(identity.authenticatedFetch).mockResolvedValue(
++    json({ data: accounts, active: { claude: "personal" } }),
++  );
++});
++afterEach(() => {
++  cleanup();
++  vi.clearAllMocks();
++});
++
++describe("subscriptions", () => {
++  it("gates all reads for non-admins", async () => {
++    vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(false);
++    renderPage();
++    expect(screen.getByText("Only admins can manage subscriptions.")).toBeInTheDocument();
++    expect(identity.authenticatedFetch).not.toHaveBeenCalled();
++  });
++
++  it("switches accounts and cannot remove the active account", async () => {
++    renderPage();
++    await screen.findByText("Personal");
++    expect(screen.getByRole("button", { name: "Remove Personal" })).toBeDisabled();
++    vi.mocked(identity.authenticatedFetch).mockResolvedValue(
++      json({
++        data: accounts.map((a) => ({ ...a, active: a.id === "work" })),
++        active: { claude: "work" },
++      }),
++    );
++    fireEvent.click(screen.getByRole("button", { name: "Use" }));
++    await waitFor(() =>
++      expect(identity.authenticatedFetch).toHaveBeenLastCalledWith(
++        "/v1/subscriptions/work/activate",
++        expect.objectContaining({ method: "POST" }),
++      ),
++    );
++    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Work" })).toBeDisabled());
++    expect(screen.getByRole("status")).toHaveTextContent("Stop and resume");
++  });
++
++  it("keeps credentials blank when editing and saves null to preserve them", async () => {
++    renderPage();
++    await screen.findByText("Personal");
++    fireEvent.click(screen.getByRole("button", { name: "Edit Work" }));
++    const dialog = screen.getByRole("dialog");
++    fireEvent.click(
++      within(dialog).getByRole("button", { name: "Already have credentials? Import instead" }),
++    );
++    expect(within(dialog).getByLabelText("Subscription token")).toHaveValue("");
++    fireEvent.change(within(dialog).getByLabelText("Subscription name"), {
++      target: { value: "Work renamed" },
++    });
++    fireEvent.click(within(dialog).getByRole("button", { name: "Save subscription" }));
++    await waitFor(() =>
++      expect(identity.authenticatedFetch).toHaveBeenLastCalledWith(
++        "/v1/subscriptions",
++        expect.objectContaining({
++          method: "PUT",
++          body: JSON.stringify({
++            provider: "claude",
++            name: "Work renamed",
++            credential: null,
++            id: "work",
++          }),
++        }),
++      ),
++    );
++  });
++
++  it("shows a failed switch without changing the active account", async () => {
++    renderPage();
++    await screen.findByText("Personal");
++    vi.mocked(identity.authenticatedFetch).mockResolvedValue(
++      json({ error: { message: "Subscriptions changed. Reload and try again." } }, 409),
++    );
++    fireEvent.click(screen.getByRole("button", { name: "Use" }));
++    expect(await screen.findByRole("alert")).toHaveTextContent("Subscriptions changed");
++    expect(screen.getByRole("button", { name: "Remove Personal" })).toBeDisabled();
++  });
++
++  it("starts device login and cancels the helper on dialog close", async () => {
++    renderPage();
++    await screen.findByText("Personal");
++    fireEvent.click(screen.getAllByRole("button", { name: "Add subscription" })[1]);
++    fireEvent.change(screen.getByLabelText("Subscription name"), {
++      target: { value: "ChatGPT Personal" },
++    });
++    vi.mocked(identity.authenticatedFetch).mockImplementation(async (path, init) => {
++      if (String(path).endsWith("/login/codex")) return json({ id: "helper", status: "starting" });
++      if (init?.method === "DELETE") return json({ status: "cancelled" });
++      return json({
++        status: "waiting",
++        code: "ABCD-EFGHI",
++        url: "https://auth.openai.com/codex/device",
++      });
++    });
++    fireEvent.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
++    await screen.findByText("ABCD-EFGHI");
++    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
++    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
++    expect(identity.authenticatedFetch).toHaveBeenLastCalledWith(
++      "/v1/subscriptions/login/helper",
++      expect.objectContaining({ method: "DELETE" }),
++    );
++  });
++});
++
++it("signs into Claude entirely through the browser flow", async () => {
++  renderPage();
++  await screen.findByText("Personal");
++  fireEvent.click(screen.getAllByRole("button", { name: "Add subscription" })[0]);
++  fireEvent.change(screen.getByLabelText("Subscription name"), { target: { value: "Travel" } });
++  vi.mocked(identity.authenticatedFetch).mockImplementation(async (path) => {
++    if (String(path).endsWith("/login/claude")) return json({ id: "helper", status: "starting" });
++    if (String(path).endsWith("/code")) return json({ status: "exchanging" });
++    return json({
++      status: "waiting",
++      url: "https://claude.com/cai/oauth/authorize?code_challenge=test",
++    });
++  });
++  fireEvent.click(screen.getByRole("button", { name: "Sign in with Claude" }));
++  await screen.findByRole("link", { name: "Continue with Claude" });
++  expect(screen.queryByText(/setup-token/)).not.toBeInTheDocument();
++  fireEvent.change(screen.getByLabelText("Authorization code"), {
++    target: { value: "one-time-code#state" },
++  });
++  fireEvent.click(screen.getByRole("button", { name: "Finish sign-in" }));
++  await waitFor(() =>
++    expect(identity.authenticatedFetch).toHaveBeenLastCalledWith(
++      "/v1/subscriptions/login/helper/code",
++      expect.objectContaining({
++        method: "POST",
++        body: JSON.stringify({ code: "one-time-code#state" }),
++      }),
++    ),
++  );
++  expect(await screen.findByRole("status")).toHaveTextContent("Finishing sign-in");
++});
++
++it("keeps the helper available for cancellation after a failed poll", async () => {
++  renderPage();
++  await screen.findByText("Personal");
++  fireEvent.click(screen.getAllByRole("button", { name: "Add subscription" })[1]);
++  fireEvent.change(screen.getByLabelText("Subscription name"), { target: { value: "Travel" } });
++  vi.mocked(identity.authenticatedFetch).mockImplementation(async (path, init) => {
++    if (String(path).endsWith("/login/codex")) return json({ id: "helper", status: "starting" });
++    if (init?.method === "DELETE") return json({ status: "cancelled" });
++    throw new Error("Network unavailable");
++  });
++  fireEvent.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
++  await screen.findByText("Connection interrupted. Retrying sign-in status…");
++  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
++  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
++  expect(identity.authenticatedFetch).toHaveBeenLastCalledWith(
++    "/v1/subscriptions/login/helper",
++    expect.objectContaining({ method: "DELETE" }),
++  );
++});
+diff --git a/web/src/pages/SubscriptionsPage.tsx b/web/src/pages/SubscriptionsPage.tsx
+new file mode 100644
+index 000000000..a4ef12fdf
+--- /dev/null
++++ b/web/src/pages/SubscriptionsPage.tsx
+@@ -0,0 +1,623 @@
++import { useEffect, useState } from "react";
++import {
++  CheckIcon,
++  KeyRoundIcon,
++  Loader2Icon,
++  PlusIcon,
++  PencilIcon,
++  Trash2Icon,
++  ArrowRightLeftIcon,
++} from "lucide-react";
++import { ClaudeIcon } from "@/components/icons/ClaudeIcon";
++import { CodexIcon } from "@/components/icons/CodexIcon";
++import { PageScroll } from "@/components/PageScroll";
++import { Button } from "@/components/ui/button";
++import { Input } from "@/components/ui/input";
++import {
++  Dialog,
++  DialogContent,
++  DialogDescription,
++  DialogHeader,
++  DialogTitle,
++  DialogFooter,
++} from "@/components/ui/dialog";
++import { useIsAdmin } from "@/hooks/useIsAdmin";
++import { useServerInfo } from "@/lib/CapabilitiesContext";
++import { isSingleUserMode } from "@/lib/capabilities";
++import {
++  subscriptionRequest,
++  SubscriptionRequestError,
++  type Login,
++  type Provider,
++  type Subscription,
++  type Subscriptions,
++} from "@/lib/subscriptions";
++
++const providerNames = { claude: "Claude", codex: "Codex" };
++function ProviderLogo({ provider }: { provider: Provider }) {
++  const Icon = provider === "claude" ? ClaudeIcon : CodexIcon;
++  return (
++    <Icon
++      aria-hidden
++      size={26}
++      className={provider === "claude" ? "shrink-0 text-[#D97757]" : "shrink-0"}
++    />
++  );
++}
++
++export function SubscriptionsPage() {
++  const isAdmin = useIsAdmin();
++  const info = useServerInfo();
++  const allowed = isAdmin || isSingleUserMode(info);
++  const [data, setData] = useState<Subscriptions | null>(null);
++  const [error, setError] = useState("");
++  const [notice, setNotice] = useState("");
++  const [busy, setBusy] = useState(false);
++  const [editor, setEditor] = useState<{ provider: Provider; account?: Subscription } | null>(null);
++  const [remove, setRemove] = useState<Subscription | null>(null);
++
++  useEffect(() => {
++    if (!allowed) return;
++    let live = true;
++    subscriptionRequest<Subscriptions>()
++      .then((value) => {
++        if (live) setData(value);
++      })
++      .catch((e: Error) => {
++        if (live) setError(e.message);
++      });
++    return () => {
++      live = false;
++    };
++  }, [allowed]);
++
++  async function act(path: string, method: string, message: string) {
++    setBusy(true);
++    setError("");
++    try {
++      setData(await subscriptionRequest<Subscriptions>(path, method));
++      setNotice(message);
++      setRemove(null);
++    } catch (e) {
++      setError((e as Error).message);
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  return (
++    <PageScroll contentClassName="px-4 sm:px-8" extraBottom="2.5rem">
++      <div className="mx-auto max-w-3xl py-8">
++        <div className="mb-8 flex items-start gap-3">
++          <div className="rounded-xl border bg-muted/40 p-3">
++            <KeyRoundIcon className="size-5" />
++          </div>
++          <div>
++            <h1 className="text-2xl font-semibold tracking-tight">Subscriptions</h1>
++            <p className="mt-2 text-sm text-muted-foreground">
++              Manage the Claude and ChatGPT accounts your agents use.
++            </p>
++          </div>
++        </div>
++        {!allowed ? (
++          <p className="text-sm text-muted-foreground">Only admins can manage subscriptions.</p>
++        ) : (
++          <>
++            <div className="mb-6 rounded-xl border bg-muted/30 p-4 text-sm">
++              <p className="font-medium">Switch accounts whenever you need to</p>
++              <p className="mt-1 text-muted-foreground">
++                Choose an active subscription for each provider. This choice is shared across this
++                deployment. New and resumed agent processes use it after the credentials sync,
++                usually within a minute.
++              </p>
++              <p className="mt-2 text-muted-foreground">
++                To switch an open session, choose Stop session in its menu, then send another
++                message. Interrupting a turn keeps its current account.
++              </p>
++            </div>
++            {error && (
++              <div
++                role="alert"
++                className="mb-4 rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
++              >
++                {error}
++                <Button
++                  variant="ghost"
++                  size="sm"
++                  onClick={() => {
++                    setError("");
++                    subscriptionRequest<Subscriptions>()
++                      .then(setData)
++                      .catch((e: Error) => setError(e.message));
++                  }}
++                >
++                  Reload
++                </Button>
++              </div>
++            )}
++            {notice && (
++              <p role="status" className="mb-4 text-sm text-muted-foreground">
++                {notice}
++              </p>
++            )}
++            {!data && !error && (
++              <p role="status" className="flex gap-2 text-sm text-muted-foreground">
++                <Loader2Icon className="size-4 animate-spin" /> Loading subscriptions…
++              </p>
++            )}
++            <div className="space-y-6">
++              {(["claude", "codex"] as Provider[]).map((provider) => {
++                const accounts = data?.data.filter((a) => a.provider === provider) ?? [];
++                return (
++                  <section key={provider} className="overflow-hidden rounded-xl border">
++                    <div className="flex items-center justify-between gap-3 bg-muted/20 px-4 py-4 sm:px-5">
++                      <div>
++                        <h2 className="flex items-center gap-2.5 font-semibold">
++                          <ProviderLogo provider={provider} />
++                          {providerNames[provider]}
++                        </h2>
++                        <p className="mt-1 text-xs text-muted-foreground">
++                          {provider === "claude"
++                            ? "Claude Pro / Max subscriptions"
++                            : "ChatGPT subscriptions"}
++                        </p>
++                      </div>
++                      <Button
++                        variant="outline"
++                        size="sm"
++                        disabled={busy || !data}
++                        onClick={() => setEditor({ provider })}
++                      >
++                        <PlusIcon className="size-4" /> Add subscription
++                      </Button>
++                    </div>
++                    {accounts.length === 0 ? (
++                      <div className="border-t px-5 py-6 text-sm text-muted-foreground">
++                        <p>No saved subscriptions yet.</p>
++                        <p className="mt-1">
++                          Add an account to manage it here. Your existing setup stays in use until
++                          you add one.
++                        </p>
++                      </div>
++                    ) : (
++                      <div className="divide-y border-t">
++                        {accounts.map((a) => (
++                          <div
++                            key={a.id}
++                            className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-5"
++                          >
++                            <div className="min-w-0">
++                              <div className="flex items-center gap-2">
++                                <span className="break-all font-medium">{a.name}</span>
++                                {a.active && (
++                                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
++                                    <CheckIcon className="size-3" /> Active
++                                  </span>
++                                )}
++                              </div>
++                              <p className="mt-1 text-xs text-muted-foreground">
++                                {a.active ? "Used by new and resumed agents" : "Ready to switch"}
++                              </p>
++                            </div>
++                            <div className="flex items-center gap-1">
++                              {!a.active && (
++                                <Button
++                                  variant="outline"
++                                  size="sm"
++                                  disabled={busy}
++                                  onClick={() =>
++                                    void act(
++                                      `/${a.id}/activate`,
++                                      "POST",
++                                      `${a.name} is active. Stop and resume open ${providerNames[provider]} sessions after credentials sync.`,
++                                    )
++                                  }
++                                >
++                                  <ArrowRightLeftIcon className="size-3.5" /> Use
++                                </Button>
++                              )}
++                              <Button
++                                variant="ghost"
++                                size="icon"
++                                aria-label={`Edit ${a.name}`}
++                                disabled={busy}
++                                onClick={() => setEditor({ provider, account: a })}
++                              >
++                                <PencilIcon className="size-4" />
++                              </Button>
++                              <Button
++                                variant="ghost"
++                                size="icon"
++                                aria-label={`Remove ${a.name}`}
++                                title={
++                                  a.active
++                                    ? "Switch accounts before removing the active subscription"
++                                    : "Remove subscription"
++                                }
++                                disabled={busy || a.active}
++                                onClick={() => setRemove(a)}
++                              >
++                                <Trash2Icon className="size-4" />
++                              </Button>
++                            </div>
++                          </div>
++                        ))}
++                      </div>
++                    )}
++                  </section>
++                );
++              })}
++            </div>
++            <p className="mt-6 text-xs text-muted-foreground">
++              Credentials are stored in Kubernetes Secrets and are never sent back to the browser.
++              Switching accounts does not transfer or reset quota.
++            </p>
++          </>
++        )}
++      </div>
++      {editor && (
++        <SubscriptionEditor
++          provider={editor.provider}
++          account={editor.account}
++          onClose={() => setEditor(null)}
++          onSaved={(value) => {
++            setData(value);
++            setNotice("Subscription saved. Active credentials sync to runners automatically.");
++            setEditor(null);
++          }}
++        />
++      )}
++      <Dialog
++        open={!!remove}
++        onOpenChange={(open) => {
++          if (!open && !busy) setRemove(null);
++        }}
++      >
++        <DialogContent>
++          <DialogHeader>
++            <DialogTitle>Remove {remove?.name}?</DialogTitle>
++            <DialogDescription>
++              Its saved credentials will be deleted. You can add the subscription again later.
++            </DialogDescription>
++          </DialogHeader>
++          <DialogFooter>
++            <Button variant="outline" disabled={busy} onClick={() => setRemove(null)}>
++              Cancel
++            </Button>
++            <Button
++              variant="destructive"
++              disabled={busy}
++              onClick={() => remove && void act(`/${remove.id}`, "DELETE", "Subscription removed.")}
++            >
++              Remove subscription
++            </Button>
++          </DialogFooter>
++        </DialogContent>
++      </Dialog>
++    </PageScroll>
++  );
++}
++
++function SubscriptionEditor({
++  provider,
++  account,
++  onClose,
++  onSaved,
++}: {
++  provider: Provider;
++  account?: Subscription;
++  onClose: () => void;
++  onSaved: (data: Subscriptions) => void;
++}) {
++  const [name, setName] = useState(account?.name ?? "");
++  const [credential, setCredential] = useState("");
++  const [error, setError] = useState("");
++  const [busy, setBusy] = useState(false);
++  const [login, setLogin] = useState<Login | null>(null);
++  const [loginId, setLoginId] = useState<string | null>(null);
++  const [authorizationCode, setAuthorizationCode] = useState("");
++  const [manual, setManual] = useState(false);
++  const [pollError, setPollError] = useState("");
++  const [codeSubmitted, setCodeSubmitted] = useState(false);
++
++  useEffect(() => {
++    if (!loginId) return;
++    let live = true;
++    let timer: ReturnType<typeof setTimeout>;
++    async function poll() {
++      try {
++        const result = await subscriptionRequest<Login>(`/login/${loginId}`);
++        if (!live) return;
++        setPollError("");
++        setLogin(result);
++        if (result.status === "complete" && result.subscriptions) {
++          onSaved(result.subscriptions);
++          return;
++        }
++        if (result.status === "expired" || result.status === "failed") {
++          setError(
++            result.status === "failed"
++              ? "Sign-in failed. Please start again."
++              : "Sign-in expired. Please try again.",
++          );
++          setLoginId(null);
++          return;
++        }
++      } catch (e) {
++        if (!live) return;
++        if (e instanceof SubscriptionRequestError && e.status < 500) {
++          setError(e.message);
++          return; // Keep the helper ID so Cancel still cleans it up.
++        }
++        setPollError("Connection interrupted. Retrying sign-in status…");
++      }
++      timer = setTimeout(() => void poll(), 2000);
++    }
++    void poll();
++    return () => {
++      live = false;
++      clearTimeout(timer);
++    };
++  }, [loginId, onSaved]);
++
++  async function close() {
++    if (busy) return;
++    if (loginId) {
++      try {
++        await subscriptionRequest(`/login/${loginId}`, "DELETE");
++      } catch (e) {
++        setError((e as Error).message);
++        return;
++      }
++    }
++    onClose();
++  }
++
++  async function save() {
++    setBusy(true);
++    setError("");
++    try {
++      onSaved(
++        await subscriptionRequest<Subscriptions>("", "PUT", {
++          provider,
++          name: name.trim(),
++          credential: credential || null,
++          id: account?.id,
++        }),
++      );
++    } catch (e) {
++      setError((e as Error).message);
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  async function connect() {
++    setCodeSubmitted(false);
++    setPollError("");
++    setBusy(true);
++    setError("");
++    try {
++      const result = await subscriptionRequest<Login>(`/login/${provider}`, "POST", {
++        name: name.trim(),
++        id: account?.id,
++      });
++      setLogin(result);
++      setLoginId(result.id!);
++    } catch (e) {
++      setError((e as Error).message);
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  async function submitCode() {
++    if (!loginId) return;
++    setBusy(true);
++    setError("");
++    try {
++      const state = await subscriptionRequest<Login>(`/login/${loginId}/code`, "POST", {
++        code: authorizationCode.trim(),
++      });
++      setLogin(state);
++      setCodeSubmitted(true);
++      setAuthorizationCode("");
++    } catch (e) {
++      setError((e as Error).message);
++    } finally {
++      setBusy(false);
++    }
++  }
++
++  return (
++    <Dialog
++      open
++      onOpenChange={(open) => {
++        if (!open) void close();
++      }}
++    >
++      <DialogContent className="sm:max-w-lg">
++        <DialogHeader>
++          <DialogTitle className="flex items-center gap-2.5">
++            <ProviderLogo provider={provider} />
++            {account ? "Edit" : "Add"} {providerNames[provider]} subscription
++          </DialogTitle>
++          <DialogDescription>
++            {account
++              ? "Rename this account or sign in again to update its login."
++              : "Give this account a name so you can switch between work and personal subscriptions."}
++          </DialogDescription>
++        </DialogHeader>
++        <div className="space-y-4">
++          <div className="space-y-2">
++            <label className="text-sm font-medium" htmlFor="subscription-name">
++              Subscription name
++            </label>
++            <Input
++              id="subscription-name"
++              placeholder="e.g. Personal or Work"
++              value={name}
++              maxLength={80}
++              disabled={!!loginId || busy}
++              onChange={(e) => setName(e.target.value)}
++              autoComplete="off"
++            />
++          </div>
++          <div className="rounded-lg border bg-muted/20 p-4">
++            {loginId ? (
++              <div className="space-y-3">
++                {login?.status === "waiting" && !codeSubmitted ? (
++                  <>
++                    <p className="text-sm">
++                      {provider === "claude"
++                        ? "Sign in to Claude in your browser, then paste the one-time code shown after you authorize access."
++                        : "Open the sign-in page and enter this one-time code:"}
++                    </p>
++                    {provider === "codex" && (
++                      <p className="select-all rounded-md bg-muted p-3 text-center font-mono text-xl tracking-widest">
++                        {login.code}
++                      </p>
++                    )}
++                    <Button asChild className="w-full">
++                      <a href={login.url} target="_blank" rel="noopener noreferrer">
++                        <ProviderLogo provider={provider} />
++                        Continue with {provider === "claude" ? "Claude" : "ChatGPT"}
++                      </a>
++                    </Button>
++                    {provider === "claude" ? (
++                      <div className="space-y-2">
++                        <label className="text-sm font-medium" htmlFor="subscription-code">
++                          Authorization code
++                        </label>
++                        <Input
++                          id="subscription-code"
++                          placeholder="Paste the code from Claude"
++                          value={authorizationCode}
++                          onChange={(e) => setAuthorizationCode(e.target.value)}
++                          autoComplete="off"
++                          spellCheck={false}
++                          disabled={busy}
++                        />
++                        <Button
++                          className="w-full"
++                          disabled={busy || !authorizationCode.trim()}
++                          onClick={() => void submitCode()}
++                        >
++                          Finish sign-in
++                        </Button>
++                      </div>
++                    ) : (
++                      <p className="text-xs text-muted-foreground">
++                        Waiting for you to finish signing in. Your subscription will be saved
++                        automatically.
++                      </p>
++                    )}
++                  </>
++                ) : (
++                  <p role="status" className="flex items-center gap-2 text-sm">
++                    <Loader2Icon className="size-4 animate-spin" />
++                    {login?.status === "exchanging" || codeSubmitted
++                      ? "Finishing sign-in…"
++                      : "Preparing secure sign-in…"}
++                  </p>
++                )}
++              </div>
++            ) : (
++              <>
++                <Button
++                  className="w-full"
++                  disabled={busy || !name.trim()}
++                  onClick={() => void connect()}
++                >
++                  <ProviderLogo provider={provider} />
++                  Sign in with {provider === "claude" ? "Claude" : "ChatGPT"}
++                </Button>
++                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
++                  Everything runs in Omnigent. You only need your browser—no local commands or
++                  installations.
++                </p>
++              </>
++            )}
++          </div>
++          {!loginId && (
++            <>
++              <Button
++                variant="ghost"
++                size="sm"
++                className="text-muted-foreground"
++                onClick={() => setManual((current) => !current)}
++              >
++                {manual ? "Hide credential import" : "Already have credentials? Import instead"}
++              </Button>
++              {manual &&
++                (provider === "claude" ? (
++                  <div className="space-y-2">
++                    <label className="text-sm font-medium" htmlFor="subscription-token">
++                      Subscription token
++                    </label>
++                    <Input
++                      id="subscription-token"
++                      type="password"
++                      value={credential}
++                      placeholder="sk-ant-oat…"
++                      onChange={(e) => setCredential(e.target.value)}
++                      autoComplete="new-password"
++                      spellCheck={false}
++                    />
++                    <p className="text-xs text-muted-foreground">
++                      Paste an existing subscription token. Leave it blank to keep your saved login.
++                    </p>
++                  </div>
++                ) : (
++                  <div className="space-y-2">
++                    <label className="text-sm font-medium" htmlFor="subscription-auth">
++                      Codex auth.json
++                    </label>
++                    <Input
++                      id="subscription-auth"
++                      type="file"
++                      accept=".json,application/json"
++                      onChange={(e) => {
++                        const file = e.target.files?.[0];
++                        if (file) {
++                          if (file.size > 65536) {
++                            setError("The credential file is too large.");
++                            return;
++                          }
++                          void file
++                            .text()
++                            .then(setCredential)
++                            .catch(() => setError("Couldn't read that file."));
++                        }
++                      }}
++                    />
++                    <p className="text-xs text-muted-foreground">
++                      Import an existing ChatGPT login. The file is uploaded only when you save.
++                    </p>
++                  </div>
++                ))}
++            </>
++          )}
++          {(error || pollError) && (
++            <p role="alert" className="text-sm text-destructive">
++              {error || pollError}
++            </p>
++          )}
++        </div>
++        <DialogFooter>
++          <Button variant="outline" disabled={busy} onClick={() => void close()}>
++            Cancel
++          </Button>
++          {!loginId && (account || credential) && (
++            <Button
++              disabled={busy || !name.trim() || (!account && !credential)}
++              onClick={() => void save()}
++            >
++              {busy && <Loader2Icon className="size-4 animate-spin" />}Save subscription
++            </Button>
++          )}
++        </DialogFooter>
++      </DialogContent>
++    </Dialog>
++  );
++}
+diff --git a/web/src/shell/settingsNav.test.tsx b/web/src/shell/settingsNav.test.tsx
+index 7421b186d..e769cf9d2 100644
+--- a/web/src/shell/settingsNav.test.tsx
++++ b/web/src/shell/settingsNav.test.tsx
+@@ -125,6 +125,7 @@ describe("settingsNavGroups", () => {
+       "members",
+       "policies",
+       "sharing",
++      "subscriptions",
+       "repo-env",
+     ]);
+     // Admin under OIDC (accountsEnabled false) → still appears. This is the
+@@ -134,6 +135,7 @@ describe("settingsNavGroups", () => {
+       "members",
+       "policies",
+       "sharing",
++      "subscriptions",
+       "repo-env",
+     ]);
+   });
+@@ -145,7 +147,7 @@ describe("settingsNavGroups", () => {
+     const singleUserAdmin = settingsNavGroups(false, false, true, true).find(
+       (g) => g.title === "Admin",
+     );
+-    expect(singleUserAdmin?.items.map((i) => i.id)).toEqual(["policies", "repo-env"]);
++    expect(singleUserAdmin?.items.map((i) => i.id)).toEqual(["policies", "subscriptions", "repo-env"]);
+   });
+ 
+   it("includes the Sandbox Integrations item only when a connection is enabled", () => {
+diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
+index 45f0dc190..dd39d8e84 100644
+--- a/web/src/shell/settingsNav.tsx
++++ b/web/src/shell/settingsNav.tsx
+@@ -14,6 +14,7 @@ import {
+   DownloadIcon,
+   GitBranchIcon,
+   KeyboardIcon,
++  KeyRoundIcon,
+   PaletteIcon,
+   SettingsIcon,
+   Share2Icon,
+@@ -43,6 +44,7 @@ export type SettingsSectionId =
+   | "members"
+   | "policies"
+   | "sharing"
++  | "subscriptions"
+   | "repo-env"
+   | "archived"
+   | "cli"
+@@ -59,6 +61,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
+   "members",
+   "policies",
+   "sharing",
++  "subscriptions",
+   "repo-env",
+   "archived",
+   "cli",
+@@ -145,6 +148,7 @@ export function settingsNavGroups(
+     adminItems.push({ id: "policies", label: "Policies", icon: ShieldCheckIcon });
+     if (!isSingleUser) adminItems.push({ id: "sharing", label: "Sharing", icon: Share2Icon });
+     // This deployment's environment variables per repository.
++    adminItems.push({ id: "subscriptions", label: "Subscriptions", icon: KeyRoundIcon });
+     adminItems.push({ id: "repo-env", label: "Repository variables", icon: VariableIcon });
+     groups.push({ title: "Admin", items: adminItems });
+   }

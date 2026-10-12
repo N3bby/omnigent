@@ -1,0 +1,68 @@
+diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
+index bbcaf3d78..0f2960e3b 100644
+--- a/omnigent/onboarding/sandboxes/kubernetes.py
++++ b/omnigent/onboarding/sandboxes/kubernetes.py
+@@ -61,6 +61,7 @@ import click
+ from omnigent_repo_env import checkouts_env as _repo_env_checkouts
+ from omnigent_repo_env import clone_command as _repo_env_clone_command
+ from omnigent_repo_env import pod_volumes as _repo_env_volumes
++from omnigent_subscriptions import pod_volumes as _subscription_volumes
+ 
+ from omnigent.host.identity import (
+     HOST_ID_ENV_VAR,
+@@ -909,6 +910,7 @@ def build_job_manifest(
+     # Each repository's variables Secret, when there is one. The clone needs
+     # them too: a repository's GIT_TOKEN variable replaces the GitHub App token.
+     repo_env_volumes, repo_env_mounts = _repo_env_volumes(repo.url for repo in repos)
++    subscription_volumes, subscription_mounts = _subscription_volumes()
+ 
+     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
+     if repos:
+@@ -1001,6 +1003,7 @@ def build_job_manifest(
+             *pvc_volume_mounts,
+             *secret_volume_mounts,
+             *repo_env_mounts,
++            *subscription_mounts,
+         ],
+     }
+     if harness_secret:
+@@ -1022,7 +1025,7 @@ def build_job_manifest(
+             "fsGroupChangePolicy": "OnRootMismatch",
+             "seccompProfile": {"type": "RuntimeDefault"},
+         },
+-        "volumes": [home_volume, *pvc_volumes, *secret_volumes, *repo_env_volumes],
++        "volumes": [home_volume, *pvc_volumes, *secret_volumes, *repo_env_volumes, *subscription_volumes],
+         "initContainers": [init_container],
+         "containers": [host_container],
+     }
+diff --git a/omnigent/server/app.py b/omnigent/server/app.py
+index f9c345c2a..fefbdda98 100644
+--- a/omnigent/server/app.py
++++ b/omnigent/server/app.py
+@@ -117,6 +117,7 @@ from omnigent.server.routes.sessions import (
+ )
+ from omnigent.server.routes.sharing import create_sharing_router
+ from omnigent_repo_env_api import create_repo_env_router
++from omnigent_subscriptions_api import create_subscriptions_router
+ from omnigent.server.routes.terminal_attach import create_terminal_attach_router
+ from omnigent.server.routes.usage import create_usage_router
+ from omnigent.server.runner_session_init import RunnerSessionInitializer
+@@ -3232,6 +3233,18 @@ def create_app(
+         prefix="/v1",
+         tags=["repo_env"],
+     )
++    app.include_router(
++        create_subscriptions_router(
++            auth_provider=auth_provider,
++            is_admin=lambda user_id: (
++                (permission_store is not None and permission_store.is_admin(user_id))
++                or admin_list.is_admin(user_id)
++            ),
++            multi_user=permission_store is not None,
++        ),
++        prefix="/v1",
++        tags=["subscriptions"],
++    )
+     # First-class projects (owner-private session containers). Mounted only
+     # when a project store is wired; the endpoints self-scope to the caller.
+     if project_store is not None:

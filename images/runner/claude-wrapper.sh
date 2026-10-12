@@ -20,6 +20,12 @@ fi
 # PATH, so later sessions skip the wrapper. Versions come from versions.yaml.
 export DISABLE_AUTOUPDATER=1
 
+subscription_token="$(/opt/venv/bin/python /usr/local/lib/omnigent/subscriptions.py claude)"
+if [ -n "$subscription_token" ]; then
+    export CLAUDE_CODE_OAUTH_TOKEN="$subscription_token"
+fi
+unset subscription_token
+
 # The variables of the repositories this session started with.
 # shellcheck source=SCRIPTDIR/repo-env/repo-env.sh
 . /usr/local/lib/omnigent/repo-env.sh

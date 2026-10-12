@@ -40,6 +40,7 @@ RUN python -m pip install --no-cache-dir "hvac==${HVAC_VERSION}" \
 # and 0012-repo-checkouts.patch import them.
 COPY patches/ /tmp/omnigent-patches/
 COPY omnigent_repo_env.py omnigent_repo_env_api.py /tmp/omnigent-modules/
+COPY omnigent_subscriptions.py omnigent_subscriptions_api.py omnigent_subscription_login.py /tmp/omnigent-modules/
 RUN set -eu; \
     site="$(python -c 'import omnigent, pathlib; print(pathlib.Path(omnigent.__file__).parents[1])')"; \
     purelib="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \

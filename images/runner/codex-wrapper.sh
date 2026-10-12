@@ -19,12 +19,29 @@ real_codex=/usr/local/bin/codex-real
 # in the project directory, where the mise shims come first on PATH.
 node=/usr/local/bin/node
 shared_auth=/mnt/codex-home/auth.json
+# A remote TUI belongs to the already-running app-server. Keep its login link;
+# changing that link could make the old server refresh into another account's file.
+remote=0
+for argument in "$@"; do
+    case "$argument" in --remote|--remote=*) remote=1 ;; esac
+done
+subscription_auth=""
+if [ "$remote" = "0" ] || [ ! -f "${CODEX_HOME:-/opt/codex-home}/auth.json" ]; then
+    subscription_auth="$(/opt/venv/bin/python /usr/local/lib/omnigent/subscriptions.py codex)"
+fi
+if [ -n "$subscription_auth" ]; then
+    shared_auth="$subscription_auth"
+    if [ -n "${CODEX_HOME:-}" ]; then
+        mkdir -p "$CODEX_HOME"
+        ln -sfn "$shared_auth" "$CODEX_HOME/auth.json"
+    fi
+fi
 
 if [ -n "${CODEX_HOME:-}" ]; then
     case "$CODEX_HOME" in
         /home/omnigent/.omnigent/codex-native/*/codex-home|*/omnigent-codex-home-*)
             mkdir -p "$CODEX_HOME"
-            if [ -f "$shared_auth" ] && [ ! -e "$CODEX_HOME/auth.json" ]; then
+            if [ -z "$subscription_auth" ] && [ -f "$shared_auth" ] && [ ! -e "$CODEX_HOME/auth.json" ]; then
                 ln -s "$shared_auth" "$CODEX_HOME/auth.json"
             fi
             if [ "${OMNIGENT_CODEX_BYPASS_APPROVALS:-0}" = "1" ]; then

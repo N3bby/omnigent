@@ -16,6 +16,12 @@ What you see and choose while talking to an agent.
 | [Model picker straight away](model-picker.md) | Choose a model before your first session has run | No |
 | [Fuzzy file search with @](fuzzy-file-mentions.md) | Type `@auth` to find a file anywhere in the workspace, like in Claude Code | No |
 
+## Subscriptions
+
+| Feature | What you get | Can you turn it off? |
+| --- | --- | --- |
+| [Subscriptions in Settings](subscriptions.md) | Named Claude and ChatGPT accounts, with runtime switching | Existing setup remains until you add an account |
+
 ## The session's runner
 
 What agents can do in their session, and what happens to it when you leave.

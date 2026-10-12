@@ -30,6 +30,11 @@ Short of a Linux kernel bug, it **can't**:
 - read the database or the server's secrets
 - use the Kubernetes API, or touch other namespaces
 
+Subscription management is admin-only, but its active logins are shared with
+runners. Codex's shared PVC also retains writable logins for previously used
+subscriptions. See [Subscriptions](features/subscriptions.md) for storage and
+switching details.
+
 ## The network is open
 
 Runner pods have unrestricted network access in both directions. There is no
@@ -46,7 +51,7 @@ reach as reachable by an attacker.
 | Resource limits | Scratch disk and the number of pods and jobs are capped. CPU and memory limits are above the VM's size, so runners share whatever is free, and the server, database and Vault have a higher priority than runners. The home volume is not capped; see below. |
 | Separate namespace | PostgreSQL and the server's secrets live in a different namespace. Runners only get the runner credentials. |
 
-The server itself can only manage sandboxes, jobs, pods, logs and secrets in
+The server itself can only manage sandboxes, jobs, pods, logs, Pod exec and secrets in
 the runner namespace, which limits what a compromised server could do there.
 
 ## Trade-offs worth knowing
