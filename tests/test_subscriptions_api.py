@@ -91,6 +91,21 @@ class LoginTests(unittest.TestCase):
         self.assertTrue(core.deleted)
         self.assertEqual(result["subscriptions"]["data"][0]["name"], "Personal")
 
+    def test_device_code_is_found_in_coloured_codex_output(self):
+        class Core(FakeCore):
+            def read_namespaced_pod(self, *args, **kwargs):
+                return SimpleNamespace(status=SimpleNamespace(phase="Running"),
+                    metadata=SimpleNamespace(labels={login.LABEL: "codex"}, annotations={}))
+            def read_namespaced_pod_log(self, *args, **kwargs):
+                # What codex login --device-auth 0.159 prints to a Pod log.
+                return ("Welcome to Codex [v\x1b[90m0.159.1\x1b[0m]\n"
+                        "1. Open this link in your browser and sign in to your account\n"
+                        "   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\n\n"
+                        "2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n"
+                        "   \x1b[94mQ7RT-4KD9M\x1b[0m\n")
+        result = login.poll(Core(), "a" * 32, execute=lambda command: "")
+        self.assertEqual(result, {"status": "waiting", "code": "Q7RT-4KD9M", "url": "https://auth.openai.com/codex/device"})
+
     def test_helper_is_bounded_and_never_mounts_existing_credentials(self):
         class Core(FakeCore):
             def list_namespaced_pod(self, *args, **kwargs):
@@ -135,7 +150,7 @@ class ClaudeLoginTests(unittest.TestCase):
         self.assertEqual(result["status"], "exchanging")
         self.assertNotIn("auth-code#state", json.dumps(calls[0][0]))
         self.assertEqual(calls[0][1], "auth-code#state")
-        for bad in ("bad\ncode", "\x1bcommand", "x" * 2049):
+        for bad in ("bad\ncode", "\x1bcommand", "x" * 2049, "code-without-state"):
             with self.assertRaises(ValueError):
                 login.submit_code(self.core, "a" * 32, bad, execute=lambda *args: None)
 

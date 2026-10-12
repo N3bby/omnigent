@@ -29,11 +29,24 @@ subscription_auth=""
 if [ "$remote" = "0" ] || [ ! -f "${CODEX_HOME:-/opt/codex-home}/auth.json" ]; then
     subscription_auth="$(/opt/venv/bin/python /usr/local/lib/omnigent/subscriptions.py codex)"
 fi
-if [ -n "$subscription_auth" ]; then
-    shared_auth="$subscription_auth"
-    if [ -n "${CODEX_HOME:-}" ]; then
-        mkdir -p "$CODEX_HOME"
-        ln -sfn "$shared_auth" "$CODEX_HOME/auth.json"
+if [ -n "${CODEX_HOME:-}" ]; then
+    mkdir -p "$CODEX_HOME"
+    # Each Codex process holds a shared lock on its home until it exits: fd 9
+    # survives the exec below. Codex writes refreshed tokens through the
+    # auth.json link, so the link only moves to another subscription when no
+    # process here still holds the old one. A read-only home, like
+    # credential-status's, can't be relinked and needs no lock.
+    lock="$CODEX_HOME/.omnigent-auth.lock"
+    if (: >>"$lock") 2>/dev/null; then
+        exec 9>>"$lock"
+        if [ -n "$subscription_auth" ] && [ "$(readlink "$CODEX_HOME/auth.json" || true)" != "$subscription_auth" ]; then
+            if flock -n -x 9; then
+                ln -sfn "$subscription_auth" "$CODEX_HOME/auth.json"
+            else
+                echo "codex-wrapper: another Codex process in $CODEX_HOME still uses the previous subscription; this one shares it until they all exit" >&2
+            fi
+        fi
+        flock -s 9
     fi
 fi
 

@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, and subscriptions in Settings. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -291,6 +291,16 @@ PASS  claude wrapper adds the repository instructions
 PASS  codex wrapper adds the repository instructions
 PASS  the Pod knows where its repositories are checked out: github.com/n3bby/omnigent
 SKIP  the agent has this session's repository instructions and setup script (none stored for this session's repositories)
+== Subscriptions
+PASS  selection resolver matches images/runner/subscriptions.py
+PASS  sign-in helper matches images/runner/subscription-login.py
+PASS  sign-in helper's terminal emulator is installed
+PASS  claude wrapper uses the active subscription
+PASS  codex wrapper uses the active subscription
+PASS  codex wrapper keeps a running Codex's login
+PASS  Codex readiness sees the active subscription
+PASS  Stop session closes Codex's app-server
+PASS  the Pod mounts the active subscriptions (managed in Settings: <claude codex, or none>)
 
 runner checks: passed
 ```
@@ -325,6 +335,10 @@ What a failure usually means:
 | `the Pod knows where its repositories are checked out` (SKIP in a session with a repository) | `images/server/patches/0012-repo-checkouts.patch` was dropped, so the Pod has no `OMNIGENT_REPO_CHECKOUTS`, or this session predates the deploy |
 | `Claude Code has the instructions of …`, `the setup script of … ran` | the agent started before the Secret was stored, or `omnigent-repo-setup` didn't start: see `/run/omnigent-repo-setup.log` |
 | `the agent has this session's repository variables` | the Secret is mounted, but the agent didn't load it: the agent started before the Secret was stored, or the wrapper isn't the `claude`/`codex` Omnigent runs |
+| `… matches images/runner/subscriptions.py`, `… subscription-login.py`, `… terminal emulator is installed` | the file changed in this checkout after the image was built, or `images/runner/Dockerfile` no longer copies it or installs `pyte` |
+| `… wrapper uses the active subscription`, `codex wrapper keeps a running Codex's login` | a wrapper lost its `subscriptions.py` call or its lock; see `images/runner/claude-wrapper.sh` and `codex-wrapper.sh` |
+| `Codex readiness sees …`, `Stop session closes Codex's app-server` | `images/runner/patches/0008-subscription-readiness.patch` or `0009-stop-codex-process.patch` was dropped or upstream moved the code; see step 2 |
+| `the Pod mounts the active subscriptions` | `images/server/patches/0013-subscriptions.patch` was dropped, or this session predates the deploy |
 | `a Codex session's CODEX_HOME has the AGENTS.md` | upstream stopped linking `AGENTS.md` into each session's private `CODEX_HOME` (`_CODEX_HOME_GLOBAL_INSTRUCTION_FILES` in `omnigent/inner/codex_executor.py`) |
 
 ## 5. Live checks
@@ -403,6 +417,7 @@ settings.
 | Fuzzy file search with @ | In this session's composer, type `@chkrunner` and don't send it. The menu is headed **Search workspace**, and its first row is `check-runner` with `.claude/skills/test-custom-features/scripts/` in grey, the matched letters in bold. Type `@.claude/` instead: it lists that folder's entries, headed `/.claude`. Clear the composer without sending. A menu that only lists the workspace's top level, or nothing, for `@chkrunner` means the file index didn't load: check the runner and server patches and that this session started after the deploy. |
 | Model picker | Start a new session (don't send it) with the Kubernetes sandbox and Claude Code: the model menu lists models, such as Opus and Sonnet, and never says `Models unavailable`. Repeat for Codex. Then discard it. |
 | Repository variables page | If you're an admin, Settings has **Repository variables** under Admin. It lists repositories with their variable names and `••••••••`, never a value. Don't add, edit or remove anything. Not an admin: record SKIP. |
+| Subscriptions page | If you're an admin, Settings has **Subscriptions** under Admin. Opening it directly (`https://<hostname>/settings/subscriptions`, not through the nav) shows the page rather than a permission message. Claude and Codex each list their accounts with the active one selected and marked **Active**, or say **No accounts yet**. Nothing on the page shows a token. Don't switch, add, edit or remove anything. Not an admin: record SKIP. |
 | GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository picker lists repositories. If it isn't connected, record SKIP (optional setup). |
 
 Also check that `feature-check claude` from 5a now shows usage numbers in its
@@ -506,6 +521,21 @@ Hand these to the user; they need their own devices or VM access:
     highlighted, and the colours stay on the text as you type and scroll. On a
     phone, the editor fits the screen and the script's lines don't wrap. Then
     remove the repository.
+
+13. **Subscriptions:** it signs in to real accounts, so it's left to you.
+    In Settings → Subscriptions, choose **Add account** under Codex, name it
+    `feature-check`, and choose **Sign in with ChatGPT**. A one-time code and
+    **Continue with ChatGPT** appear within about 30 seconds; finish signing in
+    there, and the account appears without reloading. Do the same under Claude:
+    **Continue with Claude**, approve, paste the whole code including the part
+    after `#`, then **Finish sign-in**. Pasting a code without `#` is refused
+    straight away. If an account was already active, select `feature-check`,
+    wait a minute, stop and resume a session: its usage numbers are the new
+    account's. Switch back, then remove `feature-check`; the active account's
+    remove button is disabled. Cancelling a sign-in deletes its
+    `subscription-login-*` Pod, which `mise run status` lists while it runs.
+    `mise run credential-status` lists the accounts by name, never a
+    credential.
 
 ## 7. Clean up
 

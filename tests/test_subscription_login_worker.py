@@ -75,3 +75,33 @@ print("Store this token securely.", flush=True)
                 if proc.poll() is None:
                     proc.terminate()
                     proc.wait(timeout=5)
+
+
+class InvalidCodeTests(unittest.TestCase):
+    def test_rejected_code_fails_instead_of_waiting_for_a_prompt_nobody_sees(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cli = root / "fake-claude"
+            cli.write_text(f'''#!{sys.executable}
+print("\\x1b]8;;https://claude.com/cai/oauth/authorize?code_challenge=test\\x1b\\\\Open browser\\x1b]8;;\\x1b\\\\", flush=True)
+input()
+print("Invalid code. Please make sure the full code was copied", flush=True)
+input()
+''')
+            cli.chmod(0o700)
+            state = root / "state"
+            env = {**os.environ, "OMNIGENT_LOGIN_DIR": str(state), "OMNIGENT_CLAUDE_LOGIN_BINARY": str(cli)}
+            proc = subprocess.Popen([sys.executable, str(WORKER)], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                deadline = time.monotonic() + 10
+                while not ((state / "status.json").exists()
+                           and json.loads((state / "status.json").read_text())["status"] == "waiting"):
+                    self.assertLess(time.monotonic(), deadline, "Worker did not publish the browser challenge")
+                    time.sleep(0.05)
+                (state / "code.txt").write_text("wrong#state")
+                proc.communicate(timeout=10)
+                self.assertEqual(json.loads((state / "status.json").read_text()), {"status": "failed"})
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=5)

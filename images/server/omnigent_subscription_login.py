@@ -9,6 +9,9 @@ import omnigent_subscriptions as subscriptions
 
 LABEL = "omnigent.dev/subscription-login"
 PREFIX = "subscription-login-"
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# Claude's code is the authorization code and its state, joined by "#".
+CLAUDE_CODE = re.compile(r"[A-Za-z0-9_-]+#[A-Za-z0-9_-]+")
 _START_LOCK = threading.Lock()
 
 
@@ -132,6 +135,8 @@ def poll(core, login_id, execute=None):
     if payload.strip():
         return _complete(core, pod, login_id, "codex", payload)
     logs = core.read_namespaced_pod_log(name, subscriptions.NAMESPACE, container="login", tail_lines=40)
+    # Codex colours the code (ESC[94mABCD-EFGHI), which hides it from \b.
+    logs = ANSI.sub("", logs)
     code = re.search(r"\b[A-Z0-9]{4,6}-[A-Z0-9]{4,6}\b", logs)
     # Return only the device challenge, never raw CLI output.
     if code and "https://auth.openai.com/codex/device" in logs:
@@ -159,6 +164,10 @@ def _complete(core, pod, login_id, provider, credential):
     return {"status": "complete", "subscriptions": result}
 
 
+class HelperUnavailable(RuntimeError):
+    """The helper didn't answer an exec; the next poll can try again."""
+
+
 def _execute(core, name, command, input_text=None):
     from kubernetes import client
     from kubernetes.stream import stream
@@ -174,7 +183,8 @@ def _execute(core, name, command, input_text=None):
             ws.write_stdin(input_text + "\n")
         ws.run_forever(timeout=15)
         if ws.returncode != 0:
-            raise ValueError("Couldn't reach the sign-in helper. Try again.")
+            # Not a ValueError: the browser keeps polling through a transient failure.
+            raise HelperUnavailable()
         return ws.read_stdout()
     finally:
         if ws is not None:
@@ -184,8 +194,8 @@ def _execute(core, name, command, input_text=None):
 
 def submit_code(core, login_id, code, execute=None):
     code = code.strip()
-    if len(code) > 2048 or not re.fullmatch(r"[A-Za-z0-9_-]+(?:#[A-Za-z0-9_-]+)?", code):
-        raise ValueError("Paste the one-time code shown by Claude after signing in.")
+    if len(code) > 2048 or not CLAUDE_CODE.fullmatch(code):
+        raise ValueError("Paste the whole code Claude shows after you authorize, including the part after #.")
     name = pod_name(login_id)
     pod = core.read_namespaced_pod(name, subscriptions.NAMESPACE)
     if (pod.metadata.labels or {}).get(LABEL) != "claude" or pod.status.phase != "Running":

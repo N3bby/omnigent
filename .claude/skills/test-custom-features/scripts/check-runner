@@ -315,6 +315,24 @@ else
   skip "the Pod knows where its repositories are checked out" "this session started without a repository, or predates the deploy"
 fi
 
+echo "== Subscriptions"
+check "selection resolver matches images/runner/subscriptions.py" cmp -s "$root/images/runner/subscriptions.py" /usr/local/lib/omnigent/subscriptions.py
+check "sign-in helper matches images/runner/subscription-login.py" cmp -s "$root/images/runner/subscription-login.py" /usr/local/lib/omnigent/subscription-login.py
+check "sign-in helper's terminal emulator is installed" /opt/venv/bin/python -c 'import pyte'
+check "claude wrapper uses the active subscription" grep -q 'subscriptions.py claude' /usr/local/bin/claude
+check "codex wrapper uses the active subscription" grep -q 'subscriptions.py codex' /usr/local/bin/codex
+check "codex wrapper keeps a running Codex's login" grep -q 'omnigent-auth.lock' /usr/local/bin/codex
+check "Codex readiness sees the active subscription" grep -q '/run/omnigent/subscriptions/codex-auth.json' "$site/omnigent/harnesses/codex_native/main.py"
+check "Stop session closes Codex's app-server" grep -q 'teardown_codex_native_app_server(conversation_id)' "$site/omnigent/runner/app.py"
+if [[ -d /run/omnigent/subscriptions ]]; then
+  # IDs only: the credentials next to it are never printed.
+  active="$(python3 -c 'import json, sys; print(" ".join(sorted(json.load(open(sys.argv[1])))) or "none")' \
+    /run/omnigent/subscriptions/selection.json 2>/dev/null || echo none)"
+  pass "the Pod mounts the active subscriptions (managed in Settings: $active)"
+else
+  fail "the Pod mounts the active subscriptions" "no /run/omnigent/subscriptions; this session predates the deploy"
+fi
+
 echo
 if ((failed)); then echo "runner checks: FAILED"; else echo "runner checks: passed"; fi
 exit "$failed"

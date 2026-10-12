@@ -81,7 +81,7 @@ def main():
             if code_file.exists():
                 code = code_file.read_text().strip()
                 code_file.unlink()
-                if re.fullmatch(r"[A-Za-z0-9_-]+(?:#[A-Za-z0-9_-]+)?", code) and len(code) <= 2048:
+                if re.fullmatch(r"[A-Za-z0-9_-]+#[A-Za-z0-9_-]+", code) and len(code) <= 2048:
                     os.write(master, b"\x1b[200~" + code.encode() + b"\x1b[201~\r")
                     status({"status": "exchanging"})
             if select.select([master], [], [], 0.2)[0]:
@@ -103,8 +103,9 @@ def main():
                     (ROOT / "credential.txt").write_text(token)
                     status({"status": "complete"})
                     return
+                # "Invalid code" re-prompts in the CLI, but the browser can't see that prompt.
                 if any(error in terminal.text() for error in (
-                    "OAuth error:", "Invalid authorization code", "Authentication failed"
+                    "OAuth error:", "Invalid authorization code", "Authentication failed", "Invalid code."
                 )):
                     status({"status": "failed"})
                     return

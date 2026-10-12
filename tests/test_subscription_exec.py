@@ -59,7 +59,7 @@ class ExecTransportTests(unittest.TestCase):
             config.host = f"http://127.0.0.1:{server.socket.getsockname()[1]}"
             api = client.ApiClient(config)
             try:
-                with self.assertRaises(ValueError) as error:
+                with self.assertRaises(login.HelperUnavailable) as error:
                     login._execute(client.CoreV1Api(api), "subscription-login-" + "a"*32,
                         ["/opt/venv/bin/python", "-c", "print(1)"])
                 self.assertNotIn("partial-private-output", str(error.exception))

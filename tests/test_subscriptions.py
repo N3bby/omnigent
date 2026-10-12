@@ -143,3 +143,41 @@ class WrapperTests(unittest.TestCase):
                 (projection / "selection.json").write_text(json.dumps({"codex": {"id":"work","revision":"v1"}}))
                 subprocess.check_output(["sh", str(wrapper), "--remote", "ws://127.0.0.1:1234"], env=env, text=True)
                 self.assertEqual((home / "auth.json").resolve(), root / "saved" / "personal" / "auth.json")
+
+    def test_codex_wrapper_keeps_the_link_a_running_codex_still_uses(self):
+        import fcntl
+        import shlex
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            projection = root / "projection"
+            projection.mkdir()
+            (projection / "codex-auth.json").write_text(AUTH)
+            library = root / "library.sh"
+            library.write_text('omnigent_wait_for_repo_setup() { :; }\nomnigent_agent_instructions() { :; }\n')
+            cli = root / "fake-codex.py"
+            cli.write_text("print('ok')")
+            source = (ROOT / "images/runner/codex-wrapper.sh").read_text()
+            source = source.replace('/usr/local/lib/omnigent/repo-env.sh', str(library)).replace('/usr/local/lib/omnigent/agent-instructions.sh', str(library))
+            source = source.replace('node=/usr/local/bin/node', 'node=' + shlex.quote(sys.executable))
+            source = source.replace('real_codex=/usr/local/bin/codex-real', 'real_codex=' + shlex.quote(str(cli)))
+            source = source.replace('/opt/venv/bin/python /usr/local/lib/omnigent/subscriptions.py', shlex.quote(sys.executable) + ' ' + shlex.quote(str(ROOT / 'images/runner/subscriptions.py')))
+            wrapper = root / "codex-wrapper.sh"
+            wrapper.write_text(source)
+            home = root / "home"
+            env = {**os.environ, "CODEX_HOME": str(home), "OMNIGENT_SUBSCRIPTIONS_DIR": str(projection), "OMNIGENT_CODEX_AUTH_ROOT": str(root / "saved")}
+            def launch(account):
+                (projection / "selection.json").write_text(json.dumps({"codex": {"id": account, "revision": "v1"}}))
+                return subprocess.run(["sh", str(wrapper)], env=env, text=True, capture_output=True, check=True)
+            launch("personal")
+            self.assertEqual((home / "auth.json").resolve(), root / "saved" / "personal" / "auth.json")
+            # A Codex started before the switch still holds its shared lock.
+            with (home / ".omnigent-auth.lock").open("a") as running:
+                fcntl.flock(running, fcntl.LOCK_SH)
+                self.assertIn("previous subscription", launch("work").stderr)
+                self.assertEqual((home / "auth.json").resolve(), root / "saved" / "personal" / "auth.json")
+            launch("work")
+            self.assertEqual((home / "auth.json").resolve(), root / "saved" / "work" / "auth.json")
+            # An unwritable lock, like credential-status's read-only home, still starts Codex.
+            (home / ".omnigent-auth.lock").unlink()
+            (home / ".omnigent-auth.lock").mkdir()
+            self.assertEqual(launch("personal").stdout, "ok\n")

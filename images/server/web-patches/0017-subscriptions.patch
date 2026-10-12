@@ -1,6 +1,18 @@
+Add Settings -> Subscriptions, where admins keep named Claude and ChatGPT
+accounts and pick the active one for each provider.
+
+SubscriptionsPage lists each provider's accounts as a radio group (choosing
+one makes it active), with edit and remove actions, and an editor dialog that
+signs in through the server's helper Pod: Claude's authorize link and pasted
+code, or Codex's device code. Credentials can also be imported. lib/
+subscriptions.ts calls the /v1/subscriptions routes in
+images/server/omnigent_subscriptions_api.py. Applies after
+0016-highlighted-textarea-caret.patch.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
 diff --git a/web/src/lib/subscriptions.ts b/web/src/lib/subscriptions.ts
 new file mode 100644
-index 000000000..e7bd6ff39
+index 0000000..e7bd6ff
 --- /dev/null
 +++ b/web/src/lib/subscriptions.ts
 @@ -0,0 +1,48 @@
@@ -53,7 +65,7 @@ index 000000000..e7bd6ff39
 +  return data as T;
 +}
 diff --git a/web/src/pages/SettingsPage.tsx b/web/src/pages/SettingsPage.tsx
-index 2f63959b2..3338d7ec7 100644
+index 2f63959..3338d7e 100644
 --- a/web/src/pages/SettingsPage.tsx
 +++ b/web/src/pages/SettingsPage.tsx
 @@ -268,6 +268,9 @@ const PoliciesPage = lazy(() =>
@@ -87,17 +99,19 @@ index 2f63959b2..3338d7ec7 100644
          )}
 diff --git a/web/src/pages/SubscriptionsPage.test.tsx b/web/src/pages/SubscriptionsPage.test.tsx
 new file mode 100644
-index 000000000..2618ae751
+index 0000000..4d378af
 --- /dev/null
 +++ b/web/src/pages/SubscriptionsPage.test.tsx
-@@ -0,0 +1,185 @@
+@@ -0,0 +1,224 @@
 +import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 +import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 +import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 +import { SubscriptionsPage } from "./SubscriptionsPage";
 +import * as identity from "@/lib/identity";
++import * as toast from "@/components/ui/toast";
 +
 +vi.mock("@/lib/CapabilitiesContext", () => ({ useServerInfo: () => ({ single_user: false }) }));
++vi.mock("@/components/ui/toast", () => ({ showToast: vi.fn() }));
 +vi.mock("@/lib/identity", () => ({
 +  resolveIdentity: vi.fn(),
 +  getCurrentIsAdmin: vi.fn(),
@@ -133,7 +147,9 @@ index 000000000..2618ae751
 +  it("gates all reads for non-admins", async () => {
 +    vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(false);
 +    renderPage();
-+    expect(screen.getByText("Only admins can manage subscriptions.")).toBeInTheDocument();
++    expect(
++      await screen.findByText("You don't have permission to manage subscriptions."),
++    ).toBeInTheDocument();
 +    expect(identity.authenticatedFetch).not.toHaveBeenCalled();
 +  });
 +
@@ -147,7 +163,7 @@ index 000000000..2618ae751
 +        active: { claude: "work" },
 +      }),
 +    );
-+    fireEvent.click(screen.getByRole("button", { name: "Use" }));
++    fireEvent.click(screen.getByRole("radio", { name: /Work/ }));
 +    await waitFor(() =>
 +      expect(identity.authenticatedFetch).toHaveBeenLastCalledWith(
 +        "/v1/subscriptions/work/activate",
@@ -155,7 +171,8 @@ index 000000000..2618ae751
 +      ),
 +    );
 +    await waitFor(() => expect(screen.getByRole("button", { name: "Remove Work" })).toBeDisabled());
-+    expect(screen.getByRole("status")).toHaveTextContent("Stop and resume");
++    expect(toast.showToast).toHaveBeenCalledWith(expect.stringContaining("Stop and resume"));
++    expect(screen.getByRole("radio", { name: /Work/ })).toBeChecked();
 +  });
 +
 +  it("keeps credentials blank when editing and saves null to preserve them", async () => {
@@ -164,13 +181,13 @@ index 000000000..2618ae751
 +    fireEvent.click(screen.getByRole("button", { name: "Edit Work" }));
 +    const dialog = screen.getByRole("dialog");
 +    fireEvent.click(
-+      within(dialog).getByRole("button", { name: "Already have credentials? Import instead" }),
++      within(dialog).getByRole("button", { name: "Already have a token? Import instead" }),
 +    );
 +    expect(within(dialog).getByLabelText("Subscription token")).toHaveValue("");
-+    fireEvent.change(within(dialog).getByLabelText("Subscription name"), {
++    fireEvent.change(within(dialog).getByLabelText("Name"), {
 +      target: { value: "Work renamed" },
 +    });
-+    fireEvent.click(within(dialog).getByRole("button", { name: "Save subscription" }));
++    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 +    await waitFor(() =>
 +      expect(identity.authenticatedFetch).toHaveBeenLastCalledWith(
 +        "/v1/subscriptions",
@@ -193,16 +210,17 @@ index 000000000..2618ae751
 +    vi.mocked(identity.authenticatedFetch).mockResolvedValue(
 +      json({ error: { message: "Subscriptions changed. Reload and try again." } }, 409),
 +    );
-+    fireEvent.click(screen.getByRole("button", { name: "Use" }));
++    fireEvent.click(screen.getByRole("radio", { name: /Work/ }));
 +    expect(await screen.findByRole("alert")).toHaveTextContent("Subscriptions changed");
++    expect(screen.getByRole("radio", { name: /Personal/ })).toBeChecked();
 +    expect(screen.getByRole("button", { name: "Remove Personal" })).toBeDisabled();
 +  });
 +
 +  it("starts device login and cancels the helper on dialog close", async () => {
 +    renderPage();
 +    await screen.findByText("Personal");
-+    fireEvent.click(screen.getAllByRole("button", { name: "Add subscription" })[1]);
-+    fireEvent.change(screen.getByLabelText("Subscription name"), {
++    fireEvent.click(screen.getByRole("button", { name: "Add Codex account" }));
++    fireEvent.change(screen.getByLabelText("Name"), {
 +      target: { value: "ChatGPT Personal" },
 +    });
 +    vi.mocked(identity.authenticatedFetch).mockImplementation(async (path, init) => {
@@ -216,6 +234,10 @@ index 000000000..2618ae751
 +    });
 +    fireEvent.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
 +    await screen.findByText("ABCD-EFGHI");
++    expect(screen.getByRole("link", { name: /Continue with ChatGPT/ })).toHaveAttribute(
++      "href",
++      "https://auth.openai.com/codex/device",
++    );
 +    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 +    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 +    expect(identity.authenticatedFetch).toHaveBeenLastCalledWith(
@@ -228,8 +250,8 @@ index 000000000..2618ae751
 +it("signs into Claude entirely through the browser flow", async () => {
 +  renderPage();
 +  await screen.findByText("Personal");
-+  fireEvent.click(screen.getAllByRole("button", { name: "Add subscription" })[0]);
-+  fireEvent.change(screen.getByLabelText("Subscription name"), { target: { value: "Travel" } });
++  fireEvent.click(screen.getByRole("button", { name: "Add Claude account" }));
++  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Travel" } });
 +  vi.mocked(identity.authenticatedFetch).mockImplementation(async (path) => {
 +    if (String(path).endsWith("/login/claude")) return json({ id: "helper", status: "starting" });
 +    if (String(path).endsWith("/code")) return json({ status: "exchanging" });
@@ -239,7 +261,7 @@ index 000000000..2618ae751
 +    });
 +  });
 +  fireEvent.click(screen.getByRole("button", { name: "Sign in with Claude" }));
-+  await screen.findByRole("link", { name: "Continue with Claude" });
++  await screen.findByRole("link", { name: /Continue with Claude/ });
 +  expect(screen.queryByText(/setup-token/)).not.toBeInTheDocument();
 +  fireEvent.change(screen.getByLabelText("Authorization code"), {
 +    target: { value: "one-time-code#state" },
@@ -260,15 +282,15 @@ index 000000000..2618ae751
 +it("keeps the helper available for cancellation after a failed poll", async () => {
 +  renderPage();
 +  await screen.findByText("Personal");
-+  fireEvent.click(screen.getAllByRole("button", { name: "Add subscription" })[1]);
-+  fireEvent.change(screen.getByLabelText("Subscription name"), { target: { value: "Travel" } });
++  fireEvent.click(screen.getByRole("button", { name: "Add Codex account" }));
++  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Travel" } });
 +  vi.mocked(identity.authenticatedFetch).mockImplementation(async (path, init) => {
 +    if (String(path).endsWith("/login/codex")) return json({ id: "helper", status: "starting" });
 +    if (init?.method === "DELETE") return json({ status: "cancelled" });
 +    throw new Error("Network unavailable");
 +  });
 +  fireEvent.click(screen.getByRole("button", { name: "Sign in with ChatGPT" }));
-+  await screen.findByText("Connection interrupted. Retrying sign-in status…");
++  await screen.findByText("Connection interrupted. Retrying…");
 +  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 +  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 +  expect(identity.authenticatedFetch).toHaveBeenLastCalledWith(
@@ -276,21 +298,57 @@ index 000000000..2618ae751
 +    expect.objectContaining({ method: "DELETE" }),
 +  );
 +});
++
++it("explains a rejected Claude code instead of failing silently", async () => {
++  renderPage();
++  await screen.findByText("Personal");
++  fireEvent.click(screen.getByRole("button", { name: "Add Claude account" }));
++  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Travel" } });
++  let submitted = false;
++  vi.mocked(identity.authenticatedFetch).mockImplementation(async (path) => {
++    if (String(path).endsWith("/login/claude")) return json({ id: "helper", status: "starting" });
++    if (String(path).endsWith("/code")) {
++      submitted = true;
++      return json({ status: "exchanging" });
++    }
++    return json(
++      submitted
++        ? { status: "failed" }
++        : { status: "waiting", url: "https://claude.com/cai/oauth/authorize?x=1" },
++    );
++  });
++  fireEvent.click(screen.getByRole("button", { name: "Sign in with Claude" }));
++  fireEvent.change(await screen.findByLabelText("Authorization code"), {
++    target: { value: "wrong#state" },
++  });
++  fireEvent.click(screen.getByRole("button", { name: "Finish sign-in" }));
++  expect(await screen.findByRole("alert", {}, { timeout: 4000 })).toHaveTextContent(
++    "didn't accept that code",
++  );
++  expect(screen.getByRole("button", { name: "Sign in with Claude" })).toBeEnabled();
++});
 diff --git a/web/src/pages/SubscriptionsPage.tsx b/web/src/pages/SubscriptionsPage.tsx
 new file mode 100644
-index 000000000..a4ef12fdf
+index 0000000..332370b
 --- /dev/null
 +++ b/web/src/pages/SubscriptionsPage.tsx
-@@ -0,0 +1,623 @@
-+import { useEffect, useState } from "react";
+@@ -0,0 +1,801 @@
++/**
++ * Admin subscriptions page (``/settings/subscriptions``): the named Claude and
++ * ChatGPT accounts this deployment's agents can use, and which one is active
++ * for each provider. Credentials never come back from the server; the page
++ * only ever sees names, IDs and timestamps.
++ */
++
++import { useEffect, useRef, useState, type ReactNode } from "react";
 +import {
 +  CheckIcon,
-+  KeyRoundIcon,
++  CopyIcon,
++  ExternalLinkIcon,
 +  Loader2Icon,
-+  PlusIcon,
 +  PencilIcon,
++  PlusIcon,
 +  Trash2Icon,
-+  ArrowRightLeftIcon,
 +} from "lucide-react";
 +import { ClaudeIcon } from "@/components/icons/ClaudeIcon";
 +import { CodexIcon } from "@/components/icons/CodexIcon";
@@ -301,13 +359,15 @@ index 000000000..a4ef12fdf
 +  Dialog,
 +  DialogContent,
 +  DialogDescription,
++  DialogFooter,
 +  DialogHeader,
 +  DialogTitle,
-+  DialogFooter,
 +} from "@/components/ui/dialog";
-+import { useIsAdmin } from "@/hooks/useIsAdmin";
++import { showToast } from "@/components/ui/toast";
 +import { useServerInfo } from "@/lib/CapabilitiesContext";
 +import { isSingleUserMode } from "@/lib/capabilities";
++import { getCurrentIsAdmin, resolveIdentity } from "@/lib/identity";
++import { absoluteTime, relativeTime } from "@/lib/relativeTime";
 +import {
 +  subscriptionRequest,
 +  SubscriptionRequestError,
@@ -316,269 +376,380 @@ index 000000000..a4ef12fdf
 +  type Subscription,
 +  type Subscriptions,
 +} from "@/lib/subscriptions";
++import { cn } from "@/lib/utils";
 +
-+const providerNames = { claude: "Claude", codex: "Codex" };
-+function ProviderLogo({ provider }: { provider: Provider }) {
++const PAGE_PADDING = "px-4 sm:px-8";
++const TOUCH_ICON_BUTTON = "max-md:pointer-coarse:size-10";
++const TOUCH_HEIGHT = "max-md:pointer-coarse:h-10";
++
++const PROVIDERS: { id: Provider; name: string; plans: string; signIn: string }[] = [
++  { id: "claude", name: "Claude", plans: "Claude Pro and Max", signIn: "Claude" },
++  { id: "codex", name: "Codex", plans: "ChatGPT Plus, Pro and Business", signIn: "ChatGPT" },
++];
++const providerName = (provider: Provider) => PROVIDERS.find((p) => p.id === provider)!.name;
++const signInName = (provider: Provider) => PROVIDERS.find((p) => p.id === provider)!.signIn;
++
++function ProviderLogo({ provider, className }: { provider: Provider; className?: string }) {
 +  const Icon = provider === "claude" ? ClaudeIcon : CodexIcon;
 +  return (
 +    <Icon
 +      aria-hidden
-+      size={26}
-+      className={provider === "claude" ? "shrink-0 text-[#D97757]" : "shrink-0"}
++      size={20}
++      className={cn("shrink-0", provider === "claude" && "text-[#D97757]", className)}
 +    />
 +  );
 +}
 +
++function updated(account: Subscription) {
++  const at = Date.parse(account.updated_at);
++  const ago = relativeTime(at);
++  return ago ? `Updated ${ago === "now" ? "just now" : `${ago} ago`}` : "";
++}
++
 +export function SubscriptionsPage() {
-+  const isAdmin = useIsAdmin();
 +  const info = useServerInfo();
-+  const allowed = isAdmin || isSingleUserMode(info);
++  const isSingleUser = isSingleUserMode(info);
++  const [meIsAdmin, setMeIsAdmin] = useState<boolean | null>(null);
 +  const [data, setData] = useState<Subscriptions | null>(null);
 +  const [error, setError] = useState("");
-+  const [notice, setNotice] = useState("");
-+  const [busy, setBusy] = useState(false);
++  const [pending, setPending] = useState<string | null>(null);
 +  const [editor, setEditor] = useState<{ provider: Provider; account?: Subscription } | null>(null);
 +  const [remove, setRemove] = useState<Subscription | null>(null);
++  const allowed = isSingleUser || meIsAdmin === true;
++
++  // Admin probe via `/v1/me`, as on the other admin pages: the cached
++  // useIsAdmin value can still be false when this page is opened directly.
++  useEffect(() => {
++    if (isSingleUser) return;
++    void (async () => {
++      const userId = await resolveIdentity();
++      if (userId === null) return;
++      setMeIsAdmin(getCurrentIsAdmin());
++    })();
++  }, [isSingleUser]);
++
++  function load() {
++    setError("");
++    subscriptionRequest<Subscriptions>()
++      .then(setData)
++      .catch((e: Error) => setError(e.message));
++  }
 +
 +  useEffect(() => {
-+    if (!allowed) return;
-+    let live = true;
-+    subscriptionRequest<Subscriptions>()
-+      .then((value) => {
-+        if (live) setData(value);
-+      })
-+      .catch((e: Error) => {
-+        if (live) setError(e.message);
-+      });
-+    return () => {
-+      live = false;
-+    };
++    if (allowed) load();
 +  }, [allowed]);
 +
-+  async function act(path: string, method: string, message: string) {
-+    setBusy(true);
++  async function activate(account: Subscription) {
++    setPending(account.id);
 +    setError("");
 +    try {
-+      setData(await subscriptionRequest<Subscriptions>(path, method));
-+      setNotice(message);
-+      setRemove(null);
++      setData(await subscriptionRequest<Subscriptions>(`/${account.id}/activate`, "POST"));
++      showToast(
++        `${account.name} is now the active ${providerName(account.provider)} account. Stop and resume open sessions to switch them.`,
++      );
 +    } catch (e) {
 +      setError((e as Error).message);
 +    } finally {
-+      setBusy(false);
++      setPending(null);
 +    }
 +  }
 +
-+  return (
-+    <PageScroll contentClassName="px-4 sm:px-8" extraBottom="2.5rem">
-+      <div className="mx-auto max-w-3xl py-8">
-+        <div className="mb-8 flex items-start gap-3">
-+          <div className="rounded-xl border bg-muted/40 p-3">
-+            <KeyRoundIcon className="size-5" />
-+          </div>
-+          <div>
-+            <h1 className="text-2xl font-semibold tracking-tight">Subscriptions</h1>
-+            <p className="mt-2 text-sm text-muted-foreground">
-+              Manage the Claude and ChatGPT accounts your agents use.
-+            </p>
-+          </div>
-+        </div>
-+        {!allowed ? (
-+          <p className="text-sm text-muted-foreground">Only admins can manage subscriptions.</p>
-+        ) : (
-+          <>
-+            <div className="mb-6 rounded-xl border bg-muted/30 p-4 text-sm">
-+              <p className="font-medium">Switch accounts whenever you need to</p>
-+              <p className="mt-1 text-muted-foreground">
-+                Choose an active subscription for each provider. This choice is shared across this
-+                deployment. New and resumed agent processes use it after the credentials sync,
-+                usually within a minute.
-+              </p>
-+              <p className="mt-2 text-muted-foreground">
-+                To switch an open session, choose Stop session in its menu, then send another
-+                message. Interrupting a turn keeps its current account.
-+              </p>
-+            </div>
-+            {error && (
-+              <div
-+                role="alert"
-+                className="mb-4 rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
-+              >
-+                {error}
-+                <Button
-+                  variant="ghost"
-+                  size="sm"
-+                  onClick={() => {
-+                    setError("");
-+                    subscriptionRequest<Subscriptions>()
-+                      .then(setData)
-+                      .catch((e: Error) => setError(e.message));
-+                  }}
-+                >
-+                  Reload
-+                </Button>
-+              </div>
-+            )}
-+            {notice && (
-+              <p role="status" className="mb-4 text-sm text-muted-foreground">
-+                {notice}
-+              </p>
-+            )}
-+            {!data && !error && (
-+              <p role="status" className="flex gap-2 text-sm text-muted-foreground">
-+                <Loader2Icon className="size-4 animate-spin" /> Loading subscriptions…
-+              </p>
-+            )}
-+            <div className="space-y-6">
-+              {(["claude", "codex"] as Provider[]).map((provider) => {
-+                const accounts = data?.data.filter((a) => a.provider === provider) ?? [];
-+                return (
-+                  <section key={provider} className="overflow-hidden rounded-xl border">
-+                    <div className="flex items-center justify-between gap-3 bg-muted/20 px-4 py-4 sm:px-5">
-+                      <div>
-+                        <h2 className="flex items-center gap-2.5 font-semibold">
-+                          <ProviderLogo provider={provider} />
-+                          {providerNames[provider]}
-+                        </h2>
-+                        <p className="mt-1 text-xs text-muted-foreground">
-+                          {provider === "claude"
-+                            ? "Claude Pro / Max subscriptions"
-+                            : "ChatGPT subscriptions"}
-+                        </p>
-+                      </div>
-+                      <Button
-+                        variant="outline"
-+                        size="sm"
-+                        disabled={busy || !data}
-+                        onClick={() => setEditor({ provider })}
-+                      >
-+                        <PlusIcon className="size-4" /> Add subscription
-+                      </Button>
-+                    </div>
-+                    {accounts.length === 0 ? (
-+                      <div className="border-t px-5 py-6 text-sm text-muted-foreground">
-+                        <p>No saved subscriptions yet.</p>
-+                        <p className="mt-1">
-+                          Add an account to manage it here. Your existing setup stays in use until
-+                          you add one.
-+                        </p>
-+                      </div>
-+                    ) : (
-+                      <div className="divide-y border-t">
-+                        {accounts.map((a) => (
-+                          <div
-+                            key={a.id}
-+                            className="flex flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-5"
-+                          >
-+                            <div className="min-w-0">
-+                              <div className="flex items-center gap-2">
-+                                <span className="break-all font-medium">{a.name}</span>
-+                                {a.active && (
-+                                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
-+                                    <CheckIcon className="size-3" /> Active
-+                                  </span>
-+                                )}
-+                              </div>
-+                              <p className="mt-1 text-xs text-muted-foreground">
-+                                {a.active ? "Used by new and resumed agents" : "Ready to switch"}
-+                              </p>
-+                            </div>
-+                            <div className="flex items-center gap-1">
-+                              {!a.active && (
-+                                <Button
-+                                  variant="outline"
-+                                  size="sm"
-+                                  disabled={busy}
-+                                  onClick={() =>
-+                                    void act(
-+                                      `/${a.id}/activate`,
-+                                      "POST",
-+                                      `${a.name} is active. Stop and resume open ${providerNames[provider]} sessions after credentials sync.`,
-+                                    )
-+                                  }
-+                                >
-+                                  <ArrowRightLeftIcon className="size-3.5" /> Use
-+                                </Button>
-+                              )}
-+                              <Button
-+                                variant="ghost"
-+                                size="icon"
-+                                aria-label={`Edit ${a.name}`}
-+                                disabled={busy}
-+                                onClick={() => setEditor({ provider, account: a })}
-+                              >
-+                                <PencilIcon className="size-4" />
-+                              </Button>
-+                              <Button
-+                                variant="ghost"
-+                                size="icon"
-+                                aria-label={`Remove ${a.name}`}
-+                                title={
-+                                  a.active
-+                                    ? "Switch accounts before removing the active subscription"
-+                                    : "Remove subscription"
-+                                }
-+                                disabled={busy || a.active}
-+                                onClick={() => setRemove(a)}
-+                              >
-+                                <Trash2Icon className="size-4" />
-+                              </Button>
-+                            </div>
-+                          </div>
-+                        ))}
-+                      </div>
-+                    )}
-+                  </section>
-+                );
-+              })}
-+            </div>
-+            <p className="mt-6 text-xs text-muted-foreground">
-+              Credentials are stored in Kubernetes Secrets and are never sent back to the browser.
-+              Switching accounts does not transfer or reset quota.
-+            </p>
-+          </>
-+        )}
++  async function confirmRemove(account: Subscription) {
++    setPending(account.id);
++    setError("");
++    try {
++      setData(await subscriptionRequest<Subscriptions>(`/${account.id}`, "DELETE"));
++      setRemove(null);
++      showToast(`Removed ${account.name}.`);
++    } catch (e) {
++      setError((e as Error).message);
++      setRemove(null);
++    } finally {
++      setPending(null);
++    }
++  }
++
++  if (!isSingleUser && meIsAdmin === null) {
++    return (
++      <div className="flex min-h-full items-center justify-center text-ui text-muted-foreground">
++        Loading...
 +      </div>
++    );
++  }
++
++  if (!allowed) {
++    return (
++      <PageScroll contentClassName={PAGE_PADDING} extraBottom="2.5rem">
++        <h1 className="mb-2 text-2xl font-semibold">Subscriptions</h1>
++        <p className="text-ui text-muted-foreground">
++          You don't have permission to manage subscriptions.
++        </p>
++      </PageScroll>
++    );
++  }
++
++  return (
++    <PageScroll contentClassName={PAGE_PADDING} extraBottom="2.5rem">
++      <div className="mb-6 max-w-xl">
++        <h1 className="text-2xl font-semibold">Subscriptions</h1>
++        <p className="mt-1 text-ui text-muted-foreground">
++          The Claude and ChatGPT accounts agents use, shared by everyone on this deployment.
++          Switching reaches new sessions within about a minute. To move an open session, choose Stop
++          session in its menu, then send another message.
++        </p>
++      </div>
++
++      {error && (
++        <div
++          role="alert"
++          className="mb-4 flex max-w-3xl items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui text-destructive"
++        >
++          <span>{error}</span>
++          <Button variant="ghost" size="sm" onClick={load} className={TOUCH_HEIGHT}>
++            Reload
++          </Button>
++        </div>
++      )}
++
++      {!data ? (
++        !error && <p className="text-ui text-muted-foreground">Loading…</p>
++      ) : (
++        <div className="flex max-w-3xl flex-col gap-8">
++          {PROVIDERS.map((provider) => (
++            <ProviderSection
++              key={provider.id}
++              provider={provider.id}
++              accounts={data.data.filter((a) => a.provider === provider.id)}
++              pending={pending}
++              onAdd={() => setEditor({ provider: provider.id })}
++              onActivate={(account) => void activate(account)}
++              onEdit={(account) => setEditor({ provider: provider.id, account })}
++              onRemove={setRemove}
++            />
++          ))}
++          <p className="text-sm text-muted-foreground">
++            Credentials are kept in a Kubernetes Secret and are never sent back to the browser. Each
++            account keeps its own usage limits; switching doesn't move or reset them.
++          </p>
++        </div>
++      )}
++
 +      {editor && (
 +        <SubscriptionEditor
 +          provider={editor.provider}
 +          account={editor.account}
 +          onClose={() => setEditor(null)}
-+          onSaved={(value) => {
++          onSaved={(value, name) => {
 +            setData(value);
-+            setNotice("Subscription saved. Active credentials sync to runners automatically.");
 +            setEditor(null);
++            showToast(`Saved ${name}.`);
 +          }}
 +        />
 +      )}
++
 +      <Dialog
 +        open={!!remove}
 +        onOpenChange={(open) => {
-+          if (!open && !busy) setRemove(null);
++          if (!open && !pending) setRemove(null);
 +        }}
 +      >
 +        <DialogContent>
 +          <DialogHeader>
 +            <DialogTitle>Remove {remove?.name}?</DialogTitle>
 +            <DialogDescription>
-+              Its saved credentials will be deleted. You can add the subscription again later.
++              Its saved login is deleted from this deployment. That doesn't sign it out with{" "}
++              {remove ? signInName(remove.provider) : ""}, and you can add it again later.
 +            </DialogDescription>
 +          </DialogHeader>
 +          <DialogFooter>
-+            <Button variant="outline" disabled={busy} onClick={() => setRemove(null)}>
++            <Button variant="outline" disabled={!!pending} onClick={() => setRemove(null)}>
 +              Cancel
 +            </Button>
 +            <Button
 +              variant="destructive"
-+              disabled={busy}
-+              onClick={() => remove && void act(`/${remove.id}`, "DELETE", "Subscription removed.")}
++              loading={!!pending}
++              onClick={() => remove && void confirmRemove(remove)}
 +            >
-+              Remove subscription
++              Remove
 +            </Button>
 +          </DialogFooter>
 +        </DialogContent>
 +      </Dialog>
 +    </PageScroll>
++  );
++}
++
++function ProviderSection({
++  provider,
++  accounts,
++  pending,
++  onAdd,
++  onActivate,
++  onEdit,
++  onRemove,
++}: {
++  provider: Provider;
++  accounts: Subscription[];
++  pending: string | null;
++  onAdd: () => void;
++  onActivate: (account: Subscription) => void;
++  onEdit: (account: Subscription) => void;
++  onRemove: (account: Subscription) => void;
++}) {
++  const meta = PROVIDERS.find((p) => p.id === provider)!;
++  return (
++    <section aria-labelledby={`subscriptions-${provider}`}>
++      <div className="mb-2 flex items-center justify-between gap-3">
++        <div className="flex min-w-0 items-center gap-2.5">
++          <ProviderLogo provider={provider} />
++          <div className="min-w-0">
++            <h2 id={`subscriptions-${provider}`} className="text-ui font-semibold">
++              {meta.name}
++            </h2>
++            <p className="text-sm text-muted-foreground">{meta.plans}</p>
++          </div>
++        </div>
++        {accounts.length > 0 && (
++          <Button
++            variant="outline"
++            size="sm"
++            disabled={!!pending}
++            onClick={onAdd}
++            aria-label={`Add ${meta.name} account`}
++            className={TOUCH_HEIGHT}
++          >
++            <PlusIcon className="ui-icon" />
++            Add account
++          </Button>
++        )}
++      </div>
++      {accounts.length === 0 ? (
++        <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-border px-4 py-5 sm:flex-row sm:items-center sm:justify-between">
++          <p className="text-ui text-muted-foreground">
++            No accounts yet. Agents use the login this deployment was set up with.
++          </p>
++          <Button
++            variant="outline"
++            size="sm"
++            onClick={onAdd}
++            aria-label={`Add ${meta.name} account`}
++            className={cn("shrink-0", TOUCH_HEIGHT)}
++          >
++            <PlusIcon className="ui-icon" />
++            Add account
++          </Button>
++        </div>
++      ) : (
++        <div
++          role="radiogroup"
++          aria-label={`Active ${meta.name} account`}
++          className="divide-y divide-border overflow-hidden rounded-lg border border-border"
++        >
++          {accounts.map((account) => (
++            <AccountRow
++              key={account.id}
++              account={account}
++              pending={pending}
++              onActivate={() => onActivate(account)}
++              onEdit={() => onEdit(account)}
++              onRemove={() => onRemove(account)}
++            />
++          ))}
++        </div>
++      )}
++    </section>
++  );
++}
++
++function AccountRow({
++  account,
++  pending,
++  onActivate,
++  onEdit,
++  onRemove,
++}: {
++  account: Subscription;
++  pending: string | null;
++  onActivate: () => void;
++  onEdit: () => void;
++  onRemove: () => void;
++}) {
++  const switching = pending === account.id;
++  return (
++    <div className={cn("flex items-center gap-1 pr-2", account.active && "bg-muted/40")}>
++      <label
++        className={cn(
++          "flex min-w-0 flex-1 items-center gap-3 py-3 pl-4",
++          !account.active && !pending && "cursor-pointer",
++        )}
++      >
++        <input
++          type="radio"
++          name={`subscription-${account.provider}`}
++          checked={account.active}
++          disabled={!!pending}
++          onChange={onActivate}
++          className="size-4 shrink-0 accent-primary"
++        />
++        <span className="min-w-0 flex-1">
++          <span className="flex items-center gap-2">
++            <span className="truncate text-ui font-medium">{account.name}</span>
++            {account.active && (
++              <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
++                Active
++              </span>
++            )}
++            {switching && <Loader2Icon className="ui-icon animate-spin text-muted-foreground" />}
++          </span>
++          <span
++            className="block text-sm text-muted-foreground"
++            title={absoluteTime(Date.parse(account.updated_at))}
++          >
++            {updated(account)}
++          </span>
++        </span>
++      </label>
++      <Button
++        variant="ghost"
++        size="icon"
++        aria-label={`Edit ${account.name}`}
++        disabled={!!pending}
++        onClick={onEdit}
++        className={TOUCH_ICON_BUTTON}
++      >
++        <PencilIcon className="ui-icon" />
++      </Button>
++      <Button
++        variant="ghost"
++        size="icon"
++        aria-label={`Remove ${account.name}`}
++        title={
++          account.active ? "Switch to another account before removing this one" : "Remove account"
++        }
++        disabled={!!pending || account.active}
++        onClick={onRemove}
++        className={TOUCH_ICON_BUTTON}
++      >
++        <Trash2Icon className="ui-icon" />
++      </Button>
++    </div>
++  );
++}
++
++function Step({ n, title, children }: { n: number; title: string; children: ReactNode }) {
++  return (
++    <li className="flex gap-3">
++      <span
++        aria-hidden
++        className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border text-xs font-medium text-muted-foreground"
++      >
++        {n}
++      </span>
++      <div className="min-w-0 flex-1 space-y-2 pt-0.5">
++        <p className="text-ui font-medium">{title}</p>
++        {children}
++      </div>
++    </li>
 +  );
 +}
 +
@@ -591,7 +762,7 @@ index 000000000..a4ef12fdf
 +  provider: Provider;
 +  account?: Subscription;
 +  onClose: () => void;
-+  onSaved: (data: Subscriptions) => void;
++  onSaved: (data: Subscriptions, name: string) => void;
 +}) {
 +  const [name, setName] = useState(account?.name ?? "");
 +  const [credential, setCredential] = useState("");
@@ -603,6 +774,13 @@ index 000000000..a4ef12fdf
 +  const [manual, setManual] = useState(false);
 +  const [pollError, setPollError] = useState("");
 +  const [codeSubmitted, setCodeSubmitted] = useState(false);
++  const [copied, setCopied] = useState(false);
++  const via = signInName(provider);
++  // The parent passes a new callback each render; polling shouldn't restart.
++  const saved = useRef(onSaved);
++  saved.current = onSaved;
++  const nameRef = useRef(name);
++  nameRef.current = name;
 +
 +  useEffect(() => {
 +    if (!loginId) return;
@@ -615,16 +793,19 @@ index 000000000..a4ef12fdf
 +        setPollError("");
 +        setLogin(result);
 +        if (result.status === "complete" && result.subscriptions) {
-+          onSaved(result.subscriptions);
++          saved.current(result.subscriptions, nameRef.current.trim());
 +          return;
 +        }
 +        if (result.status === "expired" || result.status === "failed") {
 +          setError(
 +            result.status === "failed"
-+              ? "Sign-in failed. Please start again."
-+              : "Sign-in expired. Please try again.",
++              ? provider === "claude" && codeSubmitted
++                ? "Claude didn't accept that code. Start again and paste the whole code."
++                : "Sign-in failed. Start again."
++              : "Sign-in expired. Start again.",
 +          );
 +          setLoginId(null);
++          setLogin(null);
 +          return;
 +        }
 +      } catch (e) {
@@ -633,7 +814,7 @@ index 000000000..a4ef12fdf
 +          setError(e.message);
 +          return; // Keep the helper ID so Cancel still cleans it up.
 +        }
-+        setPollError("Connection interrupted. Retrying sign-in status…");
++        setPollError("Connection interrupted. Retrying…");
 +      }
 +      timer = setTimeout(() => void poll(), 2000);
 +    }
@@ -642,7 +823,7 @@ index 000000000..a4ef12fdf
 +      live = false;
 +      clearTimeout(timer);
 +    };
-+  }, [loginId, onSaved]);
++  }, [loginId, provider, codeSubmitted]);
 +
 +  async function close() {
 +    if (busy) return;
@@ -661,14 +842,13 @@ index 000000000..a4ef12fdf
 +    setBusy(true);
 +    setError("");
 +    try {
-+      onSaved(
-+        await subscriptionRequest<Subscriptions>("", "PUT", {
-+          provider,
-+          name: name.trim(),
-+          credential: credential || null,
-+          id: account?.id,
-+        }),
-+      );
++      const value = await subscriptionRequest<Subscriptions>("", "PUT", {
++        provider,
++        name: name.trim(),
++        credential: credential || null,
++        id: account?.id,
++      });
++      onSaved(value, name.trim());
 +    } catch (e) {
 +      setError((e as Error).message);
 +    } finally {
@@ -713,6 +893,19 @@ index 000000000..a4ef12fdf
 +    }
 +  }
 +
++  async function copyCode(code: string) {
++    try {
++      await navigator.clipboard.writeText(code);
++      setCopied(true);
++      setTimeout(() => setCopied(false), 1500);
++    } catch {
++      // Clipboard access can be denied; the code stays selectable.
++    }
++  }
++
++  const waiting = login?.status === "waiting" && !codeSubmitted;
++  const canSave = !loginId && name.trim() && (account ? true : !!credential);
++
 +  return (
 +    <Dialog
 +      open
@@ -720,122 +913,156 @@ index 000000000..a4ef12fdf
 +        if (!open) void close();
 +      }}
 +    >
-+      <DialogContent className="sm:max-w-lg">
++      <DialogContent className="sm:max-w-md">
 +        <DialogHeader>
 +          <DialogTitle className="flex items-center gap-2.5">
 +            <ProviderLogo provider={provider} />
-+            {account ? "Edit" : "Add"} {providerNames[provider]} subscription
++            {account ? `Edit ${account.name}` : `Add ${providerName(provider)} account`}
 +          </DialogTitle>
 +          <DialogDescription>
 +            {account
-+              ? "Rename this account or sign in again to update its login."
-+              : "Give this account a name so you can switch between work and personal subscriptions."}
++              ? `Rename it, or sign in again to replace its ${via} login.`
++              : `Name it so you can tell it apart, then sign in with ${via}.`}
 +          </DialogDescription>
 +        </DialogHeader>
-+        <div className="space-y-4">
-+          <div className="space-y-2">
++
++        <div className="flex flex-col gap-5">
++          <div className="flex flex-col gap-1.5">
 +            <label className="text-sm font-medium" htmlFor="subscription-name">
-+              Subscription name
++              Name
 +            </label>
 +            <Input
 +              id="subscription-name"
-+              placeholder="e.g. Personal or Work"
++              placeholder="Personal, Work…"
 +              value={name}
 +              maxLength={80}
 +              disabled={!!loginId || busy}
 +              onChange={(e) => setName(e.target.value)}
 +              autoComplete="off"
++              className={TOUCH_HEIGHT}
 +            />
 +          </div>
-+          <div className="rounded-lg border bg-muted/20 p-4">
-+            {loginId ? (
-+              <div className="space-y-3">
-+                {login?.status === "waiting" && !codeSubmitted ? (
++
++          {loginId ? (
++            waiting ? (
++              <ol className="flex flex-col gap-4">
++                {provider === "claude" ? (
 +                  <>
-+                    <p className="text-sm">
-+                      {provider === "claude"
-+                        ? "Sign in to Claude in your browser, then paste the one-time code shown after you authorize access."
-+                        : "Open the sign-in page and enter this one-time code:"}
-+                    </p>
-+                    {provider === "codex" && (
-+                      <p className="select-all rounded-md bg-muted p-3 text-center font-mono text-xl tracking-widest">
-+                        {login.code}
-+                      </p>
-+                    )}
-+                    <Button asChild className="w-full">
-+                      <a href={login.url} target="_blank" rel="noopener noreferrer">
-+                        <ProviderLogo provider={provider} />
-+                        Continue with {provider === "claude" ? "Claude" : "ChatGPT"}
-+                      </a>
-+                    </Button>
-+                    {provider === "claude" ? (
-+                      <div className="space-y-2">
-+                        <label className="text-sm font-medium" htmlFor="subscription-code">
-+                          Authorization code
-+                        </label>
++                    <Step n={1} title="Approve access in Claude">
++                      <Button asChild variant="outline" className={cn("w-full", TOUCH_HEIGHT)}>
++                        <a href={login?.url} target="_blank" rel="noopener noreferrer">
++                          Continue with Claude
++                          <ExternalLinkIcon className="ui-icon" />
++                        </a>
++                      </Button>
++                    </Step>
++                    <Step n={2} title="Paste the code Claude shows you">
++                      <form
++                        className="flex gap-2"
++                        onSubmit={(e) => {
++                          e.preventDefault();
++                          void submitCode();
++                        }}
++                      >
 +                        <Input
 +                          id="subscription-code"
-+                          placeholder="Paste the code from Claude"
++                          aria-label="Authorization code"
++                          placeholder="code#state"
 +                          value={authorizationCode}
 +                          onChange={(e) => setAuthorizationCode(e.target.value)}
 +                          autoComplete="off"
 +                          spellCheck={false}
 +                          disabled={busy}
++                          className={cn("font-mono", TOUCH_HEIGHT)}
 +                        />
 +                        <Button
-+                          className="w-full"
-+                          disabled={busy || !authorizationCode.trim()}
-+                          onClick={() => void submitCode()}
++                          type="submit"
++                          loading={busy}
++                          disabled={!authorizationCode.trim()}
++                          className={TOUCH_HEIGHT}
 +                        >
 +                          Finish sign-in
 +                        </Button>
-+                      </div>
-+                    ) : (
-+                      <p className="text-xs text-muted-foreground">
-+                        Waiting for you to finish signing in. Your subscription will be saved
-+                        automatically.
-+                      </p>
-+                    )}
++                      </form>
++                    </Step>
 +                  </>
 +                ) : (
-+                  <p role="status" className="flex items-center gap-2 text-sm">
-+                    <Loader2Icon className="size-4 animate-spin" />
-+                    {login?.status === "exchanging" || codeSubmitted
-+                      ? "Finishing sign-in…"
-+                      : "Preparing secure sign-in…"}
-+                  </p>
++                  <>
++                    <Step n={1} title="Copy this one-time code">
++                      <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 py-1.5 pr-1.5 pl-3">
++                        <code className="flex-1 font-mono text-lg tracking-[0.2em] select-all">
++                          {login?.code}
++                        </code>
++                        <Button
++                          variant="ghost"
++                          size="sm"
++                          onClick={() => login?.code && void copyCode(login.code)}
++                          className={TOUCH_HEIGHT}
++                        >
++                          {copied ? (
++                            <CheckIcon className="ui-icon" />
++                          ) : (
++                            <CopyIcon className="ui-icon" />
++                          )}
++                          {copied ? "Copied" : "Copy"}
++                        </Button>
++                      </div>
++                    </Step>
++                    <Step n={2} title="Enter it on the ChatGPT sign-in page">
++                      <Button asChild variant="outline" className={cn("w-full", TOUCH_HEIGHT)}>
++                        <a href={login?.url} target="_blank" rel="noopener noreferrer">
++                          Continue with ChatGPT
++                          <ExternalLinkIcon className="ui-icon" />
++                        </a>
++                      </Button>
++                      <p className="flex items-center gap-2 text-sm text-muted-foreground">
++                        <Loader2Icon className="ui-icon animate-spin" />
++                        Saves on its own once you've signed in.
++                      </p>
++                    </Step>
++                  </>
 +                )}
-+              </div>
++              </ol>
 +            ) : (
-+              <>
-+                <Button
-+                  className="w-full"
-+                  disabled={busy || !name.trim()}
-+                  onClick={() => void connect()}
-+                >
-+                  <ProviderLogo provider={provider} />
-+                  Sign in with {provider === "claude" ? "Claude" : "ChatGPT"}
-+                </Button>
-+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
-+                  Everything runs in Omnigent. You only need your browser—no local commands or
-+                  installations.
-+                </p>
-+              </>
-+            )}
-+          </div>
-+          {!loginId && (
-+            <>
++              <p
++                role="status"
++                className="flex items-center gap-2 rounded-md border border-border px-3 py-3 text-ui text-muted-foreground"
++              >
++                <Loader2Icon className="ui-icon animate-spin" />
++                {login?.status === "exchanging" || codeSubmitted
++                  ? "Finishing sign-in…"
++                  : "Preparing a secure sign-in…"}
++              </p>
++            )
++          ) : (
++            <div className="flex flex-col gap-2">
 +              <Button
-+                variant="ghost"
-+                size="sm"
-+                className="text-muted-foreground"
++                variant={account ? "outline" : "default"}
++                loading={busy && !manual}
++                disabled={busy || !name.trim()}
++                onClick={() => void connect()}
++                className={TOUCH_HEIGHT}
++              >
++                <ProviderLogo
++                  provider={provider}
++                  className={cn("size-4", provider === "codex" && "text-current")}
++                />
++                {account ? `Sign in again with ${via}` : `Sign in with ${via}`}
++              </Button>
++              <button
++                type="button"
++                className="self-start text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
 +                onClick={() => setManual((current) => !current)}
 +              >
-+                {manual ? "Hide credential import" : "Already have credentials? Import instead"}
-+              </Button>
++                {manual
++                  ? "Hide credential import"
++                  : provider === "claude"
++                    ? "Already have a token? Import instead"
++                    : "Already have an auth.json? Import instead"}
++              </button>
 +              {manual &&
 +                (provider === "claude" ? (
-+                  <div className="space-y-2">
++                  <div className="flex flex-col gap-1.5">
 +                    <label className="text-sm font-medium" htmlFor="subscription-token">
 +                      Subscription token
 +                    </label>
@@ -847,13 +1074,15 @@ index 000000000..a4ef12fdf
 +                      onChange={(e) => setCredential(e.target.value)}
 +                      autoComplete="new-password"
 +                      spellCheck={false}
++                      className={TOUCH_HEIGHT}
 +                    />
-+                    <p className="text-xs text-muted-foreground">
-+                      Paste an existing subscription token. Leave it blank to keep your saved login.
++                    <p className="text-sm text-muted-foreground">
++                      From <code className="text-xs">claude setup-token</code>.
++                      {account ? " Leave it empty to keep the saved login." : ""}
 +                    </p>
 +                  </div>
 +                ) : (
-+                  <div className="space-y-2">
++                  <div className="flex flex-col gap-1.5">
 +                    <label className="text-sm font-medium" htmlFor="subscription-auth">
 +                      Codex auth.json
 +                    </label>
@@ -863,41 +1092,41 @@ index 000000000..a4ef12fdf
 +                      accept=".json,application/json"
 +                      onChange={(e) => {
 +                        const file = e.target.files?.[0];
-+                        if (file) {
-+                          if (file.size > 65536) {
-+                            setError("The credential file is too large.");
-+                            return;
-+                          }
-+                          void file
-+                            .text()
-+                            .then(setCredential)
-+                            .catch(() => setError("Couldn't read that file."));
++                        if (!file) return;
++                        if (file.size > 65536) {
++                          setError("That file is too large to be a Codex auth.json.");
++                          return;
 +                        }
++                        void file
++                          .text()
++                          .then(setCredential)
++                          .catch(() => setError("Couldn't read that file."));
 +                      }}
 +                    />
-+                    <p className="text-xs text-muted-foreground">
-+                      Import an existing ChatGPT login. The file is uploaded only when you save.
++                    <p className="text-sm text-muted-foreground">
++                      From a ChatGPT login, usually{" "}
++                      <code className="text-xs">~/.codex/auth.json</code>. It's uploaded when you
++                      save.
 +                    </p>
 +                  </div>
 +                ))}
-+            </>
++            </div>
 +          )}
++
 +          {(error || pollError) && (
-+            <p role="alert" className="text-sm text-destructive">
++            <p role="alert" className="text-ui text-destructive">
 +              {error || pollError}
 +            </p>
 +          )}
 +        </div>
++
 +        <DialogFooter>
 +          <Button variant="outline" disabled={busy} onClick={() => void close()}>
 +            Cancel
 +          </Button>
-+          {!loginId && (account || credential) && (
-+            <Button
-+              disabled={busy || !name.trim() || (!account && !credential)}
-+              onClick={() => void save()}
-+            >
-+              {busy && <Loader2Icon className="size-4 animate-spin" />}Save subscription
++          {!loginId && (account || manual) && (
++            <Button loading={busy && !!canSave} disabled={!canSave} onClick={() => void save()}>
++              Save
 +            </Button>
 +          )}
 +        </DialogFooter>
@@ -906,7 +1135,7 @@ index 000000000..a4ef12fdf
 +  );
 +}
 diff --git a/web/src/shell/settingsNav.test.tsx b/web/src/shell/settingsNav.test.tsx
-index 7421b186d..e769cf9d2 100644
+index 7421b18..8c66d7b 100644
 --- a/web/src/shell/settingsNav.test.tsx
 +++ b/web/src/shell/settingsNav.test.tsx
 @@ -125,6 +125,7 @@ describe("settingsNavGroups", () => {
@@ -925,17 +1154,21 @@ index 7421b186d..e769cf9d2 100644
        "repo-env",
      ]);
    });
-@@ -145,7 +147,7 @@ describe("settingsNavGroups", () => {
+@@ -145,7 +147,11 @@ describe("settingsNavGroups", () => {
      const singleUserAdmin = settingsNavGroups(false, false, true, true).find(
        (g) => g.title === "Admin",
      );
 -    expect(singleUserAdmin?.items.map((i) => i.id)).toEqual(["policies", "repo-env"]);
-+    expect(singleUserAdmin?.items.map((i) => i.id)).toEqual(["policies", "subscriptions", "repo-env"]);
++    expect(singleUserAdmin?.items.map((i) => i.id)).toEqual([
++      "policies",
++      "subscriptions",
++      "repo-env",
++    ]);
    });
  
    it("includes the Sandbox Integrations item only when a connection is enabled", () => {
 diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
-index 45f0dc190..dd39d8e84 100644
+index 45f0dc1..5f6a524 100644
 --- a/web/src/shell/settingsNav.tsx
 +++ b/web/src/shell/settingsNav.tsx
 @@ -14,6 +14,7 @@ import {
@@ -962,11 +1195,12 @@ index 45f0dc190..dd39d8e84 100644
    "repo-env",
    "archived",
    "cli",
-@@ -145,6 +148,7 @@ export function settingsNavGroups(
+@@ -144,6 +147,8 @@ export function settingsNavGroups(
+     if (!isSingleUser) adminItems.push({ id: "members", label: "Members", icon: UsersIcon });
      adminItems.push({ id: "policies", label: "Policies", icon: ShieldCheckIcon });
      if (!isSingleUser) adminItems.push({ id: "sharing", label: "Sharing", icon: Share2Icon });
-     // This deployment's environment variables per repository.
++    // The Claude and ChatGPT accounts this deployment's agents use.
 +    adminItems.push({ id: "subscriptions", label: "Subscriptions", icon: KeyRoundIcon });
+     // This deployment's environment variables per repository.
      adminItems.push({ id: "repo-env", label: "Repository variables", icon: VariableIcon });
      groups.push({ title: "Admin", items: adminItems });
-   }

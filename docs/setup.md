@@ -124,6 +124,10 @@ mise run setup-codex     # Codex: log in with a device code
 mise run setup-claude    # Claude: store a subscription token
 ```
 
+Or, once you've signed in, sign in to Claude and ChatGPT accounts from
+**Settings → Subscriptions**, where you can keep several and switch between
+them. See [Subscriptions in Settings](features/subscriptions.md).
+
 ### 9. Give sessions access to your repositories
 
 Pick one:
