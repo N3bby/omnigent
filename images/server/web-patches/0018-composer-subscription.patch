@@ -4,8 +4,8 @@ The store keeps the account the runner reports (the omnigent.subscription label
 on load, session.usage events after), and ComposerSubscription names it from
 /v1/subscriptions/names. Tapping it explains what it means. A dot marks a
 session that no longer uses the account Settings selects, with how to switch.
-The tag shows nothing until there's something to tell apart: no report yet, or
-the deployment's own login while Settings has no account for the provider.
+The tag shows nothing until the runner has reported an account and Settings
+has an account for the provider.
 The composer's right action group shrinks when it holds a control marked
 data-composer-shrinkable, so a long account name truncates instead of pushing
 the send button out of the composer; the new-chat composer is unchanged.
@@ -30,10 +30,10 @@ index eca8101..4320188 100644
        {...props}
 diff --git a/web/src/components/composer/ComposerSubscription.test.tsx b/web/src/components/composer/ComposerSubscription.test.tsx
 new file mode 100644
-index 0000000..a618033
+index 0000000..3167304
 --- /dev/null
 +++ b/web/src/components/composer/ComposerSubscription.test.tsx
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,67 @@
 +import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 +import { afterEach, describe, expect, it, vi } from "vitest";
 +
@@ -90,20 +90,23 @@ index 0000000..a618033
 +    expect(screen.queryByRole("button", { name: "Manage subscriptions" })).not.toBeInTheDocument();
 +  });
 +
-+  it("explains the deployment's own login", () => {
++  it("says when the account has been removed from Settings", () => {
 +    render(
-+      <SubscriptionTag subscription={{ kind: "default", activeName: "Work" }} provider="claude" />,
++      <SubscriptionTag subscription={{ kind: "removed", activeName: "Work" }} provider="claude" />,
 +    );
-+    fireEvent.click(screen.getByTestId("composer-subscription"));
-+    expect(screen.getByText(/mise run setup-claude/)).toBeInTheDocument();
++    const tag = screen.getByTestId("composer-subscription");
++    expect(tag).toHaveTextContent("Removed account");
++    fireEvent.click(tag);
++    expect(screen.getByText(/has since been removed from Settings/)).toBeInTheDocument();
++    expect(screen.getByText(/To use Work, choose Stop session/)).toBeInTheDocument();
 +  });
 +});
 diff --git a/web/src/components/composer/ComposerSubscription.tsx b/web/src/components/composer/ComposerSubscription.tsx
 new file mode 100644
-index 0000000..d892b8a
+index 0000000..0b39295
 --- /dev/null
 +++ b/web/src/components/composer/ComposerSubscription.tsx
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,145 @@
 +import { KeyRoundIcon } from "lucide-react";
 +
 +import { COMPOSER_COLLAPSED_LABEL_CLASS } from "./ChatComposer";
@@ -119,9 +122,9 @@ index 0000000..d892b8a
 +} from "@/lib/subscriptions";
 +import { cn } from "@/lib/utils";
 +
-+const PROVIDER_LABEL: Record<Provider, { account: string; agent: string; setup: string }> = {
-+  claude: { account: "Claude account", agent: "Claude Code", setup: "mise run setup-claude" },
-+  codex: { account: "ChatGPT account", agent: "Codex", setup: "mise run setup-codex" },
++const PROVIDER_LABEL: Record<Provider, { account: string; agent: string }> = {
++  claude: { account: "Claude account", agent: "Claude Code" },
++  codex: { account: "ChatGPT account", agent: "Codex" },
 +};
 +
 +/** Marks a session that no longer uses the account Settings selects. */
@@ -130,8 +133,7 @@ index 0000000..d892b8a
 +}
 +
 +function tagLabel(subscription: SessionSubscription): string {
-+  if (subscription.kind === "account") return subscription.name;
-+  return subscription.kind === "default" ? "Default login" : "Removed account";
++  return subscription.kind === "account" ? subscription.name : "Removed account";
 +}
 +
 +/**
@@ -140,7 +142,7 @@ index 0000000..d892b8a
 + * only once the runner has reported an account, so the names are only fetched
 + * for sessions that have one.
 + *
-+ * @param subscriptionId - The reported account ID, or `"default"`.
++ * @param subscriptionId - The reported account ID.
 + * @param provider - The provider the session's harness signs in with.
 + */
 +export function ComposerSubscription({
@@ -225,9 +227,7 @@ index 0000000..d892b8a
 +        <p className="text-muted-foreground">
 +          {subscription.kind === "account"
 +            ? `${labels.agent} in this session signed in with this account when it started.`
-+            : subscription.kind === "default"
-+              ? `${labels.agent} in this session uses the deployment's own login, from ${labels.setup}, not an account from Settings.`
-+              : `${labels.agent} in this session signed in with an account that has since been removed from Settings.`}
++            : `${labels.agent} in this session signed in with an account that has since been removed from Settings.`}
 +        </p>
 +        {stale && (
 +          <p className="text-muted-foreground">
@@ -275,15 +275,15 @@ index 0000000..7e67b97
 +  });
 +}
 diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
-index 7fb0470..412a4d0 100644
+index 7fb0470..5df5ae0 100644
 --- a/web/src/lib/events.ts
 +++ b/web/src/lib/events.ts
 @@ -560,6 +560,8 @@ export interface SessionStatusEvent {
   *   change (the client keeps its cached map).
   * - `fastMode`: whether the native harness runs in fast mode (`/fast`);
   *   absent on a broadcast that doesn't report it.
-+ * - `subscription`: the account the native agent started with, an account
-+ *   ID or `"default"`; absent on a broadcast that doesn't report it.
++ * - `subscription`: the account ID the native agent started with; absent on a
++ *   broadcast that doesn't report it.
   * - `rateLimits`: the login's subscription usage windows, reported by a
   *   native harness; absent on a broadcast that doesn't refresh them.
   */
@@ -337,10 +337,10 @@ index 0553407..b241629 100644
    if (eventType === "session.model") {
 diff --git a/web/src/lib/subscriptions.test.ts b/web/src/lib/subscriptions.test.ts
 new file mode 100644
-index 0000000..bf6d3e2
+index 0000000..8aee211
 --- /dev/null
 +++ b/web/src/lib/subscriptions.test.ts
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,72 @@
 +import { describe, expect, it } from "vitest";
 +
 +import {
@@ -363,7 +363,7 @@ index 0000000..bf6d3e2
 +describe("session subscription", () => {
 +  it("parses account IDs and the deployment login, and nothing else", () => {
 +    expect(parseSubscription(PERSONAL)).toBe(PERSONAL);
-+    expect(parseSubscription("default")).toBe("default");
++    expect(parseSubscription("default")).toBeNull();
 +    expect(parseSubscription(undefined)).toBeUndefined();
 +    expect(parseSubscription("Personal")).toBeNull();
 +    expect(parseSubscription(42)).toBeNull();
@@ -403,49 +403,41 @@ index 0000000..bf6d3e2
 +      kind: "removed",
 +      activeName: "Work",
 +    });
-+    expect(describeSessionSubscription("default", "claude", names)).toEqual({
-+      kind: "default",
-+      activeName: "Work",
-+    });
 +  });
 +
-+  it("shows nothing until there is something to tell apart", () => {
++  it("shows nothing until the account can be named", () => {
 +    expect(describeSessionSubscription(null, "claude", names)).toBeNull();
 +    expect(describeSessionSubscription(PERSONAL, null, names)).toBeNull();
 +    expect(describeSessionSubscription(PERSONAL, "claude", undefined)).toBeNull();
-+    // The deployment's own login is the only login while Settings has no account.
-+    expect(describeSessionSubscription("default", "claude", [])).toBeNull();
++    // Settings has no Claude account any more, so there's nothing to name it after.
++    expect(describeSessionSubscription(PERSONAL, "claude", names.slice(2))).toBeNull();
 +  });
 +});
 diff --git a/web/src/lib/subscriptions.ts b/web/src/lib/subscriptions.ts
-index e7bd6ff..c8f285d 100644
+index e7bd6ff..13a1a85 100644
 --- a/web/src/lib/subscriptions.ts
 +++ b/web/src/lib/subscriptions.ts
-@@ -46,3 +46,79 @@ export async function subscriptionRequest<T>(
+@@ -46,3 +46,70 @@ export async function subscriptionRequest<T>(
      );
    return data as T;
  }
 +
 +/**
 + * The account a session's Claude Code or Codex started with, as its runner
-+ * reports it: an account ID from Settings → Subscriptions, or
-+ * {@link DEFAULT_LOGIN} for the deployment's own login (`mise run
-+ * setup-claude` or `setup-codex`).
++ * reports it: an account ID from Settings → Subscriptions.
 + */
 +export const SUBSCRIPTION_LABEL_KEY = "omnigent.subscription";
-+export const DEFAULT_LOGIN = "default";
 +
 +const ACCOUNT_ID = /^[0-9a-f]{32}$/;
 +
 +/**
 + * Parse a wire subscription (`session.usage` event or the session label).
 + *
-+ * @returns The account ID or `"default"`, `undefined` when absent, or
-+ *   `null` when malformed.
++ * @returns The account ID, `undefined` when absent, or `null` when malformed.
 + */
 +export function parseSubscription(raw: unknown): string | null | undefined {
 +  if (raw === undefined || raw === null) return undefined;
-+  return typeof raw === "string" && (raw === DEFAULT_LOGIN || ACCOUNT_ID.test(raw)) ? raw : null;
++  return typeof raw === "string" && ACCOUNT_ID.test(raw) ? raw : null;
 +}
 +
 +/** Read the session label; `null` when the runner hasn't reported it. */
@@ -476,15 +468,12 @@ index e7bd6ff..c8f285d 100644
 +export type SessionSubscription =
 +  /** An account from Settings; `active` is false once Settings selects another. */
 +  | { kind: "account"; name: string; active: boolean; activeName: string | null }
-+  /** The deployment's own login, while Settings has accounts for the provider. */
-+  | { kind: "default"; activeName: string | null }
 +  /** An account that has since been removed from Settings. */
 +  | { kind: "removed"; activeName: string | null };
 +
 +/**
 + * What the composer shows for a session's account, or `null` for nothing:
-+ * nothing reported yet, or the deployment's own login while Settings has no
-+ * account for the provider, so there's no other account it could be.
++ * nothing reported yet, or Settings has no account for the provider.
 + */
 +export function describeSessionSubscription(
 +  subscription: string | null,
@@ -493,10 +482,8 @@ index e7bd6ff..c8f285d 100644
 +): SessionSubscription | null {
 +  if (subscription === null || provider === null || names === undefined) return null;
 +  const accounts = names.filter((a) => a.provider === provider);
++  if (accounts.length === 0) return null;
 +  const activeName = accounts.find((a) => a.active)?.name ?? null;
-+  if (subscription === DEFAULT_LOGIN) {
-+    return accounts.length > 0 ? { kind: "default", activeName } : null;
-+  }
 +  const account = accounts.find((a) => a.id === subscription);
 +  if (account === undefined) return { kind: "removed", activeName };
 +  return { kind: "account", name: account.name, active: account.active, activeName };
@@ -538,7 +525,7 @@ index 6d1aeb5..6e2c337 100644
                  <TooltipProvider>
                    <Tooltip>
 diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
-index b89daf4..5c0f6d8 100644
+index b89daf4..3c38193 100644
 --- a/web/src/store/chatStore.ts
 +++ b/web/src/store/chatStore.ts
 @@ -150,6 +150,7 @@ import type { StoredReplyDraft } from "@/lib/replyDraft";
@@ -549,14 +536,13 @@ index b89daf4..5c0f6d8 100644
  
  export interface SendOptions {
    /** Client-only quote provenance, retained if the composer needs to retry. */
-@@ -871,6 +872,14 @@ export interface ConversationState {
+@@ -871,6 +872,13 @@ export interface ConversationState {
     * until reported.
     */
    fastMode: boolean | null;
 +  /**
 +   * The subscription account the session's native agent started with: an
-+   * account ID from Settings → Subscriptions, or ``"default"`` for the
-+   * deployment's own login. Seeded from the session's
++   * account ID from Settings → Subscriptions. Seeded from the session's
 +   * ``omnigent.subscription`` label on bind and replaced by
 +   * ``session.usage`` events that carry it. ``null`` until reported.
 +   */
@@ -564,7 +550,7 @@ index b89daf4..5c0f6d8 100644
    /**
     * Tailnet name of the session's managed runner Pod, e.g.
     * ``omnigent-e1dcab9b.tail1234.ts.net``. Seeded from the session's
-@@ -1758,6 +1767,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+@@ -1758,6 +1766,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
    sessionUsageByModel: null,
    rateLimits: null,
    fastMode: null,
@@ -572,7 +558,7 @@ index b89daf4..5c0f6d8 100644
    tailscaleHost: null,
    gitBranch: null,
    todos: [],
-@@ -4100,6 +4110,7 @@ async function bindStream(
+@@ -4100,6 +4109,7 @@ async function bindStream(
          tokensUsed: session.lastTotalTokens ?? null,
          rateLimits: rateLimitsFromLabels(session.labels),
          fastMode: fastModeFromLabels(session.labels),
@@ -580,7 +566,7 @@ index b89daf4..5c0f6d8 100644
          tailscaleHost: tailscaleHostFromLabels(session.labels),
          sessionCostUsd:
            state.sessionCostUsd !== stateBeforeFetch.sessionCostUsd
-@@ -4305,6 +4316,8 @@ function reconnectStatusPatch(
+@@ -4305,6 +4315,8 @@ function reconnectStatusPatch(
    if (rateLimits !== null) patch.rateLimits = rateLimits;
    const fastMode = fastModeFromLabels(session.labels);
    if (fastMode !== null) patch.fastMode = fastMode;
@@ -589,7 +575,7 @@ index b89daf4..5c0f6d8 100644
    const tailscaleHost = tailscaleHostFromLabels(session.labels);
    if (tailscaleHost !== null) patch.tailscaleHost = tailscaleHost;
    // `waiting` is a TURN-END snapshot (the turn finished; only background work
-@@ -6236,6 +6249,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+@@ -6236,6 +6248,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
          sessionUsageByModel?: Record<string, ModelUsage>;
          rateLimits?: RateLimits;
          fastMode?: boolean;
@@ -597,7 +583,7 @@ index b89daf4..5c0f6d8 100644
        } = {};
        if (event.contextTokens !== undefined) {
          patch.tokensUsed = event.contextTokens;
-@@ -6255,6 +6269,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+@@ -6255,6 +6268,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
        if (event.fastMode !== undefined) {
          patch.fastMode = event.fastMode;
        }

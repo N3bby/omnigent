@@ -1,25 +1,23 @@
 Accept, store and broadcast which subscription account a native agent uses.
 
 external_session_usage accepts data.subscription (an account ID from Settings ->
-Subscriptions, or "default" for the deployment's own login), stores it in the
-omnigent.subscription session label for page loads, and adds it to the
-session.usage SSE event. Like fast_mode, a post carrying only the subscription
+Subscriptions), stores it in the omnigent.subscription session label for page
+loads, and adds it to the session.usage SSE event. Like fast_mode, a post carrying only the subscription
 skips the cost roll-up. Pairs with the runner patch
 0010-subscription-in-use.patch and the web patch
 0018-composer-subscription.patch. Applies after 0013-subscriptions.patch.
 Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
-index 526e0e3..04590e8 100644
+index 526e0e3..e2c747e 100644
 --- a/omnigent/server/routes/_sessions/orchestration.py
 +++ b/omnigent/server/routes/_sessions/orchestration.py
-@@ -1756,6 +1756,33 @@ def _fast_mode_from_usage_data(raw: object) -> bool | None:
+@@ -1756,6 +1756,32 @@ def _fast_mode_from_usage_data(raw: object) -> bool | None:
      )
  
  
 +# The subscription account the session's native agent started with: an account
-+# ID from Settings → Subscriptions, or ``"default"`` for the deployment's own
-+# login.
++# ID from Settings → Subscriptions.
 +# Read by the web composer on load; live updates ride on ``session.usage``.
 +_SUBSCRIPTION_LABEL_KEY = "omnigent.subscription"
 +_SUBSCRIPTION_ID_RE = re.compile(r"[0-9a-f]{32}")
@@ -30,16 +28,16 @@ index 526e0e3..04590e8 100644
 +    Validate ``external_session_usage`` ``data.subscription``.
 +
 +    :param raw: An account ID such as ``"42e6ad4455f84134ad3fa7ed390767aa"``,
-+        ``"default"`` for the deployment's own login, or ``None``.
++        or ``None``.
 +    :returns: The account, or ``None`` when absent.
-+    :raises OmnigentError: When present but neither.
++    :raises OmnigentError: When present but not an account ID.
 +    """
 +    if raw is None:
 +        return None
-+    if isinstance(raw, str) and (raw == "default" or _SUBSCRIPTION_ID_RE.fullmatch(raw)):
++    if isinstance(raw, str) and _SUBSCRIPTION_ID_RE.fullmatch(raw):
 +        return raw
 +    raise OmnigentError(
-+        "external_session_usage data.subscription must be an account ID or \"default\"",
++        "external_session_usage data.subscription must be an account ID",
 +        code=ErrorCode.INVALID_INPUT,
 +    )
 +
@@ -47,7 +45,7 @@ index 526e0e3..04590e8 100644
  async def _persist_external_session_usage(
      session_id: str,
      body: SessionEventInput,
-@@ -1814,12 +1841,13 @@ async def _persist_external_session_usage(
+@@ -1814,12 +1840,13 @@ async def _persist_external_session_usage(
      has_cumulative = any(body.data.get(k) is not None for k in _CUMULATIVE_USAGE_KEYS)
      rate_limits = _rate_limits_from_usage_data(body.data.get("rate_limits"))
      fast_mode = _fast_mode_from_usage_data(body.data.get("fast_mode"))
@@ -63,7 +61,7 @@ index 526e0e3..04590e8 100644
                  code=ErrorCode.INVALID_INPUT,
              )
          # A subscription-window or fast-mode refresh touches no context or
-@@ -1831,6 +1859,8 @@ async def _persist_external_session_usage(
+@@ -1831,6 +1858,8 @@ async def _persist_external_session_usage(
              )
          if fast_mode is not None:
              status_labels[_FAST_MODE_LABEL_KEY] = "true" if fast_mode else "false"
@@ -72,7 +70,7 @@ index 526e0e3..04590e8 100644
          await asyncio.to_thread(conversation_store.set_labels, session_id, status_labels)
          session_stream.publish(
              session_id,
-@@ -1839,6 +1869,7 @@ async def _persist_external_session_usage(
+@@ -1839,6 +1868,7 @@ async def _persist_external_session_usage(
                  conversation_id=session_id,
                  rate_limits=rate_limits,
                  fast_mode=fast_mode,
@@ -80,7 +78,7 @@ index 526e0e3..04590e8 100644
              ).model_dump(exclude_none=True),
          )
          return None
-@@ -1883,6 +1914,8 @@ async def _persist_external_session_usage(
+@@ -1883,6 +1913,8 @@ async def _persist_external_session_usage(
          label_updates[_RATE_LIMITS_LABEL_KEY] = json.dumps(rate_limits, separators=(",", ":"))
      if fast_mode is not None:
          label_updates[_FAST_MODE_LABEL_KEY] = "true" if fast_mode else "false"
@@ -89,7 +87,7 @@ index 526e0e3..04590e8 100644
      await asyncio.to_thread(
          conversation_store.set_labels,
          session_id,
-@@ -1925,6 +1958,8 @@ async def _persist_external_session_usage(
+@@ -1925,6 +1957,8 @@ async def _persist_external_session_usage(
          event_payload["rate_limits"] = rate_limits
      if fast_mode is not None:
          event_payload["fast_mode"] = fast_mode
@@ -99,7 +97,7 @@ index 526e0e3..04590e8 100644
      session_stream.publish(session_id, event.model_dump(exclude_none=True))
      # This session's usage also moves its ANCESTORS' subtree cost (its spend
 diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
-index 01f0fdf..819fbb7 100644
+index 01f0fdf..5b2c587 100644
 --- a/omnigent/server/schemas.py
 +++ b/omnigent/server/schemas.py
 @@ -3178,6 +3178,9 @@ class SessionUsageEvent(_SSEEventBase):
@@ -107,17 +105,17 @@ index 01f0fdf..819fbb7 100644
      # Whether the native harness runs in fast mode (Claude's or Codex's ``/fast``).
      fast_mode: bool | None = None
 +    # The subscription account the native agent started with: an account ID
-+    # from Settings → Subscriptions, or ``"default"`` for the deployment's login.
++    # from Settings → Subscriptions.
 +    subscription: str | None = None
  
  
  class SessionTailscaleEvent(_SSEEventBase):
 diff --git a/tests/server/integration/test_session_subscription_usage.py b/tests/server/integration/test_session_subscription_usage.py
 new file mode 100644
-index 0000000..7fee771
+index 0000000..0eaef44
 --- /dev/null
 +++ b/tests/server/integration/test_session_subscription_usage.py
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,72 @@
 +"""The subscription account a native agent uses, as the composer reads it.
 +
 +The runner reports it (``tests/runner/test_subscription_record.py`` in the
@@ -136,6 +134,7 @@ index 0000000..7fee771
 +pytestmark = pytest.mark.asyncio
 +
 +ACCOUNT = "42e6ad4455f84134ad3fa7ed390767aa"
++WORK = "9f0c3e1d2b7a4c5e8d6f1a2b3c4d5e6f"
 +
 +
 +async def test_external_session_usage_records_the_subscription_account(
@@ -153,7 +152,7 @@ index 0000000..7fee771
 +    assert resp.status_code == 201, resp.text
 +    sid = resp.json()["id"]
 +
-+    for value in (ACCOUNT, "default"):
++    for value in (ACCOUNT, WORK):
 +        resp = await client.post(
 +            f"/v1/sessions/{sid}/events",
 +            json={"type": "external_session_usage", "data": {"subscription": value}},
@@ -177,7 +176,7 @@ index 0000000..7fee771
 +    assert published[-1][1]["context_tokens"] == 1200
 +
 +
-+@pytest.mark.parametrize("bad", ["", "Personal", ACCOUNT.upper(), 42])
++@pytest.mark.parametrize("bad", ["", "default", "Personal", ACCOUNT.upper(), 42])
 +async def test_external_session_usage_rejects_other_subscriptions(
 +    client: httpx.AsyncClient, bad: object
 +) -> None:

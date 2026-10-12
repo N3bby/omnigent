@@ -4,15 +4,15 @@ The deployment's claude and codex wrappers record the account from Settings ->
 Subscriptions that a Claude Code or Codex process signs in with, in an
 omnigent-subscription file: the bridge directory for Claude, the session's
 CODEX_HOME for Codex. omnigent/native/subscription_record.py reads it and posts
-it as external_session_usage data.subscription, the account ID or "default" for
-the deployment's own login, whenever it changes. claude-native checks on every
+the account ID as external_session_usage data.subscription whenever it changes;
+an empty record, a process on no account from Settings, posts nothing. claude-native checks on every
 statusLine render; codex-native when it subscribes to a thread and at each turn
 start. Pairs with the server patch 0014-session-subscription.patch and the web
 patch 0018-composer-subscription.patch. Applies after
 0009-stop-codex-process.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
 
 diff --git a/omnigent/harnesses/claude_native/forwarder.py b/omnigent/harnesses/claude_native/forwarder.py
-index 9aaa4bd..bf6f315 100644
+index 9aaa4bd..05dc1db 100644
 --- a/omnigent/harnesses/claude_native/forwarder.py
 +++ b/omnigent/harnesses/claude_native/forwarder.py
 @@ -55,6 +55,7 @@ from omnigent.native._native_post_delivery import (
@@ -27,7 +27,7 @@ index 9aaa4bd..bf6f315 100644
      posted_rate_limits: dict[str, object] | None = None
      # Last ``/fast`` state POSTed from the statusLine capture.
      posted_fast_mode: bool | None = None
-+    # Last subscription account POSTed (``"default"`` for the deployment's login).
++    # Last subscription account POSTed.
 +    posted_subscription: str | None = None
      recorded_token_usage: dict[str, int] | None = None
      observed_model: str | None = None
@@ -47,7 +47,7 @@ index 9aaa4bd..bf6f315 100644
                      _observe_transcript_discovery(
                          bridge_dir=bridge_dir,
 diff --git a/omnigent/harnesses/codex_native/forwarder.py b/omnigent/harnesses/codex_native/forwarder.py
-index 83b1493..17bd3e3 100644
+index 83b1493..059879f 100644
 --- a/omnigent/harnesses/codex_native/forwarder.py
 +++ b/omnigent/harnesses/codex_native/forwarder.py
 @@ -64,6 +64,7 @@ from omnigent.native._native_post_delivery import (
@@ -62,7 +62,7 @@ index 83b1493..17bd3e3 100644
      # the last value POSTed; ``None`` until a thread reports its tier.
      fast_mode: bool | None = None
      posted_fast_mode: bool | None = None
-+    # Last subscription account POSTed (``"default"`` for the deployment's login).
++    # Last subscription account POSTed.
 +    posted_subscription: str | None = None
      rate_limits_task: asyncio.Task[None] | None = field(default=None, repr=False)
      subagents_by_thread: dict[str, str] = field(default_factory=dict)
@@ -96,20 +96,20 @@ index 83b1493..17bd3e3 100644
          )
 diff --git a/omnigent/native/subscription_record.py b/omnigent/native/subscription_record.py
 new file mode 100644
-index 0000000..cce172e
+index 0000000..8d8156b
 --- /dev/null
 +++ b/omnigent/native/subscription_record.py
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,78 @@
 +"""
 +Report which subscription account a native agent process started with.
 +
 +The deployment's ``claude`` and ``codex`` wrappers resolve the account from
 +Settings → Subscriptions before starting the CLI, and record its ID in an
 +``omnigent-subscription`` file: in the bridge directory for Claude, and in the
-+session's ``CODEX_HOME`` for Codex. An empty file means the process uses the
-+deployment's own login rather than an account from Settings. The forwarders
-+post the record as ``external_session_usage`` ``data.subscription``, with
-+``"default"`` for that login, so the web composer can name the account.
++session's ``CODEX_HOME`` for Codex. An empty file means the process uses no
++account from Settings, and there's nothing to report. The forwarders post the
++record as ``external_session_usage`` ``data.subscription`` so the web composer
++can name the account.
 +"""
 +
 +from __future__ import annotations
@@ -126,8 +126,6 @@ index 0000000..cce172e
 +_logger = logging.getLogger(__name__)
 +
 +SUBSCRIPTION_RECORD_FILE = "omnigent-subscription"
-+# What an empty record is posted as: the deployment's own login.
-+DEFAULT_LOGIN = "default"
 +# Account IDs are uuid4 hex; anything else in the file is ignored.
 +_ACCOUNT_ID = re.compile(r"[0-9a-f]{32}")
 +
@@ -137,16 +135,14 @@ index 0000000..cce172e
 +    Read the account a wrapper recorded in *directory*.
 +
 +    :param directory: The Claude bridge directory or the Codex ``CODEX_HOME``.
-+    :returns: The account ID, e.g. ``"42e6ad4455f84134ad3fa7ed390767aa"``,
-+        ``"default"`` for the deployment's own login, or ``None`` when nothing usable
-+        was recorded (an older wrapper, or an unreadable file).
++    :returns: The account ID, e.g. ``"42e6ad4455f84134ad3fa7ed390767aa"``, or
++        ``None`` when the process uses no account from Settings or nothing
++        usable was recorded (an older wrapper, or an unreadable file).
 +    """
 +    try:
 +        raw = (directory / SUBSCRIPTION_RECORD_FILE).read_text(encoding="utf-8").strip()
 +    except (OSError, UnicodeDecodeError):
 +        return None
-+    if raw == "":
-+        return DEFAULT_LOGIN
 +    return raw if _ACCOUNT_ID.fullmatch(raw) else None
 +
 +
@@ -184,10 +180,10 @@ index 0000000..cce172e
 +    return account
 diff --git a/tests/runner/test_subscription_record.py b/tests/runner/test_subscription_record.py
 new file mode 100644
-index 0000000..6b03e21
+index 0000000..f5c5aac
 --- /dev/null
 +++ b/tests/runner/test_subscription_record.py
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,100 @@
 +"""The forwarders report the subscription account a wrapper recorded."""
 +
 +import json
@@ -202,6 +198,7 @@ index 0000000..6b03e21
 +)
 +
 +ACCOUNT = "42e6ad4455f84134ad3fa7ed390767aa"
++WORK = "9f0c3e1d2b7a4c5e8d6f1a2b3c4d5e6f"
 +
 +
 +@pytest.mark.parametrize(
@@ -209,12 +206,12 @@ index 0000000..6b03e21
 +    [
 +        (ACCOUNT, ACCOUNT),
 +        (f"{ACCOUNT}\n", ACCOUNT),
-+        ("", "default"),
++        ("", None),
 +        ("not-an-account", None),
 +        (ACCOUNT.upper(), None),
 +    ],
 +)
-+def test_reads_only_account_ids_or_the_deployment_login(tmp_path, content, expected):
++def test_reads_only_account_ids(tmp_path, content, expected):
 +    (tmp_path / SUBSCRIPTION_RECORD_FILE).write_text(content)
 +    assert read_subscription_record(tmp_path) == expected
 +
@@ -250,12 +247,18 @@ index 0000000..6b03e21
 +            )
 +            == ACCOUNT
 +        )
++        (tmp_path / SUBSCRIPTION_RECORD_FILE).write_text(WORK)
++        posted = await forward_subscription(
++            client, session_id="conv_a", directory=tmp_path, posted=posted
++        )
++        assert posted == WORK
++        # Without an account from Settings there's nothing to report.
 +        (tmp_path / SUBSCRIPTION_RECORD_FILE).write_text("")
 +        assert (
 +            await forward_subscription(
 +                client, session_id="conv_a", directory=tmp_path, posted=posted
 +            )
-+            == "default"
++            == WORK
 +        )
 +    assert posts == [
 +        (
@@ -264,7 +267,7 @@ index 0000000..6b03e21
 +        ),
 +        (
 +            "/v1/sessions/conv_a/events",
-+            {"type": "external_session_usage", "data": {"subscription": "default"}},
++            {"type": "external_session_usage", "data": {"subscription": WORK}},
 +        ),
 +    ]
 +

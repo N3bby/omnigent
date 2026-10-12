@@ -61,9 +61,8 @@ see what it means and, when Settings selects another account, how to switch.
   first draws its status line; for Codex, when it connects to the session or
   starts a turn. Sessions started before this feature show nothing until their
   agent restarts.
-- A session using the login from `mise run setup-claude` or `setup-codex`
-  shows **Default login**, but only once Settings has an account for that
-  provider. Without one, there's nothing to tell apart, so there's no tag.
+- A session using the login from `mise run setup-claude` or `setup-codex`,
+  not an account from Settings, shows no tag.
 - An account removed from Settings shows as **Removed account**.
 - Renames show within a minute. On a phone, the key gives way to the name
   when the composer is narrow, and a long name is shortened.
