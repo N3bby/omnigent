@@ -31,7 +31,7 @@ Short of a Linux kernel bug, it **can't**:
 - use the Kubernetes API, or touch other namespaces
 
 Subscription management is admin-only, but its active logins are shared with
-runners. Codex's shared PVC also retains writable logins for previously used
+runners, and every signed-in user can see the accounts' names. Codex's shared PVC also retains writable logins for previously used
 subscriptions. See [Subscriptions](features/subscriptions.md) for storage and
 switching details.
 

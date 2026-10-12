@@ -20,7 +20,7 @@ What you see and choose while talking to an agent.
 
 | Feature | What you get | Can you turn it off? |
 | --- | --- | --- |
-| [Subscriptions in Settings](subscriptions.md) | Sign in to several Claude and ChatGPT accounts from the browser, and switch between them | The mise-stored login stays until you add an account |
+| [Subscriptions in Settings](subscriptions.md) | Sign in to several Claude and ChatGPT accounts from the browser, switch between them, and see which one a session uses | The mise-stored login stays until you add an account |
 
 ## The session's runner
 

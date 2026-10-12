@@ -71,6 +71,9 @@ PASS  images/runner/patches/0004-fast-mode.patch
 PASS  images/runner/patches/0005-fast-mode-command-lifecycle.patch
 PASS  images/runner/patches/0006-mention-file-index.patch
 PASS  images/runner/patches/0007-native-turn-idle-watchdog.patch
+PASS  images/runner/patches/0008-subscription-readiness.patch
+PASS  images/runner/patches/0009-stop-codex-process.patch
+PASS  images/runner/patches/0010-subscription-in-use.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -84,6 +87,8 @@ PASS  images/server/patches/0009-fast-mode-command-lifecycle.patch
 PASS  images/server/patches/0010-repo-git-token.patch
 PASS  images/server/patches/0011-mention-file-index.patch
 PASS  images/server/patches/0012-repo-checkouts.patch
+PASS  images/server/patches/0013-subscriptions.patch
+PASS  images/server/patches/0014-session-subscription.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -100,6 +105,9 @@ PASS  images/server/web-patches/0012-repo-git-token-field.patch
 PASS  images/server/web-patches/0013-remove-sidebar-quick-actions.patch
 PASS  images/server/web-patches/0014-composer-fuzzy-mentions.patch
 PASS  images/server/web-patches/0015-repo-instructions-setup.patch
+PASS  images/server/web-patches/0016-highlighted-textarea-caret.patch
+PASS  images/server/web-patches/0017-subscriptions.patch
+PASS  images/server/web-patches/0018-composer-subscription.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -300,6 +308,10 @@ PASS  codex wrapper uses the active subscription
 PASS  codex wrapper keeps a running Codex's login
 PASS  Codex readiness sees the active subscription
 PASS  Stop session closes Codex's app-server
+PASS  claude wrapper records the account it starts with
+PASS  codex wrapper records the account it starts with
+PASS  claude-native reports its account to the composer
+PASS  codex-native reports its account to the composer
 PASS  the Pod mounts the active subscriptions (managed in Settings: <claude codex, or none>)
 
 runner checks: passed
@@ -338,6 +350,8 @@ What a failure usually means:
 | `… matches images/runner/subscriptions.py`, `… subscription-login.py`, `… terminal emulator is installed` | the file changed in this checkout after the image was built, or `images/runner/Dockerfile` no longer copies it or installs `pyte` |
 | `… wrapper uses the active subscription`, `codex wrapper keeps a running Codex's login` | a wrapper lost its `subscriptions.py` call or its lock; see `images/runner/claude-wrapper.sh` and `codex-wrapper.sh` |
 | `Codex readiness sees …`, `Stop session closes Codex's app-server` | `images/runner/patches/0008-subscription-readiness.patch` or `0009-stop-codex-process.patch` was dropped or upstream moved the code; see step 2 |
+| `… wrapper records the account it starts with` | a wrapper lost its `omnigent-subscription` record; see `images/runner/claude-wrapper.sh` and `codex-wrapper.sh` |
+| `… reports its account to the composer` | `images/runner/patches/0010-subscription-in-use.patch` was dropped or upstream moved the forwarders; see step 2 |
 | `the Pod mounts the active subscriptions` | `images/server/patches/0013-subscriptions.patch` was dropped, or this session predates the deploy |
 | `a Codex session's CODEX_HOME has the AGENTS.md` | upstream stopped linking `AGENTS.md` into each session's private `CODEX_HOME` (`_CODEX_HOME_GLOBAL_INSTRUCTION_FILES` in `omnigent/inner/codex_executor.py`) |
 
@@ -418,6 +432,7 @@ settings.
 | Model picker | Start a new session (don't send it) with the Kubernetes sandbox and Claude Code: the model menu lists models, such as Opus and Sonnet, and never says `Models unavailable`. Repeat for Codex. Then discard it. |
 | Repository variables page | If you're an admin, Settings has **Repository variables** under Admin. It lists repositories with their variable names and `••••••••`, never a value. Don't add, edit or remove anything. Not an admin: record SKIP. |
 | Subscriptions page | If you're an admin, Settings has **Subscriptions** under Admin. Opening it directly (`https://<hostname>/settings/subscriptions`, not through the nav) shows the page rather than a permission message. Claude and Codex each list their accounts with the active one selected and marked **Active**, or say **No accounts yet**. Nothing on the page shows a token. Don't switch, add, edit or remove anything. Not an admin: record SKIP. |
+| Subscription in the composer | If Settings has a Claude account, this session's composer shows a key and the name of the account Claude Code started with, left of the model picker (on a phone, the name without the key). It's the account the `selection.json` from step 4 names for `claude`, unless Settings switched since this session started; then a dot is on the key. Tapping it opens **Claude account** with the name and what it means. Close it with Escape. Without a Claude account in Settings there's no tag. |
 | GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository picker lists repositories. If it isn't connected, record SKIP (optional setup). |
 
 Also check that `feature-check claude` from 5a now shows usage numbers in its
@@ -531,7 +546,10 @@ Hand these to the user; they need their own devices or VM access:
     after `#`, then **Finish sign-in**. Pasting a code without `#` is refused
     straight away. If an account was already active, select `feature-check`,
     wait a minute, stop and resume a session: its usage numbers are the new
-    account's. Switch back, then remove `feature-check`; the active account's
+    account's. Before stopping it, the session's composer still names the old
+account, with a dot and **Settings now selects feature-check** when tapped;
+after the next message it names `feature-check`. Switch back, then remove
+`feature-check`; the active account's
     remove button is disabled. Cancelling a sign-in deletes its
     `subscription-login-*` Pod, which `mise run status` lists while it runs.
     `mise run credential-status` lists the accounts by name, never a

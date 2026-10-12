@@ -1,0 +1,629 @@
+Show the subscription account a session's agent uses, left of the model picker.
+
+The store keeps the account the runner reports (the omnigent.subscription label
+on load, session.usage events after), and ComposerSubscription names it from
+/v1/subscriptions/names. Tapping it explains what it means. A dot marks a
+session that no longer uses the account Settings selects, with how to switch.
+The tag shows nothing until there's something to tell apart: no report yet, or
+the deployment's own login while Settings has no account for the provider.
+The composer's right action group shrinks when it holds a control marked
+data-composer-shrinkable, so a long account name truncates instead of pushing
+the send button out of the composer; the new-chat composer is unchanged.
+Applies after 0017-subscriptions.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/components/composer/ChatComposer.tsx b/web/src/components/composer/ChatComposer.tsx
+index eca8101..4320188 100644
+--- a/web/src/components/composer/ChatComposer.tsx
++++ b/web/src/components/composer/ChatComposer.tsx
+@@ -302,7 +302,11 @@ export const ComposerActionGroup = forwardRef<
+       ref={ref}
+       className={cn(
+         "flex min-w-0 items-center gap-1",
+-        side === "left" ? "flex-none overflow-visible" : "ml-auto max-w-full shrink-0",
++        // A right group holding a control that can truncate, like the
++        // subscription tag, shrinks so it gives way before the row overflows.
++        side === "left"
++          ? "flex-none overflow-visible"
++          : "ml-auto max-w-full shrink-0 has-[[data-composer-shrinkable]]:shrink",
+         className,
+       )}
+       {...props}
+diff --git a/web/src/components/composer/ComposerSubscription.test.tsx b/web/src/components/composer/ComposerSubscription.test.tsx
+new file mode 100644
+index 0000000..a618033
+--- /dev/null
++++ b/web/src/components/composer/ComposerSubscription.test.tsx
+@@ -0,0 +1,64 @@
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++const navigate = vi.fn();
++let isAdmin = true;
++vi.mock("@/hooks/useIsAdmin", () => ({ useIsAdmin: () => isAdmin }));
++vi.mock("@/lib/routing", () => ({ useNavigate: () => navigate }));
++
++import { SubscriptionTag } from "./ComposerSubscription";
++
++afterEach(() => {
++  cleanup();
++  navigate.mockReset();
++  isAdmin = true;
++});
++
++describe("SubscriptionTag", () => {
++  it("renders nothing without a subscription", () => {
++    const { container } = render(<SubscriptionTag subscription={null} provider="claude" />);
++    expect(container).toBeEmptyDOMElement();
++  });
++
++  it("names the account and links admins to Settings", () => {
++    render(
++      <SubscriptionTag
++        subscription={{ kind: "account", name: "Personal", active: true, activeName: "Personal" }}
++        provider="claude"
++      />,
++    );
++    const tag = screen.getByTestId("composer-subscription");
++    expect(tag).toHaveTextContent("Personal");
++    expect(tag).toHaveAccessibleName("Claude account: Personal");
++    fireEvent.click(tag);
++    expect(screen.getByText(/signed in with this account when it started/)).toBeInTheDocument();
++    expect(screen.queryByText(/Settings now selects/)).not.toBeInTheDocument();
++    fireEvent.click(screen.getByRole("button", { name: "Manage subscriptions" }));
++    expect(navigate).toHaveBeenCalledWith("/settings/subscriptions");
++  });
++
++  it("says how to switch once Settings selects another account", () => {
++    isAdmin = false;
++    render(
++      <SubscriptionTag
++        subscription={{ kind: "account", name: "Personal", active: false, activeName: "Work" }}
++        provider="codex"
++      />,
++    );
++    const tag = screen.getByTestId("composer-subscription");
++    expect(tag).toHaveAccessibleName("ChatGPT account: Personal, not the account Settings selects");
++    fireEvent.click(tag);
++    expect(
++      screen.getByText(/Settings now selects Work\. To use Work, choose Stop session/),
++    ).toBeInTheDocument();
++    expect(screen.queryByRole("button", { name: "Manage subscriptions" })).not.toBeInTheDocument();
++  });
++
++  it("explains the deployment's own login", () => {
++    render(
++      <SubscriptionTag subscription={{ kind: "default", activeName: "Work" }} provider="claude" />,
++    );
++    fireEvent.click(screen.getByTestId("composer-subscription"));
++    expect(screen.getByText(/mise run setup-claude/)).toBeInTheDocument();
++  });
++});
+diff --git a/web/src/components/composer/ComposerSubscription.tsx b/web/src/components/composer/ComposerSubscription.tsx
+new file mode 100644
+index 0000000..d892b8a
+--- /dev/null
++++ b/web/src/components/composer/ComposerSubscription.tsx
+@@ -0,0 +1,148 @@
++import { KeyRoundIcon } from "lucide-react";
++
++import { COMPOSER_COLLAPSED_LABEL_CLASS } from "./ChatComposer";
++import { Button } from "@/components/ui/button";
++import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
++import { useIsAdmin } from "@/hooks/useIsAdmin";
++import { useSubscriptionNames } from "@/hooks/useSubscriptionNames";
++import { useNavigate } from "@/lib/routing";
++import {
++  describeSessionSubscription,
++  type Provider,
++  type SessionSubscription,
++} from "@/lib/subscriptions";
++import { cn } from "@/lib/utils";
++
++const PROVIDER_LABEL: Record<Provider, { account: string; agent: string; setup: string }> = {
++  claude: { account: "Claude account", agent: "Claude Code", setup: "mise run setup-claude" },
++  codex: { account: "ChatGPT account", agent: "Codex", setup: "mise run setup-codex" },
++};
++
++/** Marks a session that no longer uses the account Settings selects. */
++function StaleDot({ className }: { className?: string }) {
++  return <span aria-hidden="true" className={cn("size-1.5 rounded-full bg-warning", className)} />;
++}
++
++function tagLabel(subscription: SessionSubscription): string {
++  if (subscription.kind === "account") return subscription.name;
++  return subscription.kind === "default" ? "Default login" : "Removed account";
++}
++
++/**
++ * The subscription account the session's agent signed in with, left of the
++ * model picker: the account's name from Settings → Subscriptions. Render it
++ * only once the runner has reported an account, so the names are only fetched
++ * for sessions that have one.
++ *
++ * @param subscriptionId - The reported account ID, or `"default"`.
++ * @param provider - The provider the session's harness signs in with.
++ */
++export function ComposerSubscription({
++  subscriptionId,
++  provider,
++}: {
++  subscriptionId: string;
++  provider: Provider;
++}) {
++  const names = useSubscriptionNames();
++  return (
++    <SubscriptionTag
++      subscription={describeSessionSubscription(subscriptionId, provider, names.data)}
++      provider={provider}
++    />
++  );
++}
++
++/**
++ * The tag itself. Tapping it explains what it means, since a tooltip never
++ * opens on touch. A session keeps its account until its agent restarts, so a
++ * dot marks one that no longer uses the account Settings selects. Self-nulls
++ * when there's nothing to show (see `describeSessionSubscription`).
++ */
++export function SubscriptionTag({
++  subscription,
++  provider,
++  className,
++}: {
++  subscription: SessionSubscription | null;
++  provider: Provider;
++  className?: string;
++}) {
++  const isAdmin = useIsAdmin();
++  const navigate = useNavigate();
++  if (subscription === null) return null;
++  const labels = PROVIDER_LABEL[provider];
++  const label = tagLabel(subscription);
++  const stale = subscription.kind !== "account" || !subscription.active;
++  const switchHint =
++    subscription.activeName !== null
++      ? `To use ${subscription.activeName}, choose Stop session in this session's menu, then send another message.`
++      : null;
++
++  return (
++    <Popover>
++      <PopoverTrigger asChild>
++        <Button
++          type="button"
++          variant="ghost"
++          size="xs"
++          data-testid="composer-subscription"
++          data-composer-shrinkable=""
++          aria-label={`${labels.account}: ${label}${stale ? ", not the account Settings selects" : ""}`}
++          // Absorbs the squeeze when the action row is tight, so a long name
++          // truncates instead of pushing the send button out of the composer.
++          className={cn(
++            "min-w-0 gap-1 px-1 font-normal text-muted-foreground shrink-[100] md:px-1.5",
++            className,
++          )}
++        >
++          {/* The key goes with the other controls' labels when the row collapses to icons. */}
++          <span className={cn("relative flex shrink-0", COMPOSER_COLLAPSED_LABEL_CLASS)}>
++            <KeyRoundIcon className="size-3.5" aria-hidden />
++            {stale && <StaleDot className="absolute -top-0.5 -right-0.5" />}
++          </span>
++          {stale && (
++            <StaleDot className="hidden shrink-0 group-data-[labels=collapsed]/composer-actions:block" />
++          )}
++          <span className="max-w-[10rem] min-w-0 truncate">{label}</span>
++        </Button>
++      </PopoverTrigger>
++      <PopoverContent
++        side="top"
++        align="end"
++        collisionPadding={8}
++        aria-label={labels.account}
++        className="flex w-[min(18rem,calc(100vw-2rem))] flex-col gap-2 p-3 text-sm"
++      >
++        <p className="text-xs font-medium text-muted-foreground">{labels.account}</p>
++        <p className="font-medium break-words">{label}</p>
++        <p className="text-muted-foreground">
++          {subscription.kind === "account"
++            ? `${labels.agent} in this session signed in with this account when it started.`
++            : subscription.kind === "default"
++              ? `${labels.agent} in this session uses the deployment's own login, from ${labels.setup}, not an account from Settings.`
++              : `${labels.agent} in this session signed in with an account that has since been removed from Settings.`}
++        </p>
++        {stale && (
++          <p className="text-muted-foreground">
++            {subscription.kind === "account" && subscription.activeName !== null
++              ? `Settings now selects ${subscription.activeName}. `
++              : ""}
++            {switchHint}
++          </p>
++        )}
++        {isAdmin && (
++          <Button
++            type="button"
++            variant="outline"
++            size="sm"
++            className="mt-1 self-start"
++            onClick={() => navigate("/settings/subscriptions")}
++          >
++            Manage subscriptions
++          </Button>
++        )}
++      </PopoverContent>
++    </Popover>
++  );
++}
+diff --git a/web/src/hooks/useSubscriptionNames.ts b/web/src/hooks/useSubscriptionNames.ts
+new file mode 100644
+index 0000000..7e67b97
+--- /dev/null
++++ b/web/src/hooks/useSubscriptionNames.ts
+@@ -0,0 +1,16 @@
++import { useQuery } from "@tanstack/react-query";
++import { fetchSubscriptionNames } from "@/lib/subscriptions";
++
++/**
++ * Every subscription account's name, for the composer. Refetched after a
++ * minute, so a rename or switch in Settings shows up without a reload.
++ */
++export function useSubscriptionNames() {
++  return useQuery({
++    queryKey: ["subscription-names"],
++    queryFn: fetchSubscriptionNames,
++    staleTime: 60_000,
++    refetchInterval: 60_000,
++    retry: false,
++  });
++}
+diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
+index 7fb0470..412a4d0 100644
+--- a/web/src/lib/events.ts
++++ b/web/src/lib/events.ts
+@@ -560,6 +560,8 @@ export interface SessionStatusEvent {
+  *   change (the client keeps its cached map).
+  * - `fastMode`: whether the native harness runs in fast mode (`/fast`);
+  *   absent on a broadcast that doesn't report it.
++ * - `subscription`: the account the native agent started with, an account
++ *   ID or `"default"`; absent on a broadcast that doesn't report it.
+  * - `rateLimits`: the login's subscription usage windows, reported by a
+  *   native harness; absent on a broadcast that doesn't refresh them.
+  */
+@@ -572,6 +574,7 @@ export interface SessionUsageEvent {
+   usageByModel?: Record<string, ModelUsage>;
+   rateLimits?: RateLimits;
+   fastMode?: boolean;
++  subscription?: string;
+ }
+ 
+ /**
+diff --git a/web/src/lib/sse.ts b/web/src/lib/sse.ts
+index 0553407..b241629 100644
+--- a/web/src/lib/sse.ts
++++ b/web/src/lib/sse.ts
+@@ -74,6 +74,7 @@ import type {
+ import { NATIVE_TOOL_TYPES } from "./events";
+ import { parseRateLimits } from "./rateLimits";
+ import { parseFastMode } from "./fastMode";
++import { parseSubscription } from "./subscriptions";
+ import { parseTailscaleHost } from "./tailscale";
+ import { routingExtrasFromWire } from "./routingDecision";
+ import type {
+@@ -644,13 +645,18 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+     if (fastMode === null) {
+       return null;
+     }
++    const subscription = parseSubscription(raw.subscription);
++    if (subscription === null) {
++      return null;
++    }
+     if (
+       contextTokens === undefined &&
+       contextWindow === undefined &&
+       totalCostUsd === undefined &&
+       usageByModel === undefined &&
+       rateLimits === undefined &&
+-      fastMode === undefined
++      fastMode === undefined &&
++      subscription === undefined
+     ) {
+       return null;
+     }
+@@ -663,6 +669,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+       ...(usageByModel !== undefined ? { usageByModel } : {}),
+       ...(rateLimits !== undefined ? { rateLimits } : {}),
+       ...(fastMode !== undefined ? { fastMode } : {}),
++      ...(subscription !== undefined ? { subscription } : {}),
+     } satisfies SessionUsageEvent;
+   }
+   if (eventType === "session.model") {
+diff --git a/web/src/lib/subscriptions.test.ts b/web/src/lib/subscriptions.test.ts
+new file mode 100644
+index 0000000..bf6d3e2
+--- /dev/null
++++ b/web/src/lib/subscriptions.test.ts
+@@ -0,0 +1,76 @@
++import { describe, expect, it } from "vitest";
++
++import {
++  describeSessionSubscription,
++  parseSubscription,
++  subscriptionFromLabels,
++  subscriptionProvider,
++  type SubscriptionName,
++} from "./subscriptions";
++import { parseEvent } from "./sse";
++
++const PERSONAL = "42e6ad4455f84134ad3fa7ed390767aa";
++const WORK = "9f0c3e1d2b7a4c5e8d6f1a2b3c4d5e6f";
++const names: SubscriptionName[] = [
++  { id: PERSONAL, provider: "claude", name: "Personal", active: false },
++  { id: WORK, provider: "claude", name: "Work", active: true },
++  { id: "165efa0b0181476e9aa81764945f7798", provider: "codex", name: "ChatGPT", active: true },
++];
++
++describe("session subscription", () => {
++  it("parses account IDs and the deployment login, and nothing else", () => {
++    expect(parseSubscription(PERSONAL)).toBe(PERSONAL);
++    expect(parseSubscription("default")).toBe("default");
++    expect(parseSubscription(undefined)).toBeUndefined();
++    expect(parseSubscription("Personal")).toBeNull();
++    expect(parseSubscription(42)).toBeNull();
++    expect(subscriptionFromLabels({ "omnigent.subscription": PERSONAL })).toBe(PERSONAL);
++    expect(subscriptionFromLabels({ "omnigent.subscription": "junk" })).toBeNull();
++    expect(subscriptionFromLabels(undefined)).toBeNull();
++  });
++
++  it("reads it from session.usage events", () => {
++    expect(
++      parseEvent("session.usage", { conversation_id: "conv_a", subscription: PERSONAL }),
++    ).toEqual({ type: "session_usage", conversationId: "conv_a", subscription: PERSONAL });
++    expect(
++      parseEvent("session.usage", { conversation_id: "conv_a", subscription: "x" }),
++    ).toBeNull();
++  });
++
++  it("only applies to Claude Code and Codex", () => {
++    expect(subscriptionProvider("claude-native")).toBe("claude");
++    expect(subscriptionProvider("codex-native")).toBe("codex");
++    expect(subscriptionProvider("openai-agents")).toBeNull();
++    expect(subscriptionProvider(null)).toBeNull();
++  });
++
++  it("names the account and says whether Settings still selects it", () => {
++    expect(describeSessionSubscription(PERSONAL, "claude", names)).toEqual({
++      kind: "account",
++      name: "Personal",
++      active: false,
++      activeName: "Work",
++    });
++    expect(describeSessionSubscription(WORK, "claude", names)).toMatchObject({
++      kind: "account",
++      active: true,
++    });
++    expect(describeSessionSubscription("0".repeat(32), "claude", names)).toEqual({
++      kind: "removed",
++      activeName: "Work",
++    });
++    expect(describeSessionSubscription("default", "claude", names)).toEqual({
++      kind: "default",
++      activeName: "Work",
++    });
++  });
++
++  it("shows nothing until there is something to tell apart", () => {
++    expect(describeSessionSubscription(null, "claude", names)).toBeNull();
++    expect(describeSessionSubscription(PERSONAL, null, names)).toBeNull();
++    expect(describeSessionSubscription(PERSONAL, "claude", undefined)).toBeNull();
++    // The deployment's own login is the only login while Settings has no account.
++    expect(describeSessionSubscription("default", "claude", [])).toBeNull();
++  });
++});
+diff --git a/web/src/lib/subscriptions.ts b/web/src/lib/subscriptions.ts
+index e7bd6ff..c8f285d 100644
+--- a/web/src/lib/subscriptions.ts
++++ b/web/src/lib/subscriptions.ts
+@@ -46,3 +46,79 @@ export async function subscriptionRequest<T>(
+     );
+   return data as T;
+ }
++
++/**
++ * The account a session's Claude Code or Codex started with, as its runner
++ * reports it: an account ID from Settings → Subscriptions, or
++ * {@link DEFAULT_LOGIN} for the deployment's own login (`mise run
++ * setup-claude` or `setup-codex`).
++ */
++export const SUBSCRIPTION_LABEL_KEY = "omnigent.subscription";
++export const DEFAULT_LOGIN = "default";
++
++const ACCOUNT_ID = /^[0-9a-f]{32}$/;
++
++/**
++ * Parse a wire subscription (`session.usage` event or the session label).
++ *
++ * @returns The account ID or `"default"`, `undefined` when absent, or
++ *   `null` when malformed.
++ */
++export function parseSubscription(raw: unknown): string | null | undefined {
++  if (raw === undefined || raw === null) return undefined;
++  return typeof raw === "string" && (raw === DEFAULT_LOGIN || ACCOUNT_ID.test(raw)) ? raw : null;
++}
++
++/** Read the session label; `null` when the runner hasn't reported it. */
++export function subscriptionFromLabels(labels: Record<string, string> | undefined): string | null {
++  return parseSubscription(labels?.[SUBSCRIPTION_LABEL_KEY]) ?? null;
++}
++
++/** An account's name, which every signed-in user may read. */
++export interface SubscriptionName {
++  id: string;
++  provider: Provider;
++  name: string;
++  active: boolean;
++}
++
++/** Every account's name, for the composer. */
++export async function fetchSubscriptionNames(): Promise<SubscriptionName[]> {
++  return (await subscriptionRequest<{ data: SubscriptionName[] }>("/names")).data;
++}
++
++/** The subscription provider a native harness signs in with, if any. */
++export function subscriptionProvider(harness: string | null): Provider | null {
++  if (harness === "claude-native") return "claude";
++  if (harness === "codex-native") return "codex";
++  return null;
++}
++
++export type SessionSubscription =
++  /** An account from Settings; `active` is false once Settings selects another. */
++  | { kind: "account"; name: string; active: boolean; activeName: string | null }
++  /** The deployment's own login, while Settings has accounts for the provider. */
++  | { kind: "default"; activeName: string | null }
++  /** An account that has since been removed from Settings. */
++  | { kind: "removed"; activeName: string | null };
++
++/**
++ * What the composer shows for a session's account, or `null` for nothing:
++ * nothing reported yet, or the deployment's own login while Settings has no
++ * account for the provider, so there's no other account it could be.
++ */
++export function describeSessionSubscription(
++  subscription: string | null,
++  provider: Provider | null,
++  names: SubscriptionName[] | undefined,
++): SessionSubscription | null {
++  if (subscription === null || provider === null || names === undefined) return null;
++  const accounts = names.filter((a) => a.provider === provider);
++  const activeName = accounts.find((a) => a.active)?.name ?? null;
++  if (subscription === DEFAULT_LOGIN) {
++    return accounts.length > 0 ? { kind: "default", activeName } : null;
++  }
++  const account = accounts.find((a) => a.id === subscription);
++  if (account === undefined) return { kind: "removed", activeName };
++  return { kind: "account", name: account.name, active: account.active, activeName };
++}
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index 6d1aeb5..6e2c337 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -232,6 +232,8 @@ import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
+ import { fastCommandText, isFastModeCommand } from "@/lib/fastMode";
+ import { ComposerTailscaleHost } from "@/components/composer/ComposerTailscaleHost";
+ import { ComposerGatewayLink } from "@/components/composer/ComposerGatewayLink";
++import { ComposerSubscription } from "@/components/composer/ComposerSubscription";
++import { subscriptionProvider } from "@/lib/subscriptions";
+ import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
+ import { composerContextFromLabels } from "@/lib/composerContextAdapters";
+ import {
+@@ -2808,6 +2810,9 @@ function ComposerImpl(
+   // /fast is a Claude Code and Codex CLI built-in; the runner applies it.
+   const showFast = sessionHarness === "claude-native" || sessionHarness === "codex-native";
+   const composerFastMode = useChatStore((s) => s.fastMode);
++  // The account the agent signed in with, named from Settings → Subscriptions.
++  const composerSubscriptionId = useChatStore((s) => s.subscription);
++  const composerSubscriptionProvider = subscriptionProvider(sessionHarness);
+   const slashCommands = useMemo(
+     () =>
+       buildSlashCommandMap(
+@@ -4114,6 +4119,12 @@ function ComposerImpl(
+           ),
+           trailing: (
+             <>
++              {composerSubscriptionId !== null && composerSubscriptionProvider !== null && (
++                <ComposerSubscription
++                  subscriptionId={composerSubscriptionId}
++                  provider={composerSubscriptionProvider}
++                />
++              )}
+               {composerFastMode === true && (
+                 <TooltipProvider>
+                   <Tooltip>
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index b89daf4..5c0f6d8 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -150,6 +150,7 @@ import type { StoredReplyDraft } from "@/lib/replyDraft";
+ import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
+ import { fastModeFromLabels, isFastModeCommand } from "@/lib/fastMode";
+ import { tailscaleHostFromLabels } from "@/lib/tailscale";
++import { subscriptionFromLabels } from "@/lib/subscriptions";
+ 
+ export interface SendOptions {
+   /** Client-only quote provenance, retained if the composer needs to retry. */
+@@ -871,6 +872,14 @@ export interface ConversationState {
+    * until reported.
+    */
+   fastMode: boolean | null;
++  /**
++   * The subscription account the session's native agent started with: an
++   * account ID from Settings → Subscriptions, or ``"default"`` for the
++   * deployment's own login. Seeded from the session's
++   * ``omnigent.subscription`` label on bind and replaced by
++   * ``session.usage`` events that carry it. ``null`` until reported.
++   */
++  subscription: string | null;
+   /**
+    * Tailnet name of the session's managed runner Pod, e.g.
+    * ``omnigent-e1dcab9b.tail1234.ts.net``. Seeded from the session's
+@@ -1758,6 +1767,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+   sessionUsageByModel: null,
+   rateLimits: null,
+   fastMode: null,
++  subscription: null,
+   tailscaleHost: null,
+   gitBranch: null,
+   todos: [],
+@@ -4100,6 +4110,7 @@ async function bindStream(
+         tokensUsed: session.lastTotalTokens ?? null,
+         rateLimits: rateLimitsFromLabels(session.labels),
+         fastMode: fastModeFromLabels(session.labels),
++        subscription: subscriptionFromLabels(session.labels),
+         tailscaleHost: tailscaleHostFromLabels(session.labels),
+         sessionCostUsd:
+           state.sessionCostUsd !== stateBeforeFetch.sessionCostUsd
+@@ -4305,6 +4316,8 @@ function reconnectStatusPatch(
+   if (rateLimits !== null) patch.rateLimits = rateLimits;
+   const fastMode = fastModeFromLabels(session.labels);
+   if (fastMode !== null) patch.fastMode = fastMode;
++  const subscription = subscriptionFromLabels(session.labels);
++  if (subscription !== null) patch.subscription = subscription;
+   const tailscaleHost = tailscaleHostFromLabels(session.labels);
+   if (tailscaleHost !== null) patch.tailscaleHost = tailscaleHost;
+   // `waiting` is a TURN-END snapshot (the turn finished; only background work
+@@ -6236,6 +6249,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+         sessionUsageByModel?: Record<string, ModelUsage>;
+         rateLimits?: RateLimits;
+         fastMode?: boolean;
++        subscription?: string;
+       } = {};
+       if (event.contextTokens !== undefined) {
+         patch.tokensUsed = event.contextTokens;
+@@ -6255,6 +6269,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+       if (event.fastMode !== undefined) {
+         patch.fastMode = event.fastMode;
+       }
++      if (event.subscription !== undefined) {
++        patch.subscription = event.subscription;
++      }
+       if (event.totalCostUsd !== undefined || event.usageByModel !== undefined) {
+         const entry =
+           sourceConversationId === null
+diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
+index 26a5066..ebe7527 100644
+--- a/web/src/store/conversationState.ts
++++ b/web/src/store/conversationState.ts
+@@ -50,6 +50,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
+   sessionUsageByModel: true,
+   rateLimits: true,
+   fastMode: true,
++  subscription: true,
+   tailscaleHost: true,
+   gitBranch: true,
+   todos: true,
+@@ -119,6 +120,7 @@ export function createInitialConversationState(): ConversationState {
+     sessionUsageByModel: null,
+     rateLimits: null,
+     fastMode: null,
++    subscription: null,
+     tailscaleHost: null,
+     gitBranch: null,
+     todos: [],

@@ -42,6 +42,13 @@ def summary(store):
     } for a in store["accounts"]], "active": store["active"]}
 
 
+def names(store):
+    """Account names for the composer, which any signed-in user may read."""
+    return {"data": [{k: a[k] for k in ("id", "provider", "name")} | {
+        "active": store["active"].get(a["provider"]) == a["id"],
+    } for a in store["accounts"]]}
+
+
 def write(core, store, version):
     projection = {"claude-token": "", "codex-auth.json": ""}
     selection = {}

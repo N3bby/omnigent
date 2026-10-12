@@ -1,4 +1,8 @@
-"""Admin-only subscriptions routes. Credentials never appear in responses."""
+"""Subscriptions routes. Credentials never appear in responses.
+
+Every route is admin-only except the account names, which the composer shows
+to everyone so they can see which account a session uses.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -57,6 +61,10 @@ def create_subscriptions_router(auth_provider, is_admin, multi_user, core=_core)
         if not await asyncio.to_thread(is_admin, user):
             raise OmnigentError("Admin privileges required", code=ErrorCode.FORBIDDEN)
 
+    async def signed_in(request):
+        if multi_user and get_user_id(request, auth_provider) is None:
+            raise OmnigentError("Authentication required", code=ErrorCode.UNAUTHORIZED)
+
     async def run(call):
         try:
             return await asyncio.to_thread(call)
@@ -73,6 +81,11 @@ def create_subscriptions_router(auth_provider, is_admin, multi_user, core=_core)
     async def listing(request: Request):
         await admin(request)
         return await run(lambda: subscriptions.summary(subscriptions.read(core())[0]))
+
+    @router.get("/subscriptions/names")
+    async def names(request: Request):
+        await signed_in(request)
+        return await run(lambda: subscriptions.names(subscriptions.read(core())[0]))
 
     @router.put("/subscriptions")
     async def save(request: Request, body: SaveSubscription):

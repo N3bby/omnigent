@@ -1,0 +1,283 @@
+Report which subscription account each native agent started with.
+
+The deployment's claude and codex wrappers record the account from Settings ->
+Subscriptions that a Claude Code or Codex process signs in with, in an
+omnigent-subscription file: the bridge directory for Claude, the session's
+CODEX_HOME for Codex. omnigent/native/subscription_record.py reads it and posts
+it as external_session_usage data.subscription, the account ID or "default" for
+the deployment's own login, whenever it changes. claude-native checks on every
+statusLine render; codex-native when it subscribes to a thread and at each turn
+start. Pairs with the server patch 0014-session-subscription.patch and the web
+patch 0018-composer-subscription.patch. Applies after
+0009-stop-codex-process.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/harnesses/claude_native/forwarder.py b/omnigent/harnesses/claude_native/forwarder.py
+index 9aaa4bd..bf6f315 100644
+--- a/omnigent/harnesses/claude_native/forwarder.py
++++ b/omnigent/harnesses/claude_native/forwarder.py
+@@ -55,6 +55,7 @@ from omnigent.native._native_post_delivery import (
+     post_external_session_status,
+     post_may_have_been_delivered,
+ )
++from omnigent.native.subscription_record import forward_subscription
+ from omnigent.process_logging import harness_stderr_capture_enabled
+ from omnigent.session_event_batch import (
+     MAX_SESSION_EVENT_BATCH_EVENTS,
+@@ -802,6 +803,8 @@ class _ForwardDedupeState:
+     posted_rate_limits: dict[str, object] | None = None
+     # Last ``/fast`` state POSTed from the statusLine capture.
+     posted_fast_mode: bool | None = None
++    # Last subscription account POSTed (``"default"`` for the deployment's login).
++    posted_subscription: str | None = None
+     recorded_token_usage: dict[str, int] | None = None
+     observed_model: str | None = None
+     posted_model: str | None = None
+@@ -1381,6 +1384,13 @@ async def forward_claude_transcript_to_session(
+                             bridge_dir=bridge_dir,
+                             dedupe=dedupe,
+                         )
++                        # The wrapper recorded the account when Claude started.
++                        dedupe.posted_subscription = await forward_subscription(
++                            client,
++                            session_id=current_session_id,
++                            directory=bridge_dir,
++                            posted=dedupe.posted_subscription,
++                        )
+                     transcript_path = read_transcript_path(bridge_dir)
+                     _observe_transcript_discovery(
+                         bridge_dir=bridge_dir,
+diff --git a/omnigent/harnesses/codex_native/forwarder.py b/omnigent/harnesses/codex_native/forwarder.py
+index 83b1493..17bd3e3 100644
+--- a/omnigent/harnesses/codex_native/forwarder.py
++++ b/omnigent/harnesses/codex_native/forwarder.py
+@@ -64,6 +64,7 @@ from omnigent.native._native_post_delivery import (
+     post_may_have_been_delivered,
+     replay_dead_letters,
+ )
++from omnigent.native.subscription_record import forward_subscription
+ from omnigent.util.json_types import JsonObject as _JsonObject
+ 
+ _logger = logging.getLogger(__name__)
+@@ -446,6 +447,8 @@ class _CodexForwarderState:
+     # the last value POSTed; ``None`` until a thread reports its tier.
+     fast_mode: bool | None = None
+     posted_fast_mode: bool | None = None
++    # Last subscription account POSTed (``"default"`` for the deployment's login).
++    posted_subscription: str | None = None
+     rate_limits_task: asyncio.Task[None] | None = field(default=None, repr=False)
+     subagents_by_thread: dict[str, str] = field(default_factory=dict)
+     pending_child_threads: dict[str, str | None] = field(default_factory=dict)
+@@ -2662,6 +2665,12 @@ async def _subscribe_until_ready_inner(
+             await _sync_fast_mode_change(
+                 ap_client, session_id=session_id, forwarder_state=forwarder_state
+             )
++            forwarder_state.posted_subscription = await forward_subscription(
++                ap_client,
++                session_id=session_id,
++                directory=codex_home_for_bridge_dir(bridge_dir),
++                posted=forwarder_state.posted_subscription,
++            )
+         await _replay_resume_response(
+             ap_client,
+             session_id=session_id,
+@@ -3637,6 +3646,13 @@ async def _maybe_handle_turn_event(
+                         session_id=session_id,
+                         forwarder_state=forwarder_state,
+                     )
++                # The wrapper recorded the account when the app-server started.
++                forwarder_state.posted_subscription = await forward_subscription(
++                    client,
++                    session_id=session_id,
++                    directory=codex_home_for_bridge_dir(bridge_dir),
++                    posted=forwarder_state.posted_subscription,
++                )
+         _schedule_rate_limits_refresh(
+             client, codex_client, session_id=session_id, forwarder_state=forwarder_state
+         )
+diff --git a/omnigent/native/subscription_record.py b/omnigent/native/subscription_record.py
+new file mode 100644
+index 0000000..cce172e
+--- /dev/null
++++ b/omnigent/native/subscription_record.py
+@@ -0,0 +1,82 @@
++"""
++Report which subscription account a native agent process started with.
++
++The deployment's ``claude`` and ``codex`` wrappers resolve the account from
++Settings → Subscriptions before starting the CLI, and record its ID in an
++``omnigent-subscription`` file: in the bridge directory for Claude, and in the
++session's ``CODEX_HOME`` for Codex. An empty file means the process uses the
++deployment's own login rather than an account from Settings. The forwarders
++post the record as ``external_session_usage`` ``data.subscription``, with
++``"default"`` for that login, so the web composer can name the account.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import logging
++import re
++from pathlib import Path
++
++import httpx
++
++from omnigent.native.native_terminal import url_component
++
++_logger = logging.getLogger(__name__)
++
++SUBSCRIPTION_RECORD_FILE = "omnigent-subscription"
++# What an empty record is posted as: the deployment's own login.
++DEFAULT_LOGIN = "default"
++# Account IDs are uuid4 hex; anything else in the file is ignored.
++_ACCOUNT_ID = re.compile(r"[0-9a-f]{32}")
++
++
++def read_subscription_record(directory: Path) -> str | None:
++    """
++    Read the account a wrapper recorded in *directory*.
++
++    :param directory: The Claude bridge directory or the Codex ``CODEX_HOME``.
++    :returns: The account ID, e.g. ``"42e6ad4455f84134ad3fa7ed390767aa"``,
++        ``"default"`` for the deployment's own login, or ``None`` when nothing usable
++        was recorded (an older wrapper, or an unreadable file).
++    """
++    try:
++        raw = (directory / SUBSCRIPTION_RECORD_FILE).read_text(encoding="utf-8").strip()
++    except (OSError, UnicodeDecodeError):
++        return None
++    if raw == "":
++        return DEFAULT_LOGIN
++    return raw if _ACCOUNT_ID.fullmatch(raw) else None
++
++
++async def forward_subscription(
++    client: httpx.AsyncClient,
++    *,
++    session_id: str,
++    directory: Path,
++    posted: str | None,
++) -> str | None:
++    """
++    Post the recorded account when it differs from the last one posted.
++
++    Best-effort and not retried, like the subscription usage windows: the
++    caller checks again at its next statusLine render or turn start.
++
++    :param client: Omnigent HTTP client.
++    :param session_id: Omnigent conversation id, e.g. ``"conv_abc123"``.
++    :param directory: Where the wrapper wrote the record.
++    :param posted: The account last posted for this session, or ``None``.
++    :returns: The account now known to be posted, for the caller's baseline.
++    """
++    account = await asyncio.to_thread(read_subscription_record, directory)
++    if account is None or account == posted:
++        return posted
++    try:
++        resp = await client.post(
++            f"/v1/sessions/{url_component(session_id)}/events",
++            json={"type": "external_session_usage", "data": {"subscription": account}},
++        )
++        resp.raise_for_status()
++    except httpx.HTTPError as exc:
++        _logger.debug("Failed to forward the subscription; session=%s error=%s", session_id, exc)
++        return posted
++    return account
+diff --git a/tests/runner/test_subscription_record.py b/tests/runner/test_subscription_record.py
+new file mode 100644
+index 0000000..6b03e21
+--- /dev/null
++++ b/tests/runner/test_subscription_record.py
+@@ -0,0 +1,93 @@
++"""The forwarders report the subscription account a wrapper recorded."""
++
++import json
++
++import httpx
++import pytest
++
++from omnigent.native.subscription_record import (
++    SUBSCRIPTION_RECORD_FILE,
++    forward_subscription,
++    read_subscription_record,
++)
++
++ACCOUNT = "42e6ad4455f84134ad3fa7ed390767aa"
++
++
++@pytest.mark.parametrize(
++    "content,expected",
++    [
++        (ACCOUNT, ACCOUNT),
++        (f"{ACCOUNT}\n", ACCOUNT),
++        ("", "default"),
++        ("not-an-account", None),
++        (ACCOUNT.upper(), None),
++    ],
++)
++def test_reads_only_account_ids_or_the_deployment_login(tmp_path, content, expected):
++    (tmp_path / SUBSCRIPTION_RECORD_FILE).write_text(content)
++    assert read_subscription_record(tmp_path) == expected
++
++
++def test_missing_record_reads_as_unknown(tmp_path):
++    assert read_subscription_record(tmp_path) is None
++
++
++async def test_posts_only_a_changed_account(tmp_path):
++    posts = []
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        posts.append((request.url.path, json.loads(request.content)))
++        return httpx.Response(200, json={})
++
++    async with httpx.AsyncClient(
++        transport=httpx.MockTransport(handler), base_url="http://omnigent"
++    ) as client:
++        assert (
++            await forward_subscription(
++                client, session_id="conv_a", directory=tmp_path, posted=None
++            )
++            is None
++        )
++        (tmp_path / SUBSCRIPTION_RECORD_FILE).write_text(ACCOUNT)
++        posted = await forward_subscription(
++            client, session_id="conv_a", directory=tmp_path, posted=None
++        )
++        assert posted == ACCOUNT
++        assert (
++            await forward_subscription(
++                client, session_id="conv_a", directory=tmp_path, posted=posted
++            )
++            == ACCOUNT
++        )
++        (tmp_path / SUBSCRIPTION_RECORD_FILE).write_text("")
++        assert (
++            await forward_subscription(
++                client, session_id="conv_a", directory=tmp_path, posted=posted
++            )
++            == "default"
++        )
++    assert posts == [
++        (
++            "/v1/sessions/conv_a/events",
++            {"type": "external_session_usage", "data": {"subscription": ACCOUNT}},
++        ),
++        (
++            "/v1/sessions/conv_a/events",
++            {"type": "external_session_usage", "data": {"subscription": "default"}},
++        ),
++    ]
++
++
++async def test_a_failed_post_is_retried_next_time(tmp_path):
++    (tmp_path / SUBSCRIPTION_RECORD_FILE).write_text(ACCOUNT)
++    async with httpx.AsyncClient(
++        transport=httpx.MockTransport(lambda _request: httpx.Response(503)),
++        base_url="http://omnigent",
++    ) as client:
++        assert (
++            await forward_subscription(
++                client, session_id="conv_a", directory=tmp_path, posted=None
++            )
++            is None
++        )

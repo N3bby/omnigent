@@ -20,11 +20,26 @@ fi
 # PATH, so later sessions skip the wrapper. Versions come from versions.yaml.
 export DISABLE_AUTOUPDATER=1
 
-subscription_token="$(/opt/venv/bin/python /usr/local/lib/omnigent/subscriptions.py claude)"
+# An Omnigent session's Claude gets its settings from its bridge directory.
+# The account it starts with is recorded there, so the composer can show it.
+bridge_dir=""
+previous=""
+for argument in "$@"; do
+    case "$previous=$argument" in
+        --settings=*/claude-settings.json) bridge_dir="${argument%/*}" ;;
+        *=--settings=*/claude-settings.json) bridge_dir="${argument#--settings=}"; bridge_dir="${bridge_dir%/*}" ;;
+    esac
+    previous="$argument"
+done
+if [ -n "$bridge_dir" ] && [ -d "$bridge_dir" ]; then
+    subscription_token="$(/opt/venv/bin/python /usr/local/lib/omnigent/subscriptions.py claude --record "$bridge_dir/omnigent-subscription")"
+else
+    subscription_token="$(/opt/venv/bin/python /usr/local/lib/omnigent/subscriptions.py claude)"
+fi
 if [ -n "$subscription_token" ]; then
     export CLAUDE_CODE_OAUTH_TOKEN="$subscription_token"
 fi
-unset subscription_token
+unset subscription_token bridge_dir previous
 
 # The variables of the repositories this session started with.
 # shellcheck source=SCRIPTDIR/repo-env/repo-env.sh

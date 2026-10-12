@@ -71,6 +71,22 @@ class Routes(unittest.TestCase):
         self.assertEqual(malformed.status_code, 400, malformed.text)
         self.assertNotIn(TOKEN, malformed.text)
 
+    def test_any_signed_in_user_reads_account_names_but_no_credentials(self):
+        self.assertEqual(self.client.get("/v1/subscriptions/names").status_code, 401)
+        empty = self.client.get("/v1/subscriptions/names", headers={"x-user": "member"})
+        self.assertEqual(empty.json(), {"data": []})
+        for provider, name, credential in [("claude", "Personal", TOKEN), ("claude", "Work", TOKEN + "2"),
+                                           ("codex", "Personal", AUTH)]:
+            self.client.put("/v1/subscriptions", headers={"x-user": "admin"},
+                            json={"provider": provider, "name": name, "credential": credential})
+        response = self.client.get("/v1/subscriptions/names", headers={"x-user": "member"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([(a["provider"], a["name"], a["active"]) for a in response.json()["data"]],
+                         [("claude", "Personal", True), ("claude", "Work", False), ("codex", "Personal", True)])
+        self.assertEqual({key for a in response.json()["data"] for key in a}, {"id", "provider", "name", "active"})
+        self.assertNotIn(TOKEN, response.text)
+        self.assertNotIn("test-refresh", response.text)
+
 
 def pod_log(kwargs, text):
     # kubernetes 36 returns a preloaded log as str(bytes), escapes spelled out.

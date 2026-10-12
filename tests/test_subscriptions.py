@@ -181,3 +181,85 @@ class WrapperTests(unittest.TestCase):
             (home / ".omnigent-auth.lock").unlink()
             (home / ".omnigent-auth.lock").mkdir()
             self.assertEqual(launch("personal").stdout, "ok\n")
+
+    def test_codex_wrapper_records_the_account_its_codex_uses(self):
+        import fcntl
+        import shlex
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            projection = root / "projection"
+            projection.mkdir()
+            (projection / "codex-auth.json").write_text(AUTH)
+            library = root / "library.sh"
+            library.write_text('omnigent_wait_for_repo_setup() { :; }\nomnigent_agent_instructions() { :; }\n')
+            cli = root / "fake-codex.py"
+            cli.write_text("print('ok')")
+            source = (ROOT / "images/runner/codex-wrapper.sh").read_text()
+            source = source.replace('/usr/local/lib/omnigent/repo-env.sh', str(library)).replace('/usr/local/lib/omnigent/agent-instructions.sh', str(library))
+            source = source.replace('node=/usr/local/bin/node', 'node=' + shlex.quote(sys.executable))
+            source = source.replace('real_codex=/usr/local/bin/codex-real', 'real_codex=' + shlex.quote(str(cli)))
+            source = source.replace('/opt/venv/bin/python /usr/local/lib/omnigent/subscriptions.py', shlex.quote(sys.executable) + ' ' + shlex.quote(str(ROOT / 'images/runner/subscriptions.py')))
+            source = source.replace('shared_auth=/mnt/codex-home/auth.json', 'shared_auth=' + shlex.quote(str(root / "shared-auth.json")))
+            wrapper = root / "codex-wrapper.sh"
+            wrapper.write_text(source)
+            home = root / "omnigent-codex-home-test"
+            record = home / "omnigent-subscription"
+            env = {**os.environ, "CODEX_HOME": str(home), "OMNIGENT_SUBSCRIPTIONS_DIR": str(projection), "OMNIGENT_CODEX_AUTH_ROOT": str(root / "saved")}
+            def launch(account):
+                (projection / "selection.json").write_text(json.dumps({"codex": {"id": account, "revision": "v1"}}))
+                subprocess.run(["sh", str(wrapper)], env=env, text=True, capture_output=True, check=True)
+            launch("a" * 32)
+            self.assertEqual(record.read_text(), "a" * 32)
+            # A Codex that still holds the old account keeps it, and so does the record.
+            with (home / ".omnigent-auth.lock").open("a") as running:
+                fcntl.flock(running, fcntl.LOCK_SH)
+                launch("b" * 32)
+                self.assertEqual(record.read_text(), "a" * 32)
+            launch("b" * 32)
+            self.assertEqual(record.read_text(), "b" * 32)
+            # Without an account in Settings, Codex uses the deployment's own login.
+            (projection / "selection.json").unlink()
+            (home / "auth.json").unlink()
+            (root / "shared-auth.json").write_text(AUTH)
+            subprocess.run(["sh", str(wrapper)], env=env, text=True, capture_output=True, check=True)
+            self.assertEqual((home / "auth.json").resolve(), root / "shared-auth.json")
+            self.assertEqual(record.read_text(), "")
+
+    def test_claude_wrapper_records_the_account_in_its_bridge_directory(self):
+        import shlex
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            projection = root / "projection"
+            projection.mkdir()
+            library = root / "library.sh"
+            library.write_text('omnigent_wait_for_repo_setup() { :; }\nomnigent_agent_instructions() { :; }\n')
+            cli = root / "claude-real"
+            cli.write_text('#!/bin/sh\nprintf "%s" "${CLAUDE_CODE_OAUTH_TOKEN:-none}"\n')
+            cli.chmod(0o755)
+            source = (ROOT / "images/runner/claude-wrapper.sh").read_text()
+            source = source.replace('/usr/local/lib/omnigent/repo-env.sh', str(library)).replace('/usr/local/lib/omnigent/agent-instructions.sh', str(library))
+            source = source.replace('managed=/etc/claude-code/managed-settings.json', 'managed=' + shlex.quote(str(root / "managed.json")))
+            source = source.replace('/usr/local/bin/claude-real', shlex.quote(str(cli)))
+            source = source.replace('/opt/venv/bin/python /usr/local/lib/omnigent/subscriptions.py', shlex.quote(sys.executable) + ' ' + shlex.quote(str(ROOT / 'images/runner/subscriptions.py')))
+            wrapper = root / "claude-wrapper.sh"
+            wrapper.write_text(source)
+            bridge = root / "bridge"
+            bridge.mkdir()
+            record = bridge / "omnigent-subscription"
+            env = {**os.environ, "OMNIGENT_SUBSCRIPTIONS_DIR": str(projection)}
+            env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+            def run(*args):
+                return subprocess.run(["sh", str(wrapper), *args], env=env, text=True, capture_output=True, check=True).stdout
+            settings = str(bridge / "claude-settings.json")
+            self.assertEqual(run("--model", "opus", "--settings", settings), "none")
+            self.assertEqual(record.read_text(), "")
+            (projection / "selection.json").write_text(json.dumps({"claude": {"id": "a" * 32, "revision": "v1"}}))
+            (projection / "claude-token").write_text(TOKEN)
+            self.assertEqual(run("--settings=" + settings, "--model", "opus"), TOKEN)
+            self.assertEqual(record.read_text(), "a" * 32)
+            # Inline settings, as Omnigent's title helper passes, aren't a bridge directory.
+            record.unlink()
+            self.assertEqual(run("--settings", '{"apiKeyHelper": "x"}'), TOKEN)
+            self.assertFalse(record.exists())
+            # An unwritable bridge directory still starts Claude.
+            self.assertEqual(run("--settings", str(root / "missing" / "claude-settings.json")), TOKEN)

@@ -47,6 +47,29 @@ turn doesn't switch it, and a switch never interrupts a running turn.
 Each account keeps its own usage limits, so the numbers in the composer follow
 the account a session uses.
 
+## Seeing which account a session uses
+
+A Claude Code or Codex session's composer names the account its agent signed in
+with, left of the model picker. It's the account the agent started with, which
+isn't always the one Settings selects now: a dot on the key marks a session
+that still uses an account you've since switched away from. Tap the name to
+see what it means and, when Settings selects another account, how to switch.
+
+![The composer naming the session's Claude account, with its explanation open](../images/subscriptions-composer.webp)
+
+- The name appears once the agent has started: for Claude, when Claude Code
+  first draws its status line; for Codex, when it connects to the session or
+  starts a turn. Sessions started before this feature show nothing until their
+  agent restarts.
+- A session using the login from `mise run setup-claude` or `setup-codex`
+  shows **Default login**, but only once Settings has an account for that
+  provider. Without one, there's nothing to tell apart, so there's no tag.
+- An account removed from Settings shows as **Removed account**.
+- Renames show within a minute. On a phone, the key gives way to the name
+  when the composer is narrow, and a long name is shortened.
+- Everyone signed in can see the accounts' names, not just admins. Nothing
+  else about an account is shown to them.
+
 ## Editing and removing
 
 The pencil renames an account, or signs in again to replace its login.
@@ -93,7 +116,8 @@ subscription login it had.
 - **The Settings page** (`images/server/web-patches/0017-subscriptions.patch`)
   calls `/v1/subscriptions`, which `images/server/omnigent_subscriptions_api.py`
   serves (mounted by `images/server/patches/0013-subscriptions.patch`). Every
-  route is admin-only, and no response contains a credential.
+  route is admin-only except `GET /v1/subscriptions/names`, which any signed-in
+  user may call for the composer, and no response contains a credential.
 - **Browser sign-in** (`images/server/omnigent_subscription_login.py`): each
   sign-in is a `subscription-login-*` Pod running the runner image, with no
   service-account token, no credentials mounted, a 15-minute deadline and at
@@ -123,3 +147,13 @@ subscription login it had.
   by the selection. `0009-stop-codex-process.patch` makes **Stop session**
   close Codex's app-server, so the next message starts it with the current
   account, as Claude already did.
+- **The composer's account name:** the wrappers record the ID of the account
+  each agent starts with in an `omnigent-subscription` file, empty for the
+  mise-stored login. Claude's goes in its bridge directory, found from its
+  `--settings` argument; Codex's goes in its `CODEX_HOME`, read from where the
+  `auth.json` link points, so it's the account Codex really uses.
+  `images/runner/patches/0010-subscription-in-use.patch` posts it to the
+  session whenever it changes, `images/server/patches/0014-session-subscription.patch`
+  keeps it in the `omnigent.subscription` session label and sends it to open
+  browsers, and `images/server/web-patches/0018-composer-subscription.patch`
+  shows it with the name from `/v1/subscriptions/names`.

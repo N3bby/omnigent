@@ -57,6 +57,22 @@ if [ -n "${CODEX_HOME:-}" ]; then
             if [ -z "$subscription_auth" ] && [ -f "$shared_auth" ] && [ ! -e "$CODEX_HOME/auth.json" ]; then
                 ln -s "$shared_auth" "$CODEX_HOME/auth.json"
             fi
+            # Record which account this home's Codex processes use, so the
+            # composer can show it: the account the login link points to, or
+            # nothing for the mise-stored login.
+            account="$(readlink "$CODEX_HOME/auth.json" || true)"
+            case "$account" in
+                "${OMNIGENT_CODEX_AUTH_ROOT:-/mnt/codex-home/subscriptions}"/*/auth.json)
+                    account="${account%/auth.json}"
+                    account="${account##*/}"
+                    ;;
+                *) account="" ;;
+            esac
+            if ! { printf '%s' "$account" > "$CODEX_HOME/omnigent-subscription.$$" \
+                && mv -f "$CODEX_HOME/omnigent-subscription.$$" "$CODEX_HOME/omnigent-subscription"; } 2>/dev/null; then
+                rm -f "$CODEX_HOME/omnigent-subscription.$$" 2>/dev/null || true
+                echo "codex-wrapper: could not record the account in $CODEX_HOME/omnigent-subscription" >&2
+            fi
             if [ "${OMNIGENT_CODEX_BYPASS_APPROVALS:-0}" = "1" ]; then
                 exec "$node" "$real_codex" --dangerously-bypass-approvals-and-sandbox "$@"
             fi

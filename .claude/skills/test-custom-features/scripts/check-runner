@@ -324,6 +324,10 @@ check "codex wrapper uses the active subscription" grep -q 'subscriptions.py cod
 check "codex wrapper keeps a running Codex's login" grep -q 'omnigent-auth.lock' /usr/local/bin/codex
 check "Codex readiness sees the active subscription" grep -q '/run/omnigent/subscriptions/codex-auth.json' "$site/omnigent/harnesses/codex_native/main.py"
 check "Stop session closes Codex's app-server" grep -q 'teardown_codex_native_app_server(conversation_id)' "$site/omnigent/runner/app.py"
+check "claude wrapper records the account it starts with" grep -q 'omnigent-subscription' /usr/local/bin/claude
+check "codex wrapper records the account it starts with" grep -q 'omnigent-subscription' /usr/local/bin/codex
+check "claude-native reports its account to the composer" grep -q 'forward_subscription' "$site/omnigent/harnesses/claude_native/forwarder.py"
+check "codex-native reports its account to the composer" grep -q 'forward_subscription' "$site/omnigent/harnesses/codex_native/forwarder.py"
 if [[ -d /run/omnigent/subscriptions ]]; then
   # IDs only: the credentials next to it are never printed.
   active="$(python3 -c 'import json, sys; print(" ".join(sorted(json.load(open(sys.argv[1])))) or "none")' \
