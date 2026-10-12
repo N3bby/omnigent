@@ -72,6 +72,12 @@ class Routes(unittest.TestCase):
         self.assertNotIn(TOKEN, malformed.text)
 
 
+def pod_log(kwargs, text):
+    # kubernetes 36 returns a preloaded log as str(bytes), escapes spelled out.
+    data = text.encode()
+    return SimpleNamespace(data=data) if kwargs.get("_preload_content") is False else str(data)
+
+
 class LoginTests(unittest.TestCase):
     def test_login_only_returns_device_challenge_then_stores_auth_and_deletes_pod(self):
         class Core(FakeCore):
@@ -79,7 +85,7 @@ class LoginTests(unittest.TestCase):
                 return SimpleNamespace(status=SimpleNamespace(phase="Running"),
                     metadata=SimpleNamespace(labels={login.LABEL: "codex"}, annotations={"omnigent.dev/subscription-name": "Personal"}))
             def read_namespaced_pod_log(self, *args, **kwargs):
-                return "Go to https://auth.openai.com/codex/device and enter ABCD-EFGHI\nprivate-log-text"
+                return pod_log(kwargs, "Go to https://auth.openai.com/codex/device and enter ABCD-EFGHI\nprivate-log-text")
             def delete_namespaced_pod(self, *args, **kwargs):
                 self.deleted = True
         core = Core()
@@ -98,7 +104,7 @@ class LoginTests(unittest.TestCase):
                     metadata=SimpleNamespace(labels={login.LABEL: "codex"}, annotations={}))
             def read_namespaced_pod_log(self, *args, **kwargs):
                 # What codex login --device-auth 0.159 prints to a Pod log.
-                return ("Welcome to Codex [v\x1b[90m0.159.1\x1b[0m]\n"
+                return pod_log(kwargs, "Welcome to Codex [v\x1b[90m0.159.1\x1b[0m]\n"
                         "1. Open this link in your browser and sign in to your account\n"
                         "   \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\n\n"
                         "2. Enter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n"

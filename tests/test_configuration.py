@@ -65,6 +65,8 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh\n", dockerfile)
         self.assertIn("agent-instructions.md /etc/claude-code/CLAUDE.md\n", dockerfile)
         self.assertIn("agent-instructions.md /opt/codex-home/AGENTS.md\n", dockerfile)
+        # The non-root sign-in helper copies config.toml out of it.
+        self.assertIn("chmod 0755 /opt/codex-home", dockerfile)
         profile = (ROOT / "images" / "runner" / "mise" / "mise-profile.sh").read_text()
         self.assertIn("export MISE_DATA_DIR=/home/omnigent/", profile)
         wrapper = (ROOT / "images" / "runner" / "codex-wrapper.sh").read_text()

@@ -136,7 +136,9 @@ def poll(core, login_id, execute=None):
         "print(p.read_text() if Path('/tmp/login-done').exists() else '')"])
     if payload.strip():
         return _complete(core, pod, login_id, "codex", payload)
-    logs = core.read_namespaced_pod_log(name, subscriptions.NAMESPACE, container="login", tail_lines=40)
+    # The client returns the log as str(bytes), with escapes spelled out; decode it ourselves.
+    logs = core.read_namespaced_pod_log(name, subscriptions.NAMESPACE, container="login", tail_lines=40,
+                                        _preload_content=False).data.decode("utf-8", "replace")
     # Codex colours the code (ESC[94mABCD-EFGHI), which hides it from \b.
     logs = ANSI.sub("", logs)
     code = re.search(r"\b[A-Z0-9]{4,6}-[A-Z0-9]{4,6}\b", logs)

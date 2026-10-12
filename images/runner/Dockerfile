@@ -77,7 +77,10 @@ COPY --chmod=0755 claude-wrapper.sh /usr/local/bin/claude
 # user namespaces left files that the others couldn't open.
 COPY --chmod=0644 codex-config.toml /opt/codex-home/config.toml
 COPY --chmod=0644 agent-instructions.md /opt/codex-home/AGENTS.md
-RUN ln -s /mnt/codex-home/auth.json /opt/codex-home/auth.json
+# COPY --chmod gave the directory it created 0644 too; the sign-in helper,
+# which isn't root, copies config.toml out of it.
+RUN chmod 0755 /opt/codex-home \
+    && ln -s /mnt/codex-home/auth.json /opt/codex-home/auth.json
 
 # --fuzz=0 fails the build when upstream code under a patch has moved.
 COPY patches/ /tmp/omnigent-patches/
