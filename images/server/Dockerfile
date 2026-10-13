@@ -35,6 +35,8 @@ RUN python -m pip install --no-cache-dir "hvac==${HVAC_VERSION}" \
     && python -c 'import hvac; print("Vault client ready")'
 
 # --fuzz=0 fails the build when upstream code under a patch has moved.
+# The installed package has no tests/, so each patch's tests/ diffs are left
+# out here; check-patches and check-patched-tests apply them to a checkout.
 # omnigent_repo_env and omnigent_repo_env_api are ours, not upstream's:
 # 0004-repo-env.patch, 0006-repo-env-routes.patch, 0010-repo-git-token.patch
 # and 0012-repo-checkouts.patch import them. So are omnigent_startup and
@@ -51,7 +53,8 @@ RUN set -eu; \
     apt-get update; \
     apt-get install -y --no-install-recommends patch; \
     for p in /tmp/omnigent-patches/*.patch; do \
-        patch -d "$site" -p1 --forward --fuzz=0 --no-backup-if-mismatch < "$p"; \
+        python -c 'import re, sys; print("".join(c for c in re.split(r"(?m)^(?=diff --git )", sys.stdin.read()) if not c.startswith("diff --git a/tests/")), end="")' < "$p" \
+            | patch -d "$site" -p1 --forward --fuzz=0 --no-backup-if-mismatch; \
     done; \
     apt-get purge -y --auto-remove patch; \
     rm -rf /var/lib/apt/lists/* /tmp/omnigent-patches; \
