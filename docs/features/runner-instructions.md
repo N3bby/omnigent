@@ -17,6 +17,9 @@ session's runner, so you don't have to explain it yourself.
   from the browser.
 - To give the [tailnet address](tailscale.md), not `localhost`, when you ask
   how to reach something running in the session.
+- How to [reach your other devices](tailscale.md#reaching-your-devices-from-a-session)
+  on the tailnet: SSH as usual, anything else through the proxy on
+  `localhost:1055`.
 
 ## Changing the text
 

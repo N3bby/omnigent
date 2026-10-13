@@ -82,3 +82,27 @@ the tailnet address, not `localhost`.
 If `tailscale status` fails, the Pod isn't on the tailnet. Tell the user,
 and point them at `/run/omnigent-tailscale.log`, instead of making up an
 address.
+
+## Reaching the user's tailnet
+
+You can connect to the user's other devices on the tailnet, which
+`tailscale status` lists. The Pod has no route to the tailnet and no
+MagicDNS, so tailnet names don't resolve and `100.x` addresses don't
+connect directly. Go through Tailscale instead:
+
+- **SSH:** `ssh root@<host>` works with the short name, the full `.ts.net`
+  name or the `100.x` address. The SSH config already sends it through
+  `tailscale nc`, so don't wrap it yourself.
+- **Everything else** (curl, HTTP clients, browsers): use the proxy on
+  `localhost:1055`, which speaks SOCKS5 and HTTP. Pass it per command, e.g.
+  `curl --proxy socks5h://localhost:1055 http://<host>:3000`, or
+  `--proxy-server=socks5://localhost:1055` for Chromium and Playwright. With
+  curl, use `socks5h://`, so the proxy resolves the name.
+- **Your browser tools** (`browser_navigate` and the others) drive the
+  browser in the user's Omnigent desktop app, on their device, so they reach
+  tailnet hosts without the proxy.
+
+The tailnet policy decides which devices the Pod may reach, and by default
+that's none. If a connection times out, or SSH says the tailnet policy
+doesn't permit it, the user hasn't given sessions access to that device. Tell
+them that, rather than trying other routes.
