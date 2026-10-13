@@ -76,7 +76,8 @@ the tailnet address, not `localhost`.
 - Every port a process in the Pod listens on is reachable, whether it listens
   on `localhost` or on all addresses, e.g.
   `http://omnigent-cd44cbc5.taild5bc1b.ts.net:3000`.
-- The user can SSH in with `ssh root@<full name>`.
+- The user can SSH in with `ssh root@<short name>`, the full name up to the
+  first dot, e.g. `ssh root@omnigent-cd44cbc5`.
 
 If `tailscale status` fails, the Pod isn't on the tailnet. Tell the user,
 and point them at `/run/omnigent-tailscale.log`, instead of making up an
