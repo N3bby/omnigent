@@ -1,0 +1,2232 @@
+The sandbox startup card and its log.
+
+The chat showed one line while a sandbox started ("Connecting host…",
+"Starting agent…"), and a generic error when it failed. With this
+deployment's server (images/server/patches/0016-startup-progress.patch) the
+session carries a record of its start, step by step. SandboxStartupCard shows
+it in the thread, where that line was: each step with its time and what it's
+waiting for, each repository's clone and setup script, and, when something
+goes wrong, why in plain words with the failed container's log, Try again
+(for a resumable host, like the environment menu's), Repository variables
+for a clone problem, and Copy error details. "Log" opens the startup log,
+polled from GET /v1/sessions/{id}/startup-log while the start is going, with
+a filter per source. A finished start folds to "Sandbox ready in 30s" and
+stays until the agent answers; a failed setup script stays until dismissed.
+
+The record arrives in the session snapshot (`startup`) and in session.startup
+events (lib/sandboxStartup.ts, sse.ts, chatStore's sandboxStartup). The card
+replaces the in-thread stage line and Working… while the sandbox starts, and
+the failure band above the composer. Without a record (an older server) the
+old line still shows.
+
+Terminal-first sessions: while the sandbox starts, the terminal view counts
+as starting up, so it offers no Resume session, which would only start
+another wake. It shows the startup card instead, and a stale terminal's
+overlay hides its Resume too.
+
+The environment menu is unchanged.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0020-environment-menu.patch.
+
+diff --git a/web/src/components/chat/SandboxStartupCard.test.tsx b/web/src/components/chat/SandboxStartupCard.test.tsx
+new file mode 100644
+index 000000000..56bd3f9fb
+--- /dev/null
++++ b/web/src/components/chat/SandboxStartupCard.test.tsx
+@@ -0,0 +1,342 @@
++import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { MemoryRouter } from "react-router-dom";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import type { SandboxStartup, StartupStep } from "@/lib/sandboxStartup";
++import { useChatStore } from "@/store/chatStore";
++
++const mocks = vi.hoisted(() => ({
++  copyText: vi.fn((_text: string) => Promise.resolve()),
++  retrySession: vi.fn((_id: string) => Promise.resolve({ queued: false })),
++  fetch: vi.fn(),
++  session: { hostId: "host_1", hostResumable: true, labels: {} } as Record<string, unknown>,
++}));
++
++vi.mock("@/lib/clipboard", () => ({ copyText: (text: string) => mocks.copyText(text) }));
++vi.mock("@/lib/sessionsApi", () => ({ retrySession: (id: string) => mocks.retrySession(id) }));
++vi.mock("@/lib/identity", () => ({
++  authenticatedFetch: (url: string) => mocks.fetch(url),
++}));
++vi.mock("@/hooks/useSession", () => ({
++  useSession: () => ({ session: mocks.session, isLoading: false, error: null }),
++}));
++
++import { SandboxStartupCard, SessionStartupCard, startupCardVisible } from "./SandboxStartupCard";
++
++const NOW = Date.now() / 1000;
++
++function step(
++  id: StartupStep["id"],
++  state: StartupStep["state"],
++  extra: Partial<StartupStep> = {},
++): StartupStep {
++  return {
++    id,
++    state,
++    detail: null,
++    tone: null,
++    startedAt: state === "pending" ? null : NOW - 10,
++    endedAt: state === "done" || state === "failed" ? NOW - 8 : null,
++    children: [],
++    ...extra,
++  };
++}
++
++function startup(extra: Partial<SandboxStartup> = {}): SandboxStartup {
++  return {
++    kind: "launch",
++    outcome: "running",
++    startedAt: NOW - 12,
++    endedAt: null,
++    steps: [
++      step("sandbox", "done"),
++      step("schedule", "done", { detail: "on vm-omnigent" }),
++      step("image", "done", { detail: "Already on the VM" }),
++      step("clone", "running", {
++        children: [
++          { name: "omnigent", state: "done", detail: null, startedAt: NOW - 9, endedAt: NOW - 6 },
++          { name: "roadpass", state: "running", detail: null, startedAt: NOW - 9, endedAt: null },
++        ],
++      }),
++      step("host", "pending"),
++      step("agent", "pending"),
++    ],
++    failure: null,
++    warning: null,
++    logSize: 4,
++    ...extra,
++  };
++}
++
++const CLONE_FAILURE = {
++  title: "Couldn't clone roadpass",
++  body: "GitHub refused the Git token for roadpass.",
++  log: "fatal: Authentication failed for 'https://github.com/acme/roadpass.git/'",
++  source: "workspace-prep",
++  raw: "managed sandbox host startup failed: workspace prep failed",
++  child: null,
++};
++
++function renderCard(ui: React.ReactNode) {
++  return render(
++    <QueryClientProvider client={new QueryClient()}>
++      <MemoryRouter>{ui}</MemoryRouter>
++    </QueryClientProvider>,
++  );
++}
++
++beforeEach(() => {
++  mocks.copyText.mockClear();
++  mocks.retrySession.mockClear();
++  mocks.fetch.mockReset();
++  mocks.session = { hostId: "host_1", hostResumable: true, labels: {} };
++});
++
++afterEach(cleanup);
++
++describe("SandboxStartupCard", () => {
++  it("lists the steps of a start in progress, with each repository", () => {
++    renderCard(<SandboxStartupCard startup={startup()} sessionId="conv_1" canRetry />);
++
++    expect(screen.getByText("Starting your sandbox")).toBeInTheDocument();
++    const steps = screen.getByTestId("sandbox-startup-steps");
++    expect(within(steps).getByText("Pod scheduled")).toBeInTheDocument();
++    expect(within(steps).getByText("on vm-omnigent")).toBeInTheDocument();
++    expect(within(steps).getByText("Cloning repositories")).toBeInTheDocument();
++    expect(within(steps).getByText("roadpass")).toBeInTheDocument();
++    expect(within(steps).getByText("Start the host")).toBeInTheDocument();
++    expect(steps.querySelector('[data-step="clone"]')).toHaveAttribute("data-state", "running");
++  });
++
++  it("names the agent in its step", () => {
++    renderCard(
++      <SandboxStartupCard
++        startup={startup({ steps: [step("agent", "running")] })}
++        sessionId="conv_1"
++        canRetry
++        agentLabel="Claude Code"
++      />,
++    );
++    expect(screen.getByText("Starting Claude Code")).toBeInTheDocument();
++  });
++
++  it("says when a wake starts the stopped sandbox again", () => {
++    renderCard(
++      <SandboxStartupCard
++        startup={startup({
++          kind: "wake",
++          steps: [step("sandbox", "running"), step("clone", "skipped")],
++        })}
++        sessionId="conv_1"
++        canRetry
++      />,
++    );
++    expect(screen.getByText("Starting your sandbox again")).toBeInTheDocument();
++    expect(screen.getByText("Starting the stopped sandbox")).toBeInTheDocument();
++    expect(screen.getByText("Repositories kept from last time")).toBeInTheDocument();
++  });
++
++  it("shows a held-up step's reason as a warning", () => {
++    renderCard(
++      <SandboxStartupCard
++        startup={startup({
++          steps: [
++            step("schedule", "running", {
++              tone: "warning",
++              detail: "Waiting for memory: the VM doesn't have enough free memory for this sandbox",
++            }),
++          ],
++        })}
++        sessionId="conv_1"
++        canRetry
++      />,
++    );
++    expect(screen.getByText(/waiting/)).toBeInTheDocument();
++    expect(screen.getByText(/enough free memory/)).toHaveClass("text-warning");
++  });
++
++  it("explains a failure, with the failed container's log, and tries again", async () => {
++    renderCard(
++      <SandboxStartupCard
++        startup={startup({ outcome: "failed", endedAt: NOW, failure: CLONE_FAILURE })}
++        sessionId="conv_1"
++        canRetry
++      />,
++    );
++
++    expect(screen.getByText("The sandbox couldn't start")).toBeInTheDocument();
++    const problem = screen.getByTestId("sandbox-startup-problem");
++    expect(within(problem).getByText("Couldn't clone roadpass")).toBeInTheDocument();
++    expect(within(problem).getByText(/Authentication failed/)).toBeInTheDocument();
++    expect(within(problem).getByRole("link", { name: "Repository variables" })).toHaveAttribute(
++      "href",
++      "/settings/repo-env",
++    );
++    fireEvent.click(within(problem).getByRole("button", { name: "Try again" }));
++    await waitFor(() => expect(mocks.retrySession).toHaveBeenCalledWith("conv_1"));
++  });
++
++  it("copies everything about a failure", async () => {
++    renderCard(
++      <SandboxStartupCard
++        startup={startup({ outcome: "failed", endedAt: NOW, failure: CLONE_FAILURE })}
++        sessionId="conv_1"
++        canRetry={false}
++      />,
++    );
++    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
++    expect(screen.getByText("Your next message starts it again.")).toBeInTheDocument();
++    fireEvent.click(screen.getByRole("button", { name: "Copy error details" }));
++    await waitFor(() => expect(mocks.copyText).toHaveBeenCalledTimes(1));
++    const copied = mocks.copyText.mock.calls[0][0];
++    expect(copied).toContain("Couldn't clone roadpass");
++    expect(copied).toContain(CLONE_FAILURE.raw);
++    expect(copied).toContain("Authentication failed");
++  });
++
++  it("folds a start that finished without trouble, and opens it again", () => {
++    const ready = startup({
++      outcome: "ready",
++      endedAt: NOW,
++      steps: [step("sandbox", "done"), step("agent", "done")],
++    });
++    renderCard(<SandboxStartupCard startup={ready} sessionId="conv_1" canRetry />);
++    expect(screen.getByText("Sandbox ready in 12s")).toBeInTheDocument();
++    expect(screen.queryByTestId("sandbox-startup-steps")).toBeNull();
++    fireEvent.click(screen.getByRole("button", { name: "Show the steps" }));
++    expect(screen.getByTestId("sandbox-startup-steps")).toBeInTheDocument();
++  });
++
++  it("keeps a failed setup script open, and can dismiss it", () => {
++    const onDismiss = vi.fn();
++    renderCard(
++      <SandboxStartupCard
++        startup={startup({
++          outcome: "ready",
++          endedAt: NOW,
++          steps: [step("setup", "failed"), step("agent", "done")],
++          warning: {
++            title: "roadpass's setup script failed",
++            body: "Exit status 127. The agent started anyway.",
++            log: "bash: line 6: pnpm: command not found",
++            source: "~/.local/state/omnigent-repo-setup/roadpass.log",
++            raw: null,
++            child: "roadpass",
++          },
++        })}
++        sessionId="conv_1"
++        canRetry
++        onDismiss={onDismiss}
++      />,
++    );
++    expect(screen.getByText("a setup script failed", { exact: false })).toBeInTheDocument();
++    expect(screen.getByText(/pnpm: command not found/)).toBeInTheDocument();
++    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
++    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
++    expect(onDismiss).toHaveBeenCalled();
++  });
++});
++
++describe("startupCardVisible", () => {
++  it("shows a start in progress or failed, whatever the thread", () => {
++    expect(startupCardVisible(startup(), false, false)).toBe(true);
++    expect(startupCardVisible(startup({ outcome: "failed" }), false, false)).toBe(true);
++  });
++
++  it("shows a finished start until the agent answers", () => {
++    const ready = startup({ outcome: "ready", steps: [step("agent", "done")] });
++    expect(startupCardVisible(ready, true, false)).toBe(true);
++    expect(startupCardVisible(ready, false, false)).toBe(false);
++  });
++
++  it("keeps a warning until it's dismissed, and a running setup script", () => {
++    const warned = startup({
++      outcome: "ready",
++      warning: { title: "x", body: "", log: null, source: null, raw: null, child: null },
++    });
++    expect(startupCardVisible(warned, false, false)).toBe(true);
++    expect(startupCardVisible(warned, false, true)).toBe(false);
++    const setup = startup({ outcome: "ready", steps: [step("setup", "running")] });
++    expect(startupCardVisible(setup, false, false)).toBe(true);
++  });
++
++  it("hides a cancelled start", () => {
++    expect(startupCardVisible(startup({ outcome: "cancelled" }), true, false)).toBe(false);
++  });
++});
++
++describe("SessionStartupCard", () => {
++  afterEach(() => {
++    useChatStore.setState({ conversationId: null, sandboxStartup: null });
++  });
++
++  it("shows the open session's start, with Try again only for a resumable host", () => {
++    mocks.session = { hostId: null, hostResumable: false, labels: {} };
++    useChatStore.setState({
++      conversationId: "conv_1",
++      sandboxStartup: startup({ outcome: "failed", failure: CLONE_FAILURE }),
++    });
++    renderCard(<SessionStartupCard awaitingReply />);
++    expect(screen.getByTestId("sandbox-startup-card")).toHaveAttribute("data-outcome", "failed");
++    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
++  });
++
++  it("renders nothing without a start", () => {
++    useChatStore.setState({ conversationId: "conv_1", sandboxStartup: null });
++    renderCard(<SessionStartupCard awaitingReply />);
++    expect(screen.queryByTestId("sandbox-startup-card")).toBeNull();
++  });
++});
++
++describe("StartupLogDialog", () => {
++  it("loads the log, filters it by source, and stops polling once the start is over", async () => {
++    mocks.fetch.mockResolvedValueOnce(
++      new Response(
++        JSON.stringify({
++          started_at: NOW - 12,
++          next: 3,
++          live: false,
++          lines: [
++            { seq: 1, at: NOW - 12, source: "server", level: "info", text: "Creating the sandbox" },
++            {
++              seq: 2,
++              at: NOW - 11,
++              source: "k8s",
++              level: "info",
++              text: "Scheduled: to vm-omnigent",
++            },
++            {
++              seq: 3,
++              at: NOW - 9,
++              source: "clone",
++              level: "error",
++              text: "fatal: Authentication failed",
++            },
++          ],
++        }),
++      ),
++    );
++    renderCard(<SandboxStartupCard startup={startup()} sessionId="conv_1" canRetry />);
++    fireEvent.click(screen.getByRole("button", { name: "Log" }));
++
++    const dialog = await screen.findByTestId("startup-log-dialog");
++    await within(dialog).findByText("Scheduled: to vm-omnigent");
++    expect(mocks.fetch).toHaveBeenCalledWith("/v1/sessions/conv_1/startup-log?after=0");
++    expect(within(dialog).getByText("fatal: Authentication failed")).toHaveClass(
++      "text-destructive",
++    );
++    expect(within(dialog).getByText("The start has finished.")).toBeInTheDocument();
++
++    fireEvent.click(within(dialog).getByRole("button", { name: /Clone/ }));
++    expect(within(dialog).queryByText("Scheduled: to vm-omnigent")).toBeNull();
++    expect(within(dialog).getByText("fatal: Authentication failed")).toBeInTheDocument();
++
++    await act(async () => {
++      await new Promise<void>((resolve) => {
++        setTimeout(resolve, 50);
++      });
++    });
++    expect(mocks.fetch).toHaveBeenCalledTimes(1);
++  });
++});
+diff --git a/web/src/components/chat/SandboxStartupCard.tsx b/web/src/components/chat/SandboxStartupCard.tsx
+new file mode 100644
+index 000000000..961486d79
+--- /dev/null
++++ b/web/src/components/chat/SandboxStartupCard.tsx
+@@ -0,0 +1,756 @@
++import { useEffect, useMemo, useRef, useState } from "react";
++import {
++  CheckIcon,
++  ChevronDownIcon,
++  CircleAlertIcon,
++  CircleXIcon,
++  CopyIcon,
++  Loader2Icon,
++  MinusIcon,
++  RotateCcwIcon,
++  ScrollTextIcon,
++  TriangleAlertIcon,
++} from "lucide-react";
++import { useMutation } from "@tanstack/react-query";
++import { Link } from "@/lib/routing";
++import { toast } from "sonner";
++
++import { Button } from "@/components/ui/button";
++import {
++  Dialog,
++  DialogContent,
++  DialogDescription,
++  DialogHeader,
++  DialogTitle,
++} from "@/components/ui/dialog";
++import { copyText } from "@/lib/clipboard";
++import {
++  elapsed,
++  fetchStartupLog,
++  formatClock,
++  formatStepDuration,
++  problemDetails,
++  startupInFlight,
++  stepLabel,
++  type SandboxStartup,
++  type StartupChild,
++  type StartupLogLine,
++  type StartupLogSource,
++  type StartupProblem,
++  type StartupState,
++  type StartupStep,
++} from "@/lib/sandboxStartup";
++import { retrySession } from "@/lib/sessionsApi";
++import { nativeCodingAgentForWrapper, WRAPPER_LABEL_KEY } from "@/lib/nativeCodingAgents";
++import { cn } from "@/lib/utils";
++import { useSession } from "@/hooks/useSession";
++import { useChatStore } from "@/store/chatStore";
++
++/** The current time in Unix seconds, ticking every second while `live`. */
++function useNow(live: boolean): number {
++  const [now, setNow] = useState(() => Date.now() / 1000);
++  useEffect(() => {
++    setNow(Date.now() / 1000);
++    if (!live) return;
++    const timer = window.setInterval(() => setNow(Date.now() / 1000), 1000);
++    return () => window.clearInterval(timer);
++  }, [live]);
++  return now;
++}
++
++function StateIcon({
++  state,
++  tone,
++  small = false,
++}: {
++  state: StartupState;
++  tone?: "warning" | null;
++  small?: boolean;
++}) {
++  const size = small ? "size-3.5" : "size-4";
++  if (state === "running") {
++    return (
++      <Loader2Icon
++        aria-hidden
++        className={cn(
++          size,
++          "animate-spin",
++          tone === "warning" ? "text-warning" : "text-muted-foreground",
++        )}
++      />
++    );
++  }
++  if (state === "done") return <CheckIcon aria-hidden className={cn(size, "text-success")} />;
++  if (state === "failed")
++    return <CircleXIcon aria-hidden className={cn(size, "text-destructive")} />;
++  if (state === "skipped")
++    return <MinusIcon aria-hidden className={cn(size, "text-muted-foreground")} />;
++  return (
++    <span aria-hidden className={cn("flex items-center justify-center", size)}>
++      <span className="size-1.5 rounded-full border border-muted-foreground/60" />
++    </span>
++  );
++}
++
++function Duration({ seconds }: { seconds: number | null }) {
++  if (seconds === null) return null;
++  return (
++    <span className="shrink-0 font-mono text-[11px] leading-5 text-muted-foreground tabular-nums">
++      {formatStepDuration(seconds)}
++    </span>
++  );
++}
++
++function ChildRow({ child, now }: { child: StartupChild; now: number }) {
++  return (
++    <li className="flex items-start gap-2 text-xs leading-5" data-state={child.state}>
++      <span className="mt-0.5">
++        <StateIcon state={child.state} small />
++      </span>
++      <span className="min-w-0 flex-1">
++        <span className={child.state === "pending" ? "text-muted-foreground" : "text-foreground"}>
++          {child.name}
++        </span>
++        {child.detail && (
++          <span
++            className={cn(
++              "ml-1.5 text-muted-foreground",
++              child.state === "failed" && "text-destructive",
++            )}
++          >
++            · {child.detail}
++          </span>
++        )}
++      </span>
++      <Duration seconds={elapsed(child, now)} />
++    </li>
++  );
++}
++
++function StepRow({
++  step,
++  kind,
++  agentLabel,
++  now,
++}: {
++  step: StartupStep;
++  kind: SandboxStartup["kind"];
++  agentLabel: string | null;
++  now: number;
++}) {
++  let label = stepLabel(step, kind);
++  if (step.id === "agent" && agentLabel) {
++    label =
++      step.state === "done"
++        ? `${agentLabel} ready`
++        : step.state === "failed"
++          ? `${agentLabel} didn't start`
++          : step.state === "pending"
++            ? `Start ${agentLabel}`
++            : `Starting ${agentLabel}`;
++  }
++  return (
++    <li className="flex items-start gap-2.5 py-1" data-step={step.id} data-state={step.state}>
++      <span className="mt-0.5">
++        <StateIcon state={step.state} tone={step.tone} />
++      </span>
++      <div className="min-w-0 flex-1">
++        <div
++          className={cn(
++            "text-ui leading-5",
++            step.state === "pending" ? "text-muted-foreground" : "text-foreground",
++          )}
++        >
++          {label}
++        </div>
++        {step.detail && (
++          <div
++            className={cn(
++              "text-xs leading-5 break-words",
++              step.tone === "warning" && step.state === "running"
++                ? "text-warning"
++                : step.state === "failed"
++                  ? "text-destructive"
++                  : "text-muted-foreground",
++            )}
++          >
++            {step.detail}
++          </div>
++        )}
++        {step.children.length > 0 && (
++          <ul className="mt-1 flex flex-col gap-0.5">
++            {step.children.map((child) => (
++              <ChildRow key={child.name} child={child} now={now} />
++            ))}
++          </ul>
++        )}
++      </div>
++      <Duration seconds={elapsed(step, now)} />
++    </li>
++  );
++}
++
++function ProblemCallout({
++  problem,
++  tone,
++  sessionId,
++  canRetry,
++  onShowLog,
++  onDismiss,
++}: {
++  problem: StartupProblem;
++  tone: "failed" | "warning";
++  sessionId: string;
++  canRetry: boolean;
++  onShowLog: () => void;
++  onDismiss?: () => void;
++}) {
++  const retry = useMutation({ mutationFn: () => retrySession(sessionId) });
++  const cloneProblem = /clone/i.test(problem.title);
++  return (
++    <div
++      data-testid="sandbox-startup-problem"
++      className={cn(
++        "mx-3 mb-3 flex flex-col gap-2.5 rounded-lg px-3 py-2.5 text-ui",
++        tone === "failed" ? "bg-destructive/8" : "bg-warning/10",
++      )}
++    >
++      <div className={cn("font-medium", tone === "failed" ? "text-destructive" : "text-warning")}>
++        {problem.title}
++      </div>
++      {problem.body && <p className="leading-5 text-foreground">{problem.body}</p>}
++      {problem.log && (
++        <div className="flex min-w-0 flex-col gap-1">
++          <pre className="max-h-48 overflow-auto rounded-md border border-border bg-background px-2.5 py-2 font-mono text-[11.5px] leading-[1.55] whitespace-pre text-foreground">
++            {problem.log.trim()}
++          </pre>
++          {problem.source && (
++            <span className="font-mono text-[11px] text-muted-foreground">{problem.source}</span>
++          )}
++        </div>
++      )}
++      <div className="flex flex-wrap gap-1.5">
++        {tone === "failed" && canRetry && (
++          <Button
++            type="button"
++            size="sm"
++            variant="default"
++            disabled={retry.isPending}
++            onClick={() =>
++              retry.mutate(undefined, {
++                onError: (error) =>
++                  toast.error(
++                    `Couldn't start the sandbox${error instanceof Error && error.message ? `: ${error.message}` : ""}.`,
++                  ),
++              })
++            }
++          >
++            {retry.isPending ? (
++              <Loader2Icon className="size-3.5 animate-spin" aria-hidden />
++            ) : (
++              <RotateCcwIcon className="size-3.5" aria-hidden />
++            )}
++            Try again
++          </Button>
++        )}
++        {cloneProblem && (
++          <Button size="sm" variant="outline" asChild>
++            <Link to="/settings/repo-env">Repository variables</Link>
++          </Button>
++        )}
++        <Button type="button" size="sm" variant="outline" onClick={onShowLog}>
++          <ScrollTextIcon className="size-3.5" aria-hidden />
++          Show log
++        </Button>
++        <Button
++          type="button"
++          size="sm"
++          variant="ghost"
++          onClick={() =>
++            void copyText(problemDetails(problem)).then(
++              () => toast.success("Copied the error details."),
++              () => toast.error("Couldn't copy the error details."),
++            )
++          }
++        >
++          <CopyIcon className="size-3.5" aria-hidden />
++          Copy error details
++        </Button>
++        {onDismiss && (
++          <Button type="button" size="sm" variant="ghost" onClick={onDismiss}>
++            Dismiss
++          </Button>
++        )}
++      </div>
++      {tone === "failed" && !canRetry && (
++        <p className="text-xs text-muted-foreground">Your next message starts it again.</p>
++      )}
++    </div>
++  );
++}
++
++/** What the card's header says. */
++function headline(
++  startup: SandboxStartup,
++  now: number,
++): { title: string; note: string | null; state: StartupState; tone: "warning" | null } {
++  const total = (startup.endedAt ?? now) - startup.startedAt;
++  if (startup.outcome === "failed") {
++    return {
++      title: "The sandbox couldn't start",
++      note: `after ${formatStepDuration(total)}`,
++      state: "failed",
++      tone: null,
++    };
++  }
++  if (startup.outcome === "cancelled") {
++    return { title: "Start cancelled", note: null, state: "skipped", tone: null };
++  }
++  if (startup.outcome === "ready") {
++    const setup = startup.steps.find((s) => s.id === "setup");
++    const note = startup.warning
++      ? "a setup script failed"
++      : setup?.state === "running"
++        ? "a setup script is still running"
++        : null;
++    return {
++      title: `Sandbox ready in ${formatStepDuration(total)}`,
++      note,
++      state: startup.warning ? "failed" : "done",
++      tone: startup.warning ? "warning" : null,
++    };
++  }
++  const waiting = startup.steps.some((s) => s.state === "running" && s.tone === "warning");
++  return {
++    title: startup.kind === "wake" ? "Starting your sandbox again" : "Starting your sandbox",
++    note: waiting ? "waiting" : null,
++    state: "running",
++    tone: waiting ? "warning" : null,
++  };
++}
++
++/**
++ * How the session's sandbox start is going: each step with its time, what
++ * went wrong in plain words, and a link to the full startup log.
++ *
++ * Open while the sandbox starts or after it failed; a finished start folds
++ * into one line ("Sandbox ready in 30s") that opens again on click.
++ */
++export function SandboxStartupCard({
++  startup,
++  sessionId,
++  canRetry,
++  agentLabel = null,
++  onDismiss,
++  className,
++}: {
++  startup: SandboxStartup;
++  sessionId: string;
++  /** Whether Try again can start the sandbox without a message. */
++  canRetry: boolean;
++  /** e.g. `"Claude Code"`, for the agent step. */
++  agentLabel?: string | null;
++  /** Hides a finished start's warning (a failed setup script). */
++  onDismiss?: () => void;
++  className?: string;
++}) {
++  const live = startupInFlight(startup);
++  const now = useNow(live);
++  const settledQuietly = startup.outcome === "ready" && !startup.warning;
++  const [open, setOpen] = useState(!settledQuietly);
++  const [logOpen, setLogOpen] = useState(false);
++  // Fold once a start finishes without trouble, open again for a new one.
++  const startKey = `${startup.startedAt}:${settledQuietly}`;
++  const lastKey = useRef(startKey);
++  useEffect(() => {
++    if (lastKey.current === startKey) return;
++    lastKey.current = startKey;
++    setOpen(!settledQuietly);
++  }, [startKey, settledQuietly]);
++  const head = headline(startup, now);
++  const steps = startup.steps.filter(
++    (step) => step.state !== "pending" || startup.outcome === "running",
++  );
++  const problem = startup.failure ?? startup.warning;
++
++  return (
++    <div
++      data-testid="sandbox-startup-card"
++      data-outcome={startup.outcome}
++      role="status"
++      aria-live="polite"
++      className={cn(
++        "w-full overflow-hidden rounded-xl border bg-card text-card-foreground",
++        startup.outcome === "failed"
++          ? "border-destructive/40"
++          : head.tone === "warning"
++            ? "border-warning/45"
++            : "border-border",
++        className,
++      )}
++    >
++      <div className="flex items-center gap-2.5 px-3 py-2.5">
++        {head.state === "failed" && head.tone === "warning" ? (
++          <TriangleAlertIcon aria-hidden className="size-4 text-warning" />
++        ) : head.state === "running" && head.tone === "warning" ? (
++          <CircleAlertIcon aria-hidden className="size-4 text-warning" />
++        ) : (
++          <StateIcon state={head.state} />
++        )}
++        <button
++          type="button"
++          className="min-w-0 flex-1 cursor-pointer truncate text-left text-ui font-medium"
++          onClick={() => setOpen((value) => !value)}
++          aria-expanded={open}
++        >
++          {head.title}
++          {head.note && (
++            <span className="ml-1.5 font-normal text-muted-foreground">· {head.note}</span>
++          )}
++        </button>
++        {startup.outcome === "running" && (
++          <span className="font-mono text-xs text-muted-foreground tabular-nums">
++            {formatClock(now - startup.startedAt)}
++          </span>
++        )}
++        <Button type="button" size="xs" variant="ghost" onClick={() => setLogOpen(true)}>
++          Log
++        </Button>
++        <Button
++          type="button"
++          size="icon-xs"
++          variant="ghost"
++          aria-label={open ? "Hide the steps" : "Show the steps"}
++          onClick={() => setOpen((value) => !value)}
++        >
++          <ChevronDownIcon className={cn("size-4 transition-transform", !open && "-rotate-90")} />
++        </Button>
++      </div>
++      {open && (
++        <>
++          <ul className="flex flex-col px-3 pb-2.5" data-testid="sandbox-startup-steps">
++            {steps.map((step) => (
++              <StepRow
++                key={step.id}
++                step={step}
++                kind={startup.kind}
++                agentLabel={agentLabel}
++                now={now}
++              />
++            ))}
++          </ul>
++          {problem && (
++            <ProblemCallout
++              problem={problem}
++              tone={startup.failure ? "failed" : "warning"}
++              sessionId={sessionId}
++              canRetry={canRetry}
++              onShowLog={() => setLogOpen(true)}
++              onDismiss={startup.failure ? undefined : onDismiss}
++            />
++          )}
++          {startup.outcome === "running" &&
++            startup.steps.some((s) => s.id === "setup" && s.state === "running") && (
++              <p className="px-3 pb-3 text-xs text-muted-foreground">
++                The agent waits up to 45 seconds for setup scripts, then starts beside them.
++              </p>
++            )}
++        </>
++      )}
++      <StartupLogDialog
++        sessionId={sessionId}
++        open={logOpen}
++        onOpenChange={setLogOpen}
++        startedAt={startup.startedAt}
++      />
++    </div>
++  );
++}
++
++// Finished starts whose warning someone dismissed, by session and start.
++const dismissed = new Set<string>();
++const DISMISSED_KEY = "omnigent.startup-dismissed";
++try {
++  for (const key of JSON.parse(sessionStorage.getItem(DISMISSED_KEY) ?? "[]") as string[]) {
++    dismissed.add(key);
++  }
++} catch {
++  // Storage can be unavailable; dismissals then last for this page only.
++}
++
++/**
++ * Whether the thread shows the startup card.
++ *
++ * Always while the sandbox starts and after it failed. A finished start stays
++ * until the agent answers, or, with a warning (a failed setup script), until
++ * it's dismissed. A cancelled one doesn't show.
++ *
++ * @param startup - The session's current or last start.
++ * @param awaitingReply - Whether the thread's last message is the user's.
++ * @param isDismissed - Whether its warning was dismissed.
++ */
++export function startupCardVisible(
++  startup: SandboxStartup,
++  awaitingReply: boolean,
++  isDismissed: boolean,
++): boolean {
++  if (startup.outcome === "running" || startup.outcome === "failed") return true;
++  if (startup.outcome === "cancelled") return false;
++  if (startup.warning && !isDismissed) return true;
++  if (startup.steps.some((s) => s.id === "setup" && s.state === "running")) return true;
++  return awaitingReply;
++}
++
++/**
++ * The open session's startup card, from the chat store, or nothing when the
++ * session has no start to show.
++ *
++ * @param awaitingReply - Whether the thread's last message is the user's: a
++ *   finished start stays until the agent answers.
++ */
++export function SessionStartupCard({
++  awaitingReply,
++  className,
++}: {
++  awaitingReply: boolean;
++  className?: string;
++}) {
++  const startup = useChatStore((s) => s.sandboxStartup);
++  const sessionId = useChatStore((s) => s.conversationId);
++  const { session } = useSession(sessionId);
++  const [, setDismissals] = useState(0);
++  if (!startup || !sessionId) return null;
++  const key = `${sessionId}:${startup.startedAt}`;
++  if (!startupCardVisible(startup, awaitingReply, dismissed.has(key))) return null;
++  const agentLabel =
++    nativeCodingAgentForWrapper(session?.labels?.[WRAPPER_LABEL_KEY])?.displayName ?? null;
++  return (
++    <SandboxStartupCard
++      startup={startup}
++      sessionId={sessionId}
++      canRetry={Boolean(session?.hostId && session.hostResumable)}
++      agentLabel={agentLabel}
++      className={className}
++      onDismiss={() => {
++        dismissed.add(key);
++        try {
++          sessionStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissed].slice(-200)));
++        } catch {
++          // Not kept past this page.
++        }
++        setDismissals((n) => n + 1);
++      }}
++    />
++  );
++}
++
++const SOURCE_LABELS: Record<StartupLogSource, string> = {
++  server: "Omnigent",
++  k8s: "Kubernetes",
++  clone: "Clone",
++  host: "Host",
++  setup: "Setup script",
++  agent: "Agent",
++};
++
++const LOG_POLL_MS = 1500;
++
++/**
++ * The start's log: Kubernetes events, the clone, the host, setup scripts and
++ * the agent, polled while open and while the start is still going.
++ */
++export function StartupLogDialog({
++  sessionId,
++  open,
++  onOpenChange,
++  startedAt,
++}: {
++  sessionId: string;
++  open: boolean;
++  onOpenChange: (open: boolean) => void;
++  /** The start whose log to show; a new start clears the lines. */
++  startedAt: number;
++}) {
++  const [lines, setLines] = useState<StartupLogLine[]>([]);
++  const [live, setLive] = useState(true);
++  const [error, setError] = useState<string | null>(null);
++  const [filter, setFilter] = useState<StartupLogSource | "all">("all");
++  const nextRef = useRef(0);
++  const scrollRef = useRef<HTMLDivElement>(null);
++  const pinnedRef = useRef(true);
++
++  useEffect(() => {
++    setLines([]);
++    nextRef.current = 0;
++    setLive(true);
++  }, [startedAt, sessionId]);
++
++  useEffect(() => {
++    if (!open) return;
++    let cancelled = false;
++    let timer: number | undefined;
++    const poll = async () => {
++      try {
++        const page = await fetchStartupLog(sessionId, nextRef.current);
++        if (cancelled) return;
++        if (page.startedAt !== null && Math.abs(page.startedAt - startedAt) > 0.001) {
++          // A newer start than this card's: show it from the top.
++          nextRef.current = 0;
++        }
++        if (page.lines.length > 0) {
++          const fresh = page.lines;
++          setLines((previous) =>
++            nextRef.current === 0 && fresh[0]?.seq === 1 ? fresh : [...previous, ...fresh],
++          );
++          nextRef.current = page.next;
++        }
++        setLive(page.live);
++        setError(null);
++        if (page.live) timer = window.setTimeout(poll, LOG_POLL_MS);
++      } catch (err) {
++        if (cancelled) return;
++        setError(err instanceof Error ? err.message : String(err));
++        timer = window.setTimeout(poll, LOG_POLL_MS * 2);
++      }
++    };
++    void poll();
++    return () => {
++      cancelled = true;
++      if (timer !== undefined) window.clearTimeout(timer);
++    };
++  }, [open, sessionId, startedAt]);
++
++  const shown = useMemo(
++    () => (filter === "all" ? lines : lines.filter((line) => line.source === filter)),
++    [lines, filter],
++  );
++  const counts = useMemo(() => {
++    const result = new Map<StartupLogSource, number>();
++    for (const line of lines) result.set(line.source, (result.get(line.source) ?? 0) + 1);
++    return result;
++  }, [lines]);
++
++  useEffect(() => {
++    const el = scrollRef.current;
++    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
++  }, [shown]);
++
++  const copyAll = () =>
++    void copyText(
++      lines.map((l) => `${formatTime(l.at)} ${SOURCE_LABELS[l.source]}: ${l.text}`).join("\n"),
++    ).then(
++      () => toast.success("Copied the startup log."),
++      () => toast.error("Couldn't copy the startup log."),
++    );
++
++  return (
++    <Dialog open={open} onOpenChange={onOpenChange}>
++      <DialogContent
++        className="flex max-h-[85vh] flex-col gap-3 sm:max-w-3xl"
++        data-testid="startup-log-dialog"
++      >
++        <DialogHeader>
++          <DialogTitle>Startup log</DialogTitle>
++          <DialogDescription>
++            What happened while the sandbox started: Kubernetes, the clone, the host, setup scripts
++            and the agent.
++          </DialogDescription>
++        </DialogHeader>
++        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Show lines from">
++          {(["all", "k8s", "clone", "host", "setup", "agent", "server"] as const).map((source) => {
++            const count = source === "all" ? lines.length : (counts.get(source) ?? 0);
++            if (source !== "all" && count === 0) return null;
++            return (
++              <button
++                key={source}
++                type="button"
++                aria-pressed={filter === source}
++                onClick={() => setFilter(source)}
++                className={cn(
++                  "cursor-pointer rounded-full border px-2.5 py-0.5 text-xs",
++                  filter === source
++                    ? "border-foreground bg-foreground text-background"
++                    : "border-border text-muted-foreground hover:text-foreground",
++                )}
++              >
++                {source === "all" ? "All" : SOURCE_LABELS[source]}
++                <span className="ml-1 tabular-nums opacity-70">{count}</span>
++              </button>
++            );
++          })}
++        </div>
++        <div
++          ref={scrollRef}
++          onScroll={(event) => {
++            const el = event.currentTarget;
++            pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
++          }}
++          className="min-h-48 flex-1 overflow-auto rounded-md border border-border bg-muted/30 py-2 font-mono text-[11.5px] leading-[1.6]"
++        >
++          {shown.length === 0 ? (
++            <p className="px-3 text-muted-foreground">
++              {error
++                ? `Couldn't load the log: ${error}`
++                : live
++                  ? "Waiting for the first lines…"
++                  : "No lines."}
++            </p>
++          ) : (
++            shown.map((line) => (
++              <div
++                key={line.seq}
++                className="grid grid-cols-[4.5rem_6.5rem_minmax(0,1fr)] gap-2 px-3 max-sm:grid-cols-[4.5rem_minmax(0,1fr)]"
++              >
++                <span className="text-muted-foreground tabular-nums">{formatTime(line.at)}</span>
++                <span className="truncate text-muted-foreground max-sm:hidden">
++                  {SOURCE_LABELS[line.source]}
++                </span>
++                <span
++                  className={cn(
++                    "break-words whitespace-pre-wrap",
++                    line.level === "error"
++                      ? "text-destructive"
++                      : line.level === "warning"
++                        ? "text-warning"
++                        : "text-foreground",
++                  )}
++                >
++                  {line.text}
++                </span>
++              </div>
++            ))
++          )}
++        </div>
++        <div className="flex items-center gap-2 text-xs text-muted-foreground">
++          {live ? (
++            <>
++              <Loader2Icon className="size-3.5 animate-spin" aria-hidden />
++              Following the start
++            </>
++          ) : (
++            <span>The start has finished.</span>
++          )}
++          <span className="flex-1" />
++          <Button
++            type="button"
++            size="xs"
++            variant="ghost"
++            onClick={copyAll}
++            disabled={lines.length === 0}
++          >
++            <CopyIcon className="size-3.5" aria-hidden />
++            Copy log
++          </Button>
++        </div>
++      </DialogContent>
++    </Dialog>
++  );
++}
++
++function formatTime(epochSeconds: number): string {
++  return new Date(epochSeconds * 1000).toLocaleTimeString([], {
++    hour: "2-digit",
++    minute: "2-digit",
++    second: "2-digit",
++  });
++}
+diff --git a/web/src/components/chat/Transcript.tsx b/web/src/components/chat/Transcript.tsx
+index ff179bcff..82efef71a 100644
+--- a/web/src/components/chat/Transcript.tsx
++++ b/web/src/components/chat/Transcript.tsx
+@@ -31,6 +31,7 @@ import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
+ import { useUserMessageNav } from "@/hooks/useUserMessageNav";
+ import { ChatPlanAccordion } from "@/shell/ChatPlanAccordion";
+ import { RunnerStartingIndicator, McpStartupIndicator } from "@/pages/ChatIndicators";
++import { SessionStartupCard } from "@/components/chat/SandboxStartupCard";
+ import { CHAT_COLUMN_WIDTH } from "@/pages/chatLayout";
+ import {
+   type ConversationScroller,
+@@ -309,6 +310,18 @@ function TranscriptImpl({
+   }, [nav]);
+ 
+   const showWorkingIndicator = shouldShowWorkingIndicator(display.showsWorking, display.bubbles);
++  // The sandbox startup card (this deployment) replaces "Working…" while the
++  // sandbox starts, and stays until the agent answers.
++  const startupRunning = useChatStore((s) => s.sandboxStartup?.outcome === "running");
++  const startupFailed = useChatStore((s) => s.sandboxStartup?.outcome === "failed");
++  const awaitingReply = useMemo(() => {
++    for (let i = display.bubbles.length - 1; i >= 0; i--) {
++      const b = display.bubbles[i];
++      if (b.kind === "assistant") return false;
++      if (b.kind === "user" && !isSystemBubble(b)) return true;
++    }
++    return true;
++  }, [display.bubbles]);
+   return (
+     <>
+       {/* Task tracker pinned above the thread. Sibling of the viewport (not an
+@@ -341,8 +354,11 @@ function TranscriptImpl({
+               rowCount={display.streamBubbles.length}
+             />
+             {display.bubbles.length === 0 && !showWorkingIndicator && !display.mcpStartupActive ? (
+-              sandboxLaunching ? (
+-                <RunnerStartingIndicator variant="hero" />
++              sandboxLaunching || startupFailed ? (
++                <>
++                  <RunnerStartingIndicator variant="hero" />
++                  <SessionStartupCard awaitingReply className="mx-auto mt-[18vh] max-w-xl" />
++                </>
+               ) : (
+                 <ConversationEmptyState>
+                   <div className="space-y-1.5">
+@@ -389,9 +405,11 @@ function TranscriptImpl({
+                   </Message>
+                 ))}
+                 {/* Working… shimmer, lit for the whole busy turn. */}
+-                {showWorkingIndicator && <WorkingIndicator />}
++                {showWorkingIndicator && !startupRunning && <WorkingIndicator />}
+                 {/* Managed-sandbox stage cue; only when Working is absent. */}
+                 {!showWorkingIndicator && <RunnerStartingIndicator variant="row" />}
++                {/* How the sandbox start is going, step by step (this deployment). */}
++                <SessionStartupCard awaitingReply={awaitingReply} />
+                 {/* MCP-server startup band (codex-native); clears once the
+                 round settles (failures stay in host logs, not the chat). */}
+                 <McpStartupIndicator />
+diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
+index 5df5ae0d2..b6d87692a 100644
+--- a/web/src/lib/events.ts
++++ b/web/src/lib/events.ts
+@@ -9,6 +9,7 @@
+ // Python class name lowercased (e.g. ResponseCreated → "response_created").
+ 
+ import type { RateLimits } from "./rateLimits";
++import type { SandboxStartup } from "./sandboxStartup";
+ import type { RoutingDecisionExtras } from "./routingDecision";
+ import type {
+   BackgroundTaskInfo,
+@@ -711,6 +712,16 @@ export interface SessionTerminalPendingEvent {
+   pending: boolean;
+ }
+ 
++/**
++ * `session.startup` — a step of the session's sandbox start moved on. Carries
++ * the whole record (see `lib/sandboxStartup.ts`).
++ */
++export interface SessionStartupEvent {
++  type: "session_startup";
++  conversationId: string;
++  startup: SandboxStartup;
++}
++
+ /**
+  * `session.tailscale` — the tailnet name of the session's managed runner
+  * Pod, e.g. `omnigent-e1dcab9b.tail1234.ts.net`, recorded by a launch or wake.
+@@ -1039,6 +1050,7 @@ export type StreamEvent =
+   | SessionTodosEvent
+   | SessionTerminalPendingEvent
+   | SessionSandboxStatusEvent
++  | SessionStartupEvent
+   | SessionTailscaleEvent
+   | SessionMcpStartupEvent
+   | SessionInputConsumedEvent
+diff --git a/web/src/lib/sandboxStartup.test.ts b/web/src/lib/sandboxStartup.test.ts
+new file mode 100644
+index 000000000..632f73b74
+--- /dev/null
++++ b/web/src/lib/sandboxStartup.test.ts
+@@ -0,0 +1,178 @@
++import { afterEach, describe, expect, it } from "vitest";
++
++import { parseEvent } from "@/lib/sse";
++import { handleSessionEvent, useChatStore } from "@/store/chatStore";
++import {
++  elapsed,
++  formatClock,
++  formatStepDuration,
++  parseSandboxStartup,
++  parseStartupLogPage,
++  problemDetails,
++  startupInFlight,
++  stepLabel,
++} from "./sandboxStartup";
++
++const WIRE = {
++  kind: "launch",
++  outcome: "running",
++  started_at: 1000,
++  ended_at: null,
++  steps: [
++    {
++      id: "sandbox",
++      state: "done",
++      detail: null,
++      tone: null,
++      started_at: 1000,
++      ended_at: 1000.4,
++      children: [],
++    },
++    {
++      id: "clone",
++      state: "running",
++      detail: null,
++      tone: null,
++      started_at: 1001,
++      ended_at: null,
++      children: [
++        { name: "roadpass", state: "running", detail: null, started_at: 1001, ended_at: null },
++      ],
++    },
++    { id: "mystery", state: "done" },
++    { id: "host", state: "exploded" },
++  ],
++  failure: null,
++  warning: null,
++  log_size: 7,
++};
++
++describe("parseSandboxStartup", () => {
++  it("reads the server's record, skipping steps it doesn't know", () => {
++    const startup = parseSandboxStartup(WIRE);
++    expect(startup).not.toBeNull();
++    expect(startup?.steps.map((s) => s.id)).toEqual(["sandbox", "clone"]);
++    expect(startup?.steps[1].children[0]).toEqual({
++      name: "roadpass",
++      state: "running",
++      detail: null,
++      startedAt: 1001,
++      endedAt: null,
++    });
++    expect(startup?.logSize).toBe(7);
++  });
++
++  it("rejects anything that isn't a record", () => {
++    expect(parseSandboxStartup(null)).toBeNull();
++    expect(parseSandboxStartup({ outcome: "running" })).toBeNull();
++    expect(parseSandboxStartup({ ...WIRE, outcome: "exploded" })).toBeNull();
++  });
++
++  it("reads a failure", () => {
++    const startup = parseSandboxStartup({
++      ...WIRE,
++      outcome: "failed",
++      failure: {
++        title: "Couldn't clone roadpass",
++        body: "b",
++        log: "fatal: x",
++        source: "workspace-prep",
++        raw: "r",
++      },
++    });
++    expect(startup?.failure).toEqual({
++      title: "Couldn't clone roadpass",
++      body: "b",
++      log: "fatal: x",
++      source: "workspace-prep",
++      raw: "r",
++      child: null,
++    });
++  });
++});
++
++describe("parseStartupLogPage", () => {
++  it("reads lines, defaulting unknown sources and levels", () => {
++    const page = parseStartupLogPage({
++      started_at: 1000,
++      next: 2,
++      live: true,
++      lines: [
++        { seq: 1, at: 1000, source: "k8s", level: "warning", text: "FailedScheduling: no room" },
++        { seq: 2, at: 1001, source: "elsewhere", level: "loud", text: "x" },
++        { seq: "3", text: "bad" },
++      ],
++    });
++    expect(page.lines).toEqual([
++      { seq: 1, at: 1000, source: "k8s", level: "warning", text: "FailedScheduling: no room" },
++      { seq: 2, at: 1001, source: "server", level: "info", text: "x" },
++    ]);
++    expect(page.live).toBe(true);
++    expect(page.next).toBe(2);
++  });
++});
++
++describe("labels and times", () => {
++  it("names each step for its state", () => {
++    expect(stepLabel({ id: "clone", state: "running" }, "launch")).toBe("Cloning repositories");
++    expect(stepLabel({ id: "clone", state: "skipped" }, "wake")).toBe(
++      "Repositories kept from last time",
++    );
++    expect(stepLabel({ id: "schedule", state: "failed" }, "launch")).toBe("No room on the VM");
++    expect(stepLabel({ id: "sandbox", state: "done" }, "wake")).toBe("Sandbox started again");
++  });
++
++  it("formats durations and clocks", () => {
++    expect(formatStepDuration(0.43)).toBe("0.4s");
++    expect(formatStepDuration(12.4)).toBe("12s");
++    expect(formatStepDuration(65)).toBe("1m 05s");
++    expect(formatClock(78.9)).toBe("1:18");
++  });
++
++  it("times running steps up to now, and not skipped ones", () => {
++    expect(elapsed({ state: "running", startedAt: 100, endedAt: null }, 112)).toBe(12);
++    expect(elapsed({ state: "done", startedAt: 100, endedAt: 103 }, 112)).toBe(3);
++    expect(elapsed({ state: "skipped", startedAt: null, endedAt: 100 }, 112)).toBeNull();
++  });
++
++  it("keeps a start in flight while its setup script runs", () => {
++    const startup = parseSandboxStartup({
++      ...WIRE,
++      outcome: "ready",
++      steps: [{ id: "setup", state: "running", started_at: 1000, children: [] }],
++    });
++    expect(startup && startupInFlight(startup)).toBe(true);
++  });
++
++  it("puts the raw error and the log in the copied details", () => {
++    expect(
++      problemDetails({
++        title: "T",
++        body: "B",
++        log: "L",
++        source: "host",
++        raw: "R",
++        child: null,
++      }),
++    ).toBe("T\n\nB\n\nR\n\nhost:\nL");
++  });
++});
++
++describe("session.startup events", () => {
++  afterEach(() => useChatStore.setState({ conversationId: null, sandboxStartup: null }));
++
++  it("are parsed and replace the open session's record", () => {
++    const event = parseEvent("session.startup", { conversation_id: "conv_1", startup: WIRE });
++    expect(event?.type).toBe("session_startup");
++    useChatStore.setState({ conversationId: "conv_1", sandboxStartup: null });
++    handleSessionEvent(event!, "conv_1");
++    expect(useChatStore.getState().sandboxStartup?.steps.map((s) => s.id)).toEqual([
++      "sandbox",
++      "clone",
++    ]);
++  });
++
++  it("without a record are dropped", () => {
++    expect(parseEvent("session.startup", { conversation_id: "conv_1", startup: null })).toBeNull();
++  });
++});
+diff --git a/web/src/lib/sandboxStartup.ts b/web/src/lib/sandboxStartup.ts
+new file mode 100644
+index 000000000..500cb31f1
+--- /dev/null
++++ b/web/src/lib/sandboxStartup.ts
+@@ -0,0 +1,325 @@
++/**
++ * How a session's sandbox starts, step by step: what the startup card shows.
++ *
++ * The server keeps a record of each session's current or last start
++ * (`omnigent_startup` in this deployment's server image), sends it as the
++ * session snapshot's `startup` field and as `session.startup` events, and
++ * serves its log from `GET /v1/sessions/{id}/startup-log`.
++ */
++
++import { authenticatedFetch } from "@/lib/identity";
++
++export type StartupStepId = "sandbox" | "schedule" | "image" | "clone" | "host" | "setup" | "agent";
++export type StartupState = "pending" | "running" | "done" | "failed" | "skipped";
++export type StartupOutcome = "running" | "ready" | "failed" | "cancelled";
++export type StartupLogSource = "server" | "k8s" | "clone" | "host" | "setup" | "agent";
++
++/** A repository's clone or setup script, or one of the host's services. */
++export interface StartupChild {
++  name: string;
++  state: StartupState;
++  detail: string | null;
++  startedAt: number | null;
++  endedAt: number | null;
++}
++
++export interface StartupStep {
++  id: StartupStepId;
++  state: StartupState;
++  /** One line under the step, e.g. `"on vm-omnigent"`. */
++  detail: string | null;
++  /** `"warning"` while a running step is held up, e.g. no room on the VM. */
++  tone: "warning" | null;
++  startedAt: number | null;
++  endedAt: number | null;
++  children: StartupChild[];
++}
++
++/** Why a start failed, or why a finished one needs a look (a setup script). */
++export interface StartupProblem {
++  title: string;
++  body: string;
++  /** The failed container's or script's log, when there is one. */
++  log: string | null;
++  /** Where `log` came from, e.g. `"workspace-prep"`. */
++  source: string | null;
++  /** The error as the server reported it, for Copy error details. */
++  raw: string | null;
++  /** The repository it's about, e.g. `"roadpass"`. */
++  child: string | null;
++}
++
++export interface SandboxStartup {
++  /** `launch` for a new sandbox, `wake` for a stopped one starting again. */
++  kind: "launch" | "wake";
++  outcome: StartupOutcome;
++  startedAt: number;
++  endedAt: number | null;
++  steps: StartupStep[];
++  failure: StartupProblem | null;
++  warning: StartupProblem | null;
++  logSize: number;
++}
++
++export interface StartupLogLine {
++  seq: number;
++  at: number;
++  source: StartupLogSource;
++  level: "info" | "warning" | "error";
++  text: string;
++}
++
++export interface StartupLogPage {
++  startedAt: number | null;
++  lines: StartupLogLine[];
++  next: number;
++  live: boolean;
++}
++
++const STEP_IDS: readonly StartupStepId[] = [
++  "sandbox",
++  "schedule",
++  "image",
++  "clone",
++  "host",
++  "setup",
++  "agent",
++];
++const STATES: readonly StartupState[] = ["pending", "running", "done", "failed", "skipped"];
++const OUTCOMES: readonly StartupOutcome[] = ["running", "ready", "failed", "cancelled"];
++const SOURCES: readonly StartupLogSource[] = ["server", "k8s", "clone", "host", "setup", "agent"];
++
++function str(value: unknown): string | null {
++  return typeof value === "string" && value !== "" ? value : null;
++}
++
++function num(value: unknown): number | null {
++  return typeof value === "number" && Number.isFinite(value) ? value : null;
++}
++
++function record(value: unknown): Record<string, unknown> | null {
++  return value !== null && typeof value === "object" && !Array.isArray(value)
++    ? (value as Record<string, unknown>)
++    : null;
++}
++
++function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | null {
++  return typeof value === "string" && (allowed as readonly string[]).includes(value)
++    ? (value as T)
++    : null;
++}
++
++function parseProblem(value: unknown): StartupProblem | null {
++  const raw = record(value);
++  const title = str(raw?.title);
++  if (!raw || !title) return null;
++  return {
++    title,
++    body: str(raw.body) ?? "",
++    log: str(raw.log),
++    source: str(raw.source),
++    raw: str(raw.raw),
++    child: str(raw.child),
++  };
++}
++
++function parseChild(value: unknown): StartupChild | null {
++  const raw = record(value);
++  const name = str(raw?.name);
++  const state = oneOf(raw?.state, STATES);
++  if (!raw || !name || !state) return null;
++  return {
++    name,
++    state,
++    detail: str(raw.detail),
++    startedAt: num(raw.started_at),
++    endedAt: num(raw.ended_at),
++  };
++}
++
++function parseStep(value: unknown): StartupStep | null {
++  const raw = record(value);
++  const id = oneOf(raw?.id, STEP_IDS);
++  const state = oneOf(raw?.state, STATES);
++  if (!raw || !id || !state) return null;
++  const children = Array.isArray(raw.children)
++    ? raw.children.map(parseChild).filter((c): c is StartupChild => c !== null)
++    : [];
++  return {
++    id,
++    state,
++    detail: str(raw.detail),
++    tone: raw.tone === "warning" ? "warning" : null,
++    startedAt: num(raw.started_at),
++    endedAt: num(raw.ended_at),
++    children,
++  };
++}
++
++/**
++ * Parse the wire record (snapshot `startup` field or `session.startup` event).
++ *
++ * @returns `null` for anything that isn't a record.
++ */
++export function parseSandboxStartup(value: unknown): SandboxStartup | null {
++  const raw = record(value);
++  const outcome = oneOf(raw?.outcome, OUTCOMES);
++  const startedAt = num(raw?.started_at);
++  if (!raw || !outcome || startedAt === null || !Array.isArray(raw.steps)) return null;
++  return {
++    kind: raw.kind === "wake" ? "wake" : "launch",
++    outcome,
++    startedAt,
++    endedAt: num(raw.ended_at),
++    steps: raw.steps.map(parseStep).filter((s): s is StartupStep => s !== null),
++    failure: parseProblem(raw.failure),
++    warning: parseProblem(raw.warning),
++    logSize: num(raw.log_size) ?? 0,
++  };
++}
++
++/** Parse a `GET /startup-log` page. */
++export function parseStartupLogPage(value: unknown): StartupLogPage {
++  const raw = record(value);
++  const lines = Array.isArray(raw?.lines)
++    ? raw.lines.flatMap((line): StartupLogLine[] => {
++        const l = record(line);
++        const seq = num(l?.seq);
++        const text = typeof l?.text === "string" ? l.text : null;
++        if (!l || seq === null || text === null) return [];
++        return [
++          {
++            seq,
++            at: num(l.at) ?? 0,
++            source: oneOf(l.source, SOURCES) ?? "server",
++            level: l.level === "warning" || l.level === "error" ? l.level : "info",
++            text,
++          },
++        ];
++      })
++    : [];
++  return {
++    startedAt: num(raw?.started_at),
++    lines,
++    next: num(raw?.next) ?? 0,
++    live: raw?.live === true,
++  };
++}
++
++/** Fetch the startup log's lines after `after`. */
++export async function fetchStartupLog(sessionId: string, after: number): Promise<StartupLogPage> {
++  const res = await authenticatedFetch(
++    `/v1/sessions/${encodeURIComponent(sessionId)}/startup-log?after=${after}`,
++  );
++  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
++  return parseStartupLogPage(await res.json());
++}
++
++/** What each step is called, while it runs, once done, and when it fails or is skipped. */
++const STEP_LABELS: Record<
++  StartupStepId,
++  Partial<Record<StartupState, string>> & { running: string; done: string }
++> = {
++  sandbox: {
++    pending: "Create the sandbox",
++    running: "Creating the sandbox",
++    done: "Sandbox created",
++    failed: "Couldn't create the sandbox",
++  },
++  schedule: {
++    pending: "Find room on the VM",
++    running: "Finding room on the VM",
++    done: "Pod scheduled",
++    failed: "No room on the VM",
++  },
++  image: {
++    pending: "Get the runner image",
++    running: "Getting the runner image",
++    done: "Runner image ready",
++    failed: "Couldn't get the runner image",
++  },
++  clone: {
++    pending: "Clone repositories",
++    running: "Cloning repositories",
++    done: "Repositories cloned",
++    failed: "Couldn't clone repositories",
++    skipped: "Repositories kept from last time",
++  },
++  host: {
++    pending: "Start the host",
++    running: "Starting the host",
++    done: "Host connected",
++    failed: "The host didn't start",
++  },
++  setup: {
++    pending: "Run setup scripts",
++    running: "Running setup scripts",
++    done: "Setup scripts finished",
++    failed: "Setup script failed",
++    skipped: "Setup scripts already ran",
++  },
++  agent: {
++    pending: "Start the agent",
++    running: "Starting the agent",
++    done: "Agent ready",
++    failed: "The agent didn't start",
++  },
++};
++
++/** The step's label for its state, e.g. `"Cloning repositories"`. */
++export function stepLabel(
++  step: Pick<StartupStep, "id" | "state">,
++  kind: SandboxStartup["kind"],
++): string {
++  if (step.id === "sandbox" && kind === "wake") {
++    return step.state === "done"
++      ? "Sandbox started again"
++      : step.state === "failed"
++        ? "Couldn't start the sandbox again"
++        : "Starting the stopped sandbox";
++  }
++  const labels = STEP_LABELS[step.id];
++  return labels[step.state] ?? (step.state === "skipped" ? labels.done : labels.running);
++}
++
++/** A duration for the card, e.g. `"0.4s"`, `"12s"`, `"1m 05s"`. */
++export function formatStepDuration(seconds: number): string {
++  if (seconds < 0) return "0s";
++  if (seconds < 10) return `${(Math.round(seconds * 10) / 10).toFixed(1)}s`;
++  if (seconds < 60) return `${Math.round(seconds)}s`;
++  const s = Math.round(seconds);
++  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
++}
++
++/** A running clock for the card's header, e.g. `"0:18"`. */
++export function formatClock(seconds: number): string {
++  const s = Math.max(0, Math.floor(seconds));
++  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
++}
++
++/** How long a step or child took, or has been running, at `now` (Unix seconds). */
++export function elapsed(
++  item: { state: StartupState; startedAt: number | null; endedAt: number | null },
++  now: number,
++): number | null {
++  if (item.startedAt === null || item.state === "pending" || item.state === "skipped") return null;
++  return (item.endedAt ?? now) - item.startedAt;
++}
++
++/** The text Copy error details puts on the clipboard. */
++export function problemDetails(problem: StartupProblem): string {
++  const parts = [problem.title, problem.body];
++  if (problem.raw) parts.push(problem.raw);
++  if (problem.log && !(problem.raw ?? "").includes(problem.log)) {
++    parts.push(`${problem.source ?? "log"}:\n${problem.log}`);
++  }
++  return parts.filter(Boolean).join("\n\n");
++}
++
++/** Whether the start still has something in flight (a setup script can outlive it). */
++export function startupInFlight(startup: SandboxStartup): boolean {
++  if (startup.outcome === "running") return true;
++  return startup.steps.some(
++    (step) => step.id === "setup" && (step.state === "running" || step.state === "pending"),
++  );
++}
+diff --git a/web/src/lib/sessionsApi.ts b/web/src/lib/sessionsApi.ts
+index 76a2a8b15..a662baea5 100644
+--- a/web/src/lib/sessionsApi.ts
++++ b/web/src/lib/sessionsApi.ts
+@@ -18,6 +18,7 @@ import { isAndroidShell, isElectronShell, isIOSShell } from "@/lib/nativeBridge"
+ import { setSessionHost } from "./sessionHost";
+ import { backgroundSessionTitlesRequestHeaders } from "./backgroundSessionTitlesPreferences";
+ import { parseBackgroundTasks } from "./sse";
++import { parseSandboxStartup } from "./sandboxStartup";
+ import type {
+   BackgroundTaskInfo,
+   ModelUsage,
+@@ -256,6 +257,8 @@ interface SessionResponseWire {
+    * `omnigent.server.schemas.SandboxStatus`.
+    */
+   sandbox_status?: SandboxStatus | null;
++  /** The session's current or last sandbox start, step by step (this deployment). */
++  startup?: unknown;
+   mcp_startup?: Record<string, McpServerStartup> | null;
+   /**
+    * Response id of the turn currently in flight, or absent/null when
+@@ -364,6 +367,7 @@ function sessionFromWire(wire: SessionResponseWire): Session {
+       : {}),
+     terminalPending: wire.terminal_pending ?? false,
+     sandboxStatus: wire.sandbox_status ?? null,
++    sandboxStartup: parseSandboxStartup(wire.startup),
+     mcpStartup: wire.mcp_startup ?? null,
+     activeResponseId: wire.active_response_id ?? null,
+   };
+diff --git a/web/src/lib/sse.ts b/web/src/lib/sse.ts
+index b24162927..614d10493 100644
+--- a/web/src/lib/sse.ts
++++ b/web/src/lib/sse.ts
+@@ -58,6 +58,7 @@ import type {
+   SessionTodosEvent,
+   SessionSandboxStatusEvent,
+   SessionTailscaleEvent,
++  SessionStartupEvent,
+   McpServerStartup,
+   SessionMcpStartupEvent,
+   SessionTerminalPendingEvent,
+@@ -76,6 +77,7 @@ import { parseRateLimits } from "./rateLimits";
+ import { parseFastMode } from "./fastMode";
+ import { parseSubscription } from "./subscriptions";
+ import { parseTailscaleHost } from "./tailscale";
++import { parseSandboxStartup } from "./sandboxStartup";
+ import { routingExtrasFromWire } from "./routingDecision";
+ import type {
+   BackgroundTaskInfo,
+@@ -783,6 +785,17 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+       pending,
+     } satisfies SessionTerminalPendingEvent;
+   }
++  if (eventType === "session.startup") {
++    const conversationId = data.conversation_id;
++    if (typeof conversationId !== "string" || !conversationId) return null;
++    const startup = parseSandboxStartup(data.startup);
++    if (startup === null) return null;
++    return {
++      type: "session_startup",
++      conversationId,
++      startup,
++    } satisfies SessionStartupEvent;
++  }
+   if (eventType === "session.tailscale") {
+     const conversationId = data.conversation_id;
+     if (typeof conversationId !== "string" || !conversationId) return null;
+diff --git a/web/src/lib/types.ts b/web/src/lib/types.ts
+index 8541e55ad..dcca8a509 100644
+--- a/web/src/lib/types.ts
++++ b/web/src/lib/types.ts
+@@ -12,6 +12,7 @@
+ 
+ import type { ConversationItem } from "./conversationItems";
+ import type { McpServerStartup } from "./events";
++import type { SandboxStartup } from "./sandboxStartup";
+ import type { MessageContentBlock } from "./blocks";
+ 
+ /** Reference to a conversation, as returned on response objects. */
+@@ -503,6 +504,12 @@ export interface Session {
+    * sees the current stage.
+    */
+   sandboxStatus?: SandboxStatus | null;
++  /**
++   * The session's current or last sandbox start, step by step, from this
++   * deployment's server (`omnigent_startup`). `null` until the session
++   * starts a sandbox while the server runs.
++   */
++  sandboxStartup?: SandboxStartup | null;
+   /**
+    * Per-MCP-server startup state for native harness sessions
+    * (codex-native). Present while the harness boots its MCP servers or
+diff --git a/web/src/pages/ChatIndicators.tsx b/web/src/pages/ChatIndicators.tsx
+index afff73114..00d841bc1 100644
+--- a/web/src/pages/ChatIndicators.tsx
++++ b/web/src/pages/ChatIndicators.tsx
+@@ -55,6 +55,8 @@ export function ConnectionIndicator({
+ }) {
+   const terminalFirst = useTerminalFirst();
+   const sandboxStatus = useChatStore((s) => s.sandboxStatus);
++  // This deployment's startup card shows a failed start itself.
++  const startupFailed = useChatStore((s) => s.sandboxStartup?.outcome === "failed");
+   // Genuinely-unreachable states get the reconnect banner, for
+   // both terminal-first and regular sessions. `runner_asleep` (host up,
+   // runner relaunches on the next message), `host_asleep` (resumable managed
+@@ -68,7 +70,7 @@ export function ConnectionIndicator({
+     // instead — but still suppresses the liveness bands below, which
+     // would misread the not-yet-bound session as stranded.
+     if (sandboxStatus.stage === "failed") {
+-      return <SandboxFailedIndicator status={sandboxStatus} />;
++      return startupFailed ? null : <SandboxFailedIndicator status={sandboxStatus} />;
+     }
+     return null;
+   }
+@@ -155,6 +157,8 @@ export function ConnectionIndicator({
+  */
+ export function RunnerStartingIndicator({ variant }: { variant: "hero" | "row" }) {
+   const sandboxStatus = useChatStore((s) => s.sandboxStatus);
++  // This deployment's startup card replaces the one-line stage cue.
++  const startupRunning = useChatStore((s) => s.sandboxStartup?.outcome === "running");
+   // `ready` never reaches the store (cleared) and `failed` renders the
+   // destructive band in ConnectionIndicator — only in-flight stages
+   // with known copy show here.
+@@ -162,7 +166,7 @@ export function RunnerStartingIndicator({ variant }: { variant: "hero" | "row" }
+     sandboxStatus !== null && sandboxStatus.stage !== "failed"
+       ? SANDBOX_STAGE_LABELS[sandboxStatus.stage]
+       : undefined;
+-  if (sandboxLabel === undefined) return null;
++  if (sandboxLabel === undefined || startupRunning) return null;
+   const line = `${sandboxLabel}…`;
+   // role=status + aria-live so assistive tech announces the transient wait;
+   // the spinner glyph itself is decorative (aria-hidden).
+diff --git a/web/src/shell/MainTerminalView.startup.test.tsx b/web/src/shell/MainTerminalView.startup.test.tsx
+new file mode 100644
+index 000000000..1c0fdb2ed
+--- /dev/null
++++ b/web/src/shell/MainTerminalView.startup.test.tsx
+@@ -0,0 +1,161 @@
++import type * as UseTerminalsModule from "@/hooks/useTerminals";
++
++import { cleanup, render, screen } from "@testing-library/react";
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { MemoryRouter } from "react-router-dom";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { type TerminalInfo, useTerminals } from "@/hooks/useTerminals";
++import type { SandboxStartup } from "@/lib/sandboxStartup";
++import { useChatStore } from "@/store/chatStore";
++import { MainTerminalView } from "./MainTerminalView";
++import type { TerminalFirstContextValue } from "./TerminalFirstContext";
++import { TerminalFirstContextProvider } from "./TerminalFirstContext";
++
++vi.mock("@/components/blocks/TerminalView", () => ({
++  TerminalView: ({ onResume }: { onResume?: () => void }) => (
++    <div data-testid="terminal-view">
++      {onResume && (
++        <button type="button" onClick={onResume}>
++          Resume session
++        </button>
++      )}
++    </div>
++  ),
++}));
++vi.mock("@/hooks/useTerminals", async (importOriginal) => ({
++  ...(await importOriginal<typeof UseTerminalsModule>()),
++  useTerminals: vi.fn(),
++}));
++vi.mock("@/hooks/useSession", () => ({
++  useSession: () => ({
++    session: { hostId: "host_1", hostResumable: true, labels: {} },
++    isLoading: false,
++    error: null,
++  }),
++}));
++
++const useTerminalsMock = vi.mocked(useTerminals);
++
++const AGENT_TERMINAL: TerminalInfo = {
++  id: "terminal_claude_main",
++  name: "claude",
++  session: "main",
++  running: true,
++};
++
++const NOW = Date.now() / 1000;
++
++const WAKING: SandboxStartup = {
++  kind: "wake",
++  outcome: "running",
++  startedAt: NOW - 5,
++  endedAt: null,
++  steps: [
++    {
++      id: "sandbox",
++      state: "running",
++      detail: null,
++      tone: null,
++      startedAt: NOW - 5,
++      endedAt: null,
++      children: [],
++    },
++  ],
++  failure: null,
++  warning: null,
++  logSize: 1,
++};
++
++function ctx(): TerminalFirstContextValue {
++  return {
++    isClaudeNative: true,
++    isNativeWrapper: true,
++    isTerminalFirst: true,
++    isShellView: false,
++    view: "terminal",
++    terminalViewKey: null,
++    setView: () => {},
++    terminalsAvailable: true,
++    terminalStartingUp: false,
++  } as TerminalFirstContextValue;
++}
++
++function renderView(terminals: TerminalInfo[], onResume = vi.fn()) {
++  useTerminalsMock.mockReturnValue({ terminals, isLoading: false, error: null });
++  render(
++    <QueryClientProvider client={new QueryClient()}>
++      <MemoryRouter>
++        <TerminalFirstContextProvider value={ctx()}>
++          <MainTerminalView conversationId="conv_1" runnerOnline={false} onResume={onResume} />
++        </TerminalFirstContextProvider>
++      </MemoryRouter>
++    </QueryClientProvider>,
++  );
++  return onResume;
++}
++
++beforeEach(() => useTerminalsMock.mockReset());
++
++afterEach(() => {
++  cleanup();
++  useChatStore.setState({ conversationId: null, sandboxStatus: null, sandboxStartup: null });
++});
++
++describe("MainTerminalView while the sandbox starts", () => {
++  it("offers no Resume while the sandbox wakes, and shows how the start is going", () => {
++    useChatStore.setState({
++      conversationId: "conv_1",
++      sandboxStatus: { stage: "starting", error: null },
++      sandboxStartup: WAKING,
++    });
++    renderView([]);
++
++    expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
++    expect(screen.queryByText("The harness is not running.")).toBeNull();
++    expect(screen.getByTestId("sandbox-startup-card")).toBeInTheDocument();
++    expect(screen.getByText("Starting your sandbox again")).toBeInTheDocument();
++  });
++
++  it("keeps the passive startup state when there is no startup record", () => {
++    useChatStore.setState({
++      conversationId: "conv_1",
++      sandboxStatus: { stage: "provisioning", error: null },
++      sandboxStartup: null,
++    });
++    renderView([]);
++
++    expect(screen.getByText("Starting up…")).toBeInTheDocument();
++    expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
++  });
++
++  it("hides the stale terminal's Resume while the sandbox wakes", async () => {
++    useChatStore.setState({
++      conversationId: "conv_1",
++      sandboxStatus: { stage: "connecting", error: null },
++      sandboxStartup: WAKING,
++    });
++    renderView([AGENT_TERMINAL]);
++
++    expect(await screen.findByTestId("terminal-view")).toBeInTheDocument();
++    expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
++  });
++
++  it("offers Resume again once nothing is starting", async () => {
++    useChatStore.setState({ conversationId: "conv_1", sandboxStatus: null, sandboxStartup: null });
++    renderView([AGENT_TERMINAL]);
++
++    expect(await screen.findByRole("button", { name: "Resume session" })).toBeInTheDocument();
++  });
++
++  it("ignores another session's start", () => {
++    useChatStore.setState({
++      conversationId: "conv_other",
++      sandboxStatus: { stage: "starting", error: null },
++      sandboxStartup: WAKING,
++    });
++    renderView([]);
++
++    expect(screen.getByRole("button", { name: "Resume session" })).toBeInTheDocument();
++  });
++});
+diff --git a/web/src/shell/MainTerminalView.tsx b/web/src/shell/MainTerminalView.tsx
+index 875da960c..d4007a8d9 100644
+--- a/web/src/shell/MainTerminalView.tsx
++++ b/web/src/shell/MainTerminalView.tsx
+@@ -22,6 +22,8 @@ import {
+   terminalTabKey,
+   useTerminals,
+ } from "@/hooks/useTerminals";
++import { SessionStartupCard } from "@/components/chat/SandboxStartupCard";
++import { useChatStore } from "@/store/chatStore";
+ import { useTerminalFirst } from "./TerminalFirstContext";
+ import { TerminalStatusBadge } from "./terminalStatus";
+ import { useTerminalStatuses } from "./useTerminalStatuses";
+@@ -94,10 +96,26 @@ export function MainTerminalView({
+   const [resumePending, setResumePending] = useState(false);
+   const [resumeError, setResumeError] = useState<string | null>(null);
+   const runnerOffline = runnerOnline === false;
++  // This session's sandbox is starting (a launch, or a wake from Start now,
++  // a message or Resume): resuming again would only start another wake, so
++  // there's no Resume until it has started or failed. Its startup card shows
++  // how it's going instead (this deployment).
++  const sandboxLaunching = useChatStore(
++    (s) =>
++      s.conversationId === conversationId &&
++      s.sandboxStatus !== null &&
++      s.sandboxStatus.stage !== "failed",
++  );
++  const hasStartup = useChatStore(
++    (s) => s.conversationId === conversationId && s.sandboxStartup !== null,
++  );
++  const startupFailed = useChatStore(
++    (s) => s.conversationId === conversationId && s.sandboxStartup?.outcome === "failed",
++  );
+   // A session whose terminal is coming up (fresh cold boot, relaunch, or
+   // server-side PTY creation) must never read as stopped — the health poll
+   // can report the runner down before the boot registers.
+-  const startingUp = terminalFirstCtx?.terminalStartingUp === true;
++  const startingUp = terminalFirstCtx?.terminalStartingUp === true || sandboxLaunching;
+   // Resource cleanup can beat the health poll when a session is stopped. An
+   // empty, non-starting inventory is therefore resumable even before liveness
+   // has caught up and explicitly reported the runner offline.
+@@ -203,19 +221,32 @@ export function MainTerminalView({
+             // Passive startup state: same centered geometry as the stopped
+             // state so the swap doesn't jump, and nothing actionable — the
+             // terminal connects on its own. role=status announces the wait.
+-            <div
+-              role="status"
+-              aria-live="polite"
+-              data-testid="terminal-starting-up"
+-              className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
+-            >
+-              <Loader2Icon className="size-7 animate-spin text-muted-foreground" aria-hidden />
+-              <div className="space-y-1">
+-                <p className="font-medium text-foreground text-ui">Starting up…</p>
+-                <p className="text-muted-foreground text-sm">
+-                  The terminal will connect automatically.
+-                </p>
++            sandboxLaunching && hasStartup ? (
++              <div
++                data-testid="terminal-starting-up"
++                className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-6"
++              >
++                <SessionStartupCard awaitingReply className="max-w-xl" />
++              </div>
++            ) : (
++              <div
++                role="status"
++                aria-live="polite"
++                data-testid="terminal-starting-up"
++                className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center"
++              >
++                <Loader2Icon className="size-7 animate-spin text-muted-foreground" aria-hidden />
++                <div className="space-y-1">
++                  <p className="font-medium text-foreground text-ui">Starting up…</p>
++                  <p className="text-muted-foreground text-sm">
++                    The terminal will connect automatically.
++                  </p>
++                </div>
+               </div>
++            )
++          ) : startupFailed ? (
++            <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-6">
++              <SessionStartupCard awaitingReply className="max-w-xl" />
+             </div>
+           ) : resumeAvailable ? (
+             <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+@@ -283,7 +314,9 @@ export function MainTerminalView({
+                       readOnly={readOnly}
+                       active={visible}
+                       directAttachUrl={activeTerminal.directAttachUrl}
+-                      onResume={runnerOffline && onResume ? handleResume : undefined}
++                      onResume={
++                        runnerOffline && onResume && !sandboxLaunching ? handleResume : undefined
++                      }
+                       resumePending={resumePending}
+                       onStateChange={(state) => {
+                         setTerminalConnectionState(activeTerminal.id, state);
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index 3c38193b9..f4ad82433 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -150,6 +150,7 @@ import type { StoredReplyDraft } from "@/lib/replyDraft";
+ import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
+ import { fastModeFromLabels, isFastModeCommand } from "@/lib/fastMode";
+ import { tailscaleHostFromLabels } from "@/lib/tailscale";
++import type { SandboxStartup } from "@/lib/sandboxStartup";
+ import { subscriptionFromLabels } from "@/lib/subscriptions";
+ 
+ export interface SendOptions {
+@@ -945,6 +946,12 @@ export interface ConversationState {
+    * launch.
+    */
+   sandboxStatus: SandboxStatus | null;
++  /**
++   * The session's current or last sandbox start, step by step, for the
++   * startup card. Seeded from the snapshot's `startup` field on bind and
++   * replaced by `session.startup` events; kept after the start finishes.
++   */
++  sandboxStartup: SandboxStartup | null;
+   /**
+    * Native MCP startup progress, cleared when startup settles or live
+    * assistant text arrives. Failures/cancellations stay in host diagnostics,
+@@ -1775,6 +1782,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+   runnerLaunchedAt: null,
+   viewers: [],
+   sandboxStatus: null,
++  sandboxStartup: null,
+   mcpStartup: null,
+   mcpStartupLaunch: { pending: false, dismissed: false },
+   abortController: null,
+@@ -3738,6 +3746,7 @@ function sessionBindingPatch(
+   | "codexModelOptions"
+   | "terminalPending"
+   | "sandboxStatus"
++  | "sandboxStartup"
+   | "mcpStartup"
+   | "mcpStartupLaunch"
+ > {
+@@ -3773,6 +3782,7 @@ function sessionBindingPatch(
+     codexModelOptions: session.codexModelOptions ?? [],
+     terminalPending: session.terminalPending ?? false,
+     sandboxStatus: session.sandboxStatus ?? null,
++    sandboxStartup: session.sandboxStartup ?? null,
+     ...mcpStartupSnapshotPatch(session, state, launchBeforeFetch),
+   };
+ }
+@@ -4317,6 +4327,7 @@ function reconnectStatusPatch(
+   if (fastMode !== null) patch.fastMode = fastMode;
+   const subscription = subscriptionFromLabels(session.labels);
+   if (subscription !== null) patch.subscription = subscription;
++  if (session.sandboxStartup != null) patch.sandboxStartup = session.sandboxStartup;
+   const tailscaleHost = tailscaleHostFromLabels(session.labels);
+   if (tailscaleHost !== null) patch.tailscaleHost = tailscaleHost;
+   // `waiting` is a TURN-END snapshot (the turn finished; only background work
+@@ -6216,6 +6227,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+     case "session_tailscale":
+       applyToConversation({ tailscaleHost: event.host });
+       return;
++    case "session_startup":
++      applyToConversation({ sandboxStartup: event.startup });
++      return;
+     case "session_sandbox_status":
+       // Advance the managed-sandbox provisioning indicator. `ready`
+       // clears it — from then on the session looks like any
+diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
+index ebe75278e..6740ef3c9 100644
+--- a/web/src/store/conversationState.ts
++++ b/web/src/store/conversationState.ts
+@@ -58,6 +58,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
+   terminalPending: true,
+   viewers: true,
+   sandboxStatus: true,
++  sandboxStartup: true,
+   mcpStartup: true,
+   mcpStartupLaunch: true,
+   btwSidechat: true,
+@@ -128,6 +129,7 @@ export function createInitialConversationState(): ConversationState {
+     terminalPending: false,
+     viewers: [],
+     sandboxStatus: null,
++    sandboxStartup: null,
+     mcpStartup: null,
+     mcpStartupLaunch: { pending: false, dismissed: false },
+     btwSidechat: null,

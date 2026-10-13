@@ -1,0 +1,1154 @@
+How a sandbox session starts, step by step, server side.
+
+Upstream reports four coarse stages (session.sandbox_status), and almost all
+of a start happened under the one the web UI calls "Connecting host". This
+keeps a finer record of each session's current or last start in
+omnigent_startup (images/server/omnigent_startup.py): its steps (create the
+sandbox, schedule the Pod, get the runner image, clone each repository, start
+the host, run each setup script, start the agent), their times, why a failed
+start failed in plain words, and its log. The snapshot carries it as
+`startup`, and every change goes out as a session.startup event.
+GET /v1/sessions/{id}/startup-log serves the log, and the runner Pod reports
+its setup scripts, Tailscale and Docker to POST /v1/hosts/{host_id}/startup
+with its launch token (omnigent_startup_api).
+
+Where the steps come from:
+
+- Every stage _publish_sandbox_status publishes goes to the record. The launch
+  and wake tasks bind their session (a context variable that asyncio.to_thread
+  copies), so the launcher's Pod poll finds it.
+- KubernetesSandboxLauncher._wait_for_pod_running already read the Pod every
+  2 seconds; it now also reports the PodScheduled condition, image waiting
+  reasons, the events of the Sandbox and its Pod, and the workspace-prep log.
+  The clone script prints "omnigent-prep: cloning|cloned|failed|kept <name>"
+  for each repository, which moves its row.
+- _wait_for_host_online reads the host container's log into the startup log
+  while it waits.
+- The host container gets OMNIGENT_STARTUP_REPORT_URL for the Pod's reports.
+
+Errors that used to look generic:
+
+- A clone that fails twice ends the start, with the workspace-prep log. A
+  Sandbox's Pod never reaches phase Failed, so a bad Git token used to wait
+  out the whole Pod budget and fail without git's output.
+- "did not create a child pod" now carries the Sandbox's events (quota or an
+  admission policy).
+- A host that never connects is reported with its container's log, not a
+  pointer to /tmp/omnigent-host.log, which only exists for other providers.
+- A runner that exits while starting ends the wait at once, with its log tail
+  (host.runner_exited), instead of after the 30-second connect timeout.
+- A message sent while the sandbox starts waits as long as the start may take:
+  the host's online timeout plus the launcher's Pod budget, not 240 seconds.
+
+Cancel start marks the record cancelled before it publishes "ready".
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0015-environment-menu.patch.
+
+diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
+index 0f2960e3b..447489f14 100644
+--- a/omnigent/onboarding/sandboxes/kubernetes.py
++++ b/omnigent/onboarding/sandboxes/kubernetes.py
+@@ -58,6 +58,7 @@ from collections.abc import Mapping, Sequence
+ from typing import TYPE_CHECKING, ClassVar, Literal, cast
+ 
+ import click
++import omnigent_startup as _startup
+ from omnigent_repo_env import checkouts_env as _repo_env_checkouts
+ from omnigent_repo_env import clone_command as _repo_env_clone_command
+ from omnigent_repo_env import pod_volumes as _repo_env_volumes
+@@ -631,6 +632,13 @@ def _render_workspace_prep_command(
+             script += "      exit 1\n    fi\n  fi\n"
+             script += f"  mkdir -- {target}\n  mkdir -- {temporary}\n  touch -- {marker}\n"
+             script += '  if [ -z "$wired" ]; then wire_credentials; wired=1; fi\n'
++            # The server follows each clone through these lines in the log
++            # (omnigent_startup.observe_container_log).
++            progress = {
++                verb: shlex.quote(f"{_startup.PREP_MARKER} {verb} {dirname}")
++                for verb in ("cloning", "cloned", "failed", "kept")
++            }
++            script += f"  echo {progress['cloning']}\n"
+             # A repository with its own GIT_TOKEN variable clones with it.
+             clone = _repo_env_clone_command(
+                 repo.url, f"{branch}-- {shlex.quote(repo.url)} {staged_clone}", staged_clone
+@@ -639,9 +647,11 @@ def _render_workspace_prep_command(
+                 f"  ({clone} "
+                 f"&& replace_empty_dir {staged_clone} {target} "
+                 f"&& rm -f -- {marker} && rmdir -- {temporary} "
+-                f"|| {{ rmdir -- {target} 2>/dev/null || true; exit 1; }}) "
++                f"&& echo {progress['cloned']} "
++                f"|| {{ echo {progress['failed']}; rmdir -- {target} 2>/dev/null || true; exit 1; }}) "
+                 f'& pids="$pids $!"\n'
+             )
++            script += f"else\n  echo {progress['kept']}\n"
+             script += "fi\n"
+         script += 'rc=0\nfor p in $pids; do wait "$p" || rc=1; done\n'
+         script += '[ "$rc" -eq 0 ]\n'
+@@ -989,6 +999,14 @@ def build_job_manifest(
+     )
+     if repo_checkouts is not None:
+         host_env.append(repo_checkouts)
++    # Where the Pod reports its setup scripts, Tailscale and Docker while it
++    # starts (omnigent-startup-report in the runner image), with its launch token.
++    host_env.append(
++        {
++            "name": _startup.REPORT_URL_ENV_VAR,
++            "value": f"{server_url.rstrip('/')}/v1/hosts/{host_id}/startup",
++        }
++    )
+ 
+     host_container: dict[str, object] = {
+         "name": _CONTAINER_NAME,
+@@ -1156,6 +1174,8 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
+     - The host container is in ``CrashLoopBackOff`` (the kubelet is still
+       retrying, but the container is crash-looping and unlikely to self-heal
+       during the launch window).
++    - An init container has failed a second time (a Sandbox's Pod has no
++      ``backoffLimit``, so it never reaches phase ``Failed``).
+ 
+     :param pod: A ``V1Pod`` read from the API.
+     :returns: The failed container name + summary, or ``None``.
+@@ -1185,6 +1205,23 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
+                 )
+         return _CONTAINER_NAME, "entered terminal phase 'Failed'"
+ 
++    # The init container failed twice. A Sandbox's Pod never reaches phase
++    # Failed: the kubelet keeps retrying it (Init:CrashLoopBackOff) until the
++    # deadline. A clone that fails twice, such as one with a bad token, won't
++    # succeed the third time, so stop on the second failure, with its log.
++    for cs in getattr(status, "init_container_statuses", None) or []:
++        state = getattr(cs, "state", None)
++        terminated = getattr(state, "terminated", None)
++        if terminated is None and getattr(state, "waiting", None) is not None:
++            terminated = getattr(getattr(cs, "last_state", None), "terminated", None)
++        code = getattr(terminated, "exit_code", 0) if terminated is not None else 0
++        restarts = getattr(cs, "restart_count", 0) or 0
++        if code and isinstance(restarts, int) and restarts >= 1:
++            reason = getattr(terminated, "reason", None) or "Error"
++            return getattr(cs, "name", _INIT_CONTAINER_NAME), (
++                f"workspace prep failed (exit {code}, {reason}, after {restarts + 1} attempts)"
++            )
++
+     # Host container in CrashLoopBackOff while the Pod is still Running —
+     # the kubelet is retrying but the host is crash-looping.
+     for cs in getattr(status, "container_statuses", None) or []:
+@@ -1593,6 +1630,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+         workspace = f"{_HOME_DIR}/workspace"
+         if on_stage is not None:
+             on_stage("starting")
++        # The Pod's own reports find the session's startup record by its host.
++        _startup.attach_host(host_id)
+         core = self._load_core()
+         click.echo(
+             f"▸ Creating Kubernetes {self.workload_kind} '{sandbox_id}' in "
+@@ -1735,18 +1774,28 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+ 
+         core = self._load_core()
+         timeout_s = _resolve_pod_ready_timeout_s(self._pod_ready_timeout_s)
++        _startup.note_pod_budget(timeout_s)
+         deadline = time.monotonic() + timeout_s
+         last_reason: str | None = None
+         pod_name: str | None = None
++        # The session whose start this is, for its startup record (None outside
++        # a server launch or wake).
++        session_id = _startup.current_session()
+         while True:
+             # Discover the child Pod if we haven't yet.
+             if pod_name is None:
+                 pod_name = self._find_job_pod(namespace, job_name)
+                 if pod_name is None:
++                    if session_id is not None:
++                        _startup.observe_events(session_id, self._event_items(namespace, job_name))
+                     if time.monotonic() >= deadline:
++                        # Quota or an admission policy can keep the controller
++                        # from creating the Pod; its events say so.
++                        events = self._recent_events(namespace, job_name)
+                         raise click.ClickException(
+                             f"Kubernetes sandbox job '{job_name}' did not create a "
+                             f"child pod within {timeout_s}s."
++                            + (f" Recent events: {events}" if events else "")
+                         )
+                     time.sleep(_POD_READY_POLL_S)
+                     continue
+@@ -1800,6 +1849,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+                 time.sleep(_POD_READY_POLL_S)
+                 continue
+ 
++            if session_id is not None:
++                self._report_progress(session_id, namespace, pod_name, pod)
+             # Check for terminal failure BEFORE accepting Running — a
+             # crash-looping host container stays in phase Running under
+             # OnFailure, so phase alone is not proof of liveness.
+@@ -1834,6 +1885,116 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+                 )
+             time.sleep(_POD_READY_POLL_S)
+ 
++    def _report_progress(
++        self, session_id: str, namespace: str, pod_name: str, pod: object
++    ) -> None:
++        """
++        Tell the session's startup record what this poll shows: the Pod's
++        state, its new events, and the init container's clone log.
++
++        Best-effort: progress must never fail a start.
++
++        :param session_id: Session whose start this is.
++        :param namespace: Namespace the Pod lives in.
++        :param pod_name: The Pod.
++        :param pod: The Pod as this poll read it.
++        """
++        try:
++            _startup.observe_pod(session_id, pod)
++            _startup.observe_events(session_id, self._event_items(namespace, pod_name))
++            status = getattr(pod, "status", None)
++            for cs in getattr(status, "init_container_statuses", None) or []:
++                if getattr(cs, "name", None) != _INIT_CONTAINER_NAME:
++                    continue
++                state = getattr(cs, "state", None)
++                if (
++                    getattr(state, "running", None)
++                    or getattr(state, "terminated", None)
++                    or getattr(getattr(cs, "last_state", None), "terminated", None)
++                ):
++                    _startup.observe_container_log(
++                        session_id,
++                        _INIT_CONTAINER_NAME,
++                        self._container_log_text(namespace, pod_name, _INIT_CONTAINER_NAME),
++                    )
++        except Exception:  # noqa: BLE001 - progress is best-effort
++            _logger.debug("startup progress for %s failed", pod_name, exc_info=True)
++
++    def _event_items(self, namespace: str, name: str) -> list[object]:
++        """
++        Return the events of the object(s) called *name*: the Sandbox and its
++        Pod share one. Empty when they can't be read.
++
++        :param namespace: Namespace they live in.
++        :param name: The Sandbox's (and its Pod's) name.
++        :returns: ``V1Event`` objects.
++        """
++        from kubernetes.client.rest import ApiException
++        from urllib3.exceptions import HTTPError
++
++        try:
++            event_list = self._load_core().list_namespaced_event(
++                namespace,
++                field_selector=f"involvedObject.name={name}",
++                _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
++            )
++        except (ApiException, HTTPError):
++            return []
++        return list(getattr(event_list, "items", None) or [])
++
++    def _container_log_text(
++        self, namespace: str, pod_name: str, container: str, tail_lines: int = 500
++    ) -> str:
++        """
++        Return up to *tail_lines* lines of a container's log, or empty.
++
++        :param namespace: Namespace the Pod lives in.
++        :param pod_name: The Pod.
++        :param container: The container whose log to read.
++        :param tail_lines: How many lines from the end.
++        :returns: The log, or ``""``.
++        """
++        from kubernetes.client.rest import ApiException
++        from urllib3.exceptions import HTTPError
++
++        try:
++            return cast(
++                str,
++                self._load_core().read_namespaced_pod_log(
++                    pod_name,
++                    namespace,
++                    container=container,
++                    tail_lines=tail_lines,
++                    _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
++                ),
++            )
++        except (ApiException, HTTPError):
++            return ""
++
++    def container_log(self, sandbox_id: str, container: str, tail_lines: int = 500) -> str:
++        """
++        Return the end of a container's log in *sandbox_id*'s Pod, or empty.
++
++        For the startup log while the host connects, and for the error when it
++        doesn't. Best-effort.
++
++        :param sandbox_id: The sandbox (Job or ``Sandbox``) name.
++        :param container: ``"host"`` or ``"workspace-prep"``.
++        :param tail_lines: How many lines from the end.
++        :returns: The log, or ``""``.
++        """
++        _ensure_sdk()
++        try:
++            namespace = self._resolve_namespace()
++            pod_name = self._find_job_pod(namespace, sandbox_id)
++            if pod_name is None:
++                return ""
++            return self._container_log_text(namespace, pod_name, container, tail_lines)
++        except Exception:  # noqa: BLE001 - best-effort
++            return ""
++        finally:
++            self._close_clients()
++
+     def _pod_failure_message(
+         self,
+         namespace: str,
+diff --git a/omnigent/server/app.py b/omnigent/server/app.py
+index fefbdda98..23ae95882 100644
+--- a/omnigent/server/app.py
++++ b/omnigent/server/app.py
+@@ -117,6 +117,8 @@ from omnigent.server.routes.sessions import (
+ )
+ from omnigent.server.routes.sharing import create_sharing_router
+ from omnigent_repo_env_api import create_repo_env_router
++import omnigent_startup as _startup
++from omnigent_startup_api import create_startup_router
+ from omnigent_subscriptions_api import create_subscriptions_router
+ from omnigent.server.routes.terminal_attach import create_terminal_attach_router
+ from omnigent.server.routes.usage import create_usage_router
+@@ -3424,6 +3426,8 @@ def create_app(
+         # cancel any pending disconnect-grace timer so it can't re-run the
+         # disconnect reconciliation on top of it.
+         _cancel_disconnect_grace(runner_id)
++        # A sandbox start waiting for this runner stops waiting (omnigent_startup).
++        _startup.runner_exited(runner_id, error)
+         affected = await asyncio.to_thread(
+             conversation_store.list_conversations_by_runner_id, runner_id
+         )
+@@ -3703,6 +3707,31 @@ def create_app(
+             prefix="/v1",
+             tags=["hosts"],
+         )
++        # How a sandbox session starts: the web UI's startup log, and the
++        # runner Pod's own reports (omnigent_startup_api).
++        app.include_router(
++            create_startup_router(
++                conversation_store=conversation_store,
++                host_store=host_store,
++                auth_provider=auth_provider,
++                permission_store=permission_store,
++            ),
++            prefix="/v1",
++            tags=["hosts"],
++        )
++
++        def _publish_startup(session_id: str, record: dict[str, Any]) -> None:
++            from omnigent.server.routes._sessions.common import session_stream
++            from omnigent.server.schemas import SessionStartupEvent
++
++            session_stream.publish(
++                session_id,
++                SessionStartupEvent(
++                    type="session.startup", conversation_id=session_id, startup=record
++                ).model_dump(),
++            )
++
++        _startup.set_publisher(_publish_startup)
+ 
+     # Per-user connection routes (/v1/connections/{provider}/*): connect /
+     # callback / status / disconnect. One registry entry per provider; each is
+diff --git a/omnigent/server/managed_hosts.py b/omnigent/server/managed_hosts.py
+index 8b6ee6dde..9cd7deab5 100644
+--- a/omnigent/server/managed_hosts.py
++++ b/omnigent/server/managed_hosts.py
+@@ -180,6 +180,7 @@ from functools import partial
+ from typing import TYPE_CHECKING, Any, cast
+ 
+ import click
++import omnigent_startup as _startup
+ from fastapi import HTTPException
+ 
+ from omnigent.db.db_models import LABEL_VALUE_MAX_LEN
+@@ -308,9 +309,14 @@ KUBERNETES_MANAGED_TOKEN_TTL_S = 7 * 24 * 3600
+ # can re-authenticate its tunnel across reconnects while a leaked token can't.
+ 
+ # Where the in-sandbox host process logs — named in launch-failure
+-# errors so an operator knows where to look inside the sandbox.
++# errors so an operator knows where to look inside the sandbox. Not on
++# Kubernetes, whose host logs to its container instead.
+ _HOST_LOG_PATH = "/tmp/omnigent-host.log"
+ 
++# How often the host container's log is read into the startup log while the
++# host connects.
++_HOST_LOG_POLL_INTERVAL_S = 3.0
++
+ # How long a message POST waits for an in-flight managed launch to
+ # settle before giving up (see ManagedLaunchTracker). Covers the full
+ # launch/wake pipeline ON TOP OF the host-registration wait
+@@ -3878,7 +3884,7 @@ async def _register_and_start_host(
+             agent_name=agent_name,
+             on_stage=on_stage,
+         )
+-        await _wait_for_host_online(host_store, host_id)
++        await _wait_for_host_online(host_store, host_id, launcher=launcher, sandbox_id=sandbox_id)
+     except Exception as exc:
+         # The provider allocated the sandbox before registration or startup
+         # could fail, so both failures must attempt cleanup.
+@@ -3927,28 +3933,62 @@ async def _register_and_start_host(
+     return workspace
+ 
+ 
+-async def _wait_for_host_online(host_store: HostStore, host_id: str) -> None:
++async def _wait_for_host_online(
++    host_store: HostStore,
++    host_id: str,
++    *,
++    launcher: SandboxHostLauncher | None = None,
++    sandbox_id: str | None = None,
++) -> None:
+     """
+     Poll the hosts table until the sandbox host registers, or time out.
+ 
++    With a launcher that can read the sandbox's container logs (Kubernetes),
++    the host container's log goes to the session's startup log while it
++    connects, and its tail into the error when it doesn't.
++
+     :param host_store: Persistent host registrations.
+     :param host_id: The launched host's identifier.
++    :param launcher: The launcher that started the host, or ``None``.
++    :param sandbox_id: The sandbox it started, or ``None``.
+     :raises HTTPException: 502 when the host does not come online
+         within :data:`MANAGED_HOST_ONLINE_TIMEOUT_S`.
+     """
++    session_id = _startup.current_session()
++    read_log = getattr(launcher, "container_log", None) if sandbox_id else None
++    if not callable(read_log):
++        read_log = None
++    _startup.step(session_id, "host", "running", "Connecting to Omnigent")
+     deadline = time.monotonic() + MANAGED_HOST_ONLINE_TIMEOUT_S
++    next_log = 0.0
+     while time.monotonic() < deadline:
+         if await asyncio.to_thread(host_store.is_online, host_id):
++            if read_log is not None and session_id is not None:
++                _startup.observe_container_log(
++                    session_id, "host", await asyncio.to_thread(read_log, sandbox_id, "host")
++                )
++            _startup.step(session_id, "host", "done")
+             return
++        if read_log is not None and session_id is not None and time.monotonic() >= next_log:
++            next_log = time.monotonic() + _HOST_LOG_POLL_INTERVAL_S
++            _startup.observe_container_log(
++                session_id, "host", await asyncio.to_thread(read_log, sandbox_id, "host")
++            )
+         await asyncio.sleep(_ONLINE_POLL_INTERVAL_S)
+-    raise HTTPException(
+-        status_code=502,
+-        detail=(
++    if read_log is not None:
++        tail = (await asyncio.to_thread(read_log, sandbox_id, "host", 30)).strip()
++        detail = f"managed host did not come online within {MANAGED_HOST_ONLINE_TIMEOUT_S}s" + (
++            f". Container 'host' log tail: {tail[-1500:]}"
++            if tail
++            else "; its container logged nothing"
++        )
++    else:
++        detail = (
+             f"managed host did not come online within "
+             f"{MANAGED_HOST_ONLINE_TIMEOUT_S}s — check {_HOST_LOG_PATH} "
+             "inside the sandbox"
+-        ),
+-    )
++        )
++    raise HTTPException(status_code=502, detail=detail)
+ 
+ 
+ def _launcher_for_teardown(
+@@ -4221,7 +4261,9 @@ async def resume_managed_host(
+                 on_stage=on_stage,
+                 agent_name=agent_name,
+             )
+-            await _wait_for_host_online(host_store, host.host_id)
++            await _wait_for_host_online(
++                host_store, host.host_id, launcher=launcher, sandbox_id=sandbox_id
++            )
+         except SandboxGoneError:
+             raise
+         except Exception as exc:
+diff --git a/omnigent/server/routes/_sessions/helpers.py b/omnigent/server/routes/_sessions/helpers.py
+index 54e06a475..0a596cfc4 100644
+--- a/omnigent/server/routes/_sessions/helpers.py
++++ b/omnigent/server/routes/_sessions/helpers.py
+@@ -31,6 +31,7 @@ from pathlib import PurePath
+ from typing import Any, Final, Literal, cast
+ 
+ import httpx
++import omnigent_startup as _startup
+ from fastapi import (
+     HTTPException,
+     Request,
+@@ -5047,6 +5048,11 @@ def _publish_sandbox_status_impl(session_id: str, stage: str, error: str | None
+     # cleanup publishes the outcome once it has stopped.
+     if settle_cancelled_start(session_id, stage):
+         return
++    # The finer record the web UI's startup card shows (omnigent_startup).
++    try:
++        _startup.on_stage(session_id, stage, error)
++    except Exception:  # noqa: BLE001 - progress must never break a start
++        _logger.debug("startup progress for %s failed", session_id, exc_info=True)
+     # "ready" evicts: from then on the session looks like any
+     # host-bound session and the snapshot carries no launch state.
+     # Failures stay cached (mirroring ManagedLaunchTracker retention)
+@@ -5910,6 +5916,9 @@ async def _provision_managed_sandbox(
+     """
+     from omnigent.server.managed_hosts import launch_managed_host, relaunch_managed_host
+ 
++    # The launcher reports the Pod's progress to this session's startup record.
++    _startup.bind(session_id)
++
+     def _on_stage(stage: str) -> None:
+         """
+         Relay a launch-pipeline stage to the session's progress surface.
+@@ -5986,12 +5995,43 @@ async def _wait_for_managed_runner_tunnel(
+     """
+     from omnigent.server.routes import sessions as _facade
+ 
+-    runner = await tunnel_registry.wait_for_runner(
+-        runner_id,
+-        timeout_s=_facade._HOST_RELAUNCH_RUNNER_CONNECT_TIMEOUT_S,
++    _startup.log(
++        session_id, "agent", f"Launched the agent's runner {runner_id}; waiting for it to connect"
++    )
++    # A runner that exits while starting is reported by its host straight
++    # away (host.runner_exited); don't wait out the connect timeout for it.
++    connect = asyncio.ensure_future(
++        tunnel_registry.wait_for_runner(
++            runner_id,
++            timeout_s=_facade._HOST_RELAUNCH_RUNNER_CONNECT_TIMEOUT_S,
++        )
+     )
++    exited = asyncio.ensure_future(_startup.runner_exit(runner_id))
++    try:
++        await asyncio.wait({connect, exited}, return_when=asyncio.FIRST_COMPLETED)
++    finally:
++        exited.cancel()
++    runner = connect.result() if connect.done() else None
+     if runner is not None:
++        _startup.log(session_id, "agent", "The agent's runner connected")
+         return True
++    if not connect.done():
++        connect.cancel()
++        error = exited.result() if exited.done() and not exited.cancelled() else ""
++        _logger.error(
++            "Managed runner exited while starting",
++            extra=debug_event(
++                "runner_connect_failed",
++                session_id=session_id,
++                runner_id=runner_id,
++                stage="runner_connect",
++                error_code="runner_exited",
++            ),
++        )
++        reason = f"the agent exited while starting: {error}".rstrip(": ")
++        tracker.fail(session_id, reason)
++        _publish_sandbox_status(session_id, "failed", reason)
++        return False
+     _logger.error(
+         "Managed runner connection timed out",
+         extra=debug_event(
+@@ -6024,16 +6064,21 @@ async def _await_settled_managed_launch(launch: ManagedLaunch) -> None:
+     """
+     from omnigent.server.managed_hosts import MANAGED_LAUNCH_RENDEZVOUS_TIMEOUT_S
+ 
+-    try:
+-        await asyncio.wait_for(
+-            launch.settled.wait(),
+-            timeout=MANAGED_LAUNCH_RENDEZVOUS_TIMEOUT_S,
+-        )
+-    except asyncio.TimeoutError:
+-        raise OmnigentError(
+-            "The session's managed sandbox is still provisioning; try again shortly",
+-            code=ErrorCode.RUNNER_UNAVAILABLE,
+-        ) from None
++    # The budget covers the host's online wait, not how long Kubernetes may
++    # take to start the Pod before it; add that, as configured.
++    waited = 0.0
++    while True:
++        budget = MANAGED_LAUNCH_RENDEZVOUS_TIMEOUT_S + _startup.pod_budget_s()
++        try:
++            await asyncio.wait_for(launch.settled.wait(), timeout=max(1.0, budget - waited))
++            break
++        except asyncio.TimeoutError:
++            waited = budget
++            if waited >= MANAGED_LAUNCH_RENDEZVOUS_TIMEOUT_S + _startup.pod_budget_s():
++                raise OmnigentError(
++                    "The session's managed sandbox is still provisioning; try again shortly",
++                    code=ErrorCode.RUNNER_UNAVAILABLE,
++                ) from None
+     if launch.error is not None:
+         raise OmnigentError(
+             f"The session's managed sandbox failed to launch: {launch.error}",
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index a65d17cee..ac2dfc39e 100644
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
+ from typing import Any, Literal, cast
+ 
+ import httpx
++import omnigent_startup as _startup
+ from fastapi import (
+     HTTPException,
+     Request,
+@@ -1232,6 +1233,7 @@ def _build_session_response(
+         # once the launch succeeds; a failed launch is retained with
+         # its reason. Populated by _publish_sandbox_status.
+         sandbox_status=_session_sandbox_status_cache.get(conv.id),
++        startup=_startup.snapshot(conv.id),
+         # Replay harness MCP-server startup state (codex-native) so a
+         # client opening the session mid-startup sees the startup band.
+         mcp_startup=_session_mcp_startup_cache.get(conv.id),
+@@ -4172,6 +4174,7 @@ def _kick_managed_wake_impl(
+     # Seed the progress indicator immediately — the user is watching the
+     # session page when the wake fires (the composer let them send into a
+     # host_asleep session).
++    _startup.expect_wake(session_id)
+     _publish_sandbox_status(session_id, "provisioning")
+     wake_agent_store = getattr(app_state, "agent_store", None)
+     if wake_agent_store is None:
+@@ -4253,6 +4256,8 @@ async def _run_managed_wake(
+     from omnigent.server.routes import sessions as _facade
+ 
+     sandbox_config = deployment_with_inference_snapshot(sandbox_config, conv.inference_snapshot)
++    # The launcher reports the Pod's progress to this session's startup record.
++    _startup.bind(session_id)
+     host_id = conv.host_id
+     if host_id is None:
+         reason = "managed session has no host binding"
+diff --git a/omnigent/server/routes/sessions/routes_events.py b/omnigent/server/routes/sessions/routes_events.py
+index 09cd06c17..8416df842 100644
+--- a/omnigent/server/routes/sessions/routes_events.py
++++ b/omnigent/server/routes/sessions/routes_events.py
+@@ -11,6 +11,7 @@ from collections.abc import Callable
+ from typing import Any, Literal, cast
+ 
+ import httpx
++import omnigent_startup as _startup
+ from fastapi import (
+     APIRouter,
+     HTTPException,
+@@ -1247,6 +1248,7 @@ def register_events_routes(
+                     and stop_host is not None
+                     and host_resume_supported(stop_host, stop_sandbox_config)
+                 ):
++                    _startup.cancelled(session_id)
+                     _publish_sandbox_status(session_id, "ready")
+                     cancel_managed_start(session_id, stop_tracker, _after_cancelled_start)
+                 await suspend_managed_host(stop_host_id, host_store_for_stop, stop_sandbox_config)
+diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
+index 5b2c5873b..2628c652c 100644
+--- a/omnigent/server/schemas.py
++++ b/omnigent/server/schemas.py
+@@ -2226,6 +2226,10 @@ class SessionResponse(BaseModel):
+     inference_error: str | None = None
+     terminal_pending: bool = False
+     sandbox_status: SandboxStatus | None = None
++    # The session's current or last sandbox start, step by step, for the web
++    # UI's startup card (omnigent_startup.snapshot). ``None`` until the
++    # session starts a sandbox while this server runs.
++    startup: dict[str, Any] | None = None
+     # Per-MCP-server startup state for native harness sessions
+     # (codex-native), present while the harness boots its MCP servers or
+     # when servers were cancelled/failed. ``None`` otherwise. Sourced from
+@@ -3183,6 +3187,23 @@ class SessionUsageEvent(_SSEEventBase):
+     subscription: str | None = None
+ 
+ 
++class SessionStartupEvent(_SSEEventBase):
++    """
++    A managed session's sandbox start moved on: a step started, finished or
++    failed. Carries the whole record (``omnigent_startup.snapshot``), which is
++    small; its log is read from ``GET /v1/sessions/{id}/startup-log``.
++
++    :param type: Always ``"session.startup"``.
++    :param conversation_id: Session identifier.
++    :param startup: The start: ``kind``, ``outcome``, ``steps``, ``failure``,
++        ``warning`` and times.
++    """
++
++    type: Literal["session.startup"]
++    conversation_id: str
++    startup: dict[str, Any]
++
++
+ class SessionTailscaleEvent(_SSEEventBase):
+     """
+     The tailnet name of a managed session's runner Pod.
+@@ -4777,6 +4798,7 @@ ServerStreamEvent = Annotated[
+     | SessionTodosEvent
+     | SessionTerminalPendingEvent
+     | SessionSandboxStatusEvent
++    | SessionStartupEvent
+     | SessionTailscaleEvent
+     | SessionMcpStartupEvent
+     | SessionModelOptionsEvent
+diff --git a/tests/onboarding/sandboxes/test_startup_progress_k8s.py b/tests/onboarding/sandboxes/test_startup_progress_k8s.py
+new file mode 100644
+index 000000000..abfb94aad
+--- /dev/null
++++ b/tests/onboarding/sandboxes/test_startup_progress_k8s.py
+@@ -0,0 +1,217 @@
++"""How the Kubernetes launcher reports a sandbox's start (this deployment).
++
++The launcher feeds ``omnigent_startup``: each repository's clone, the Pod's
++scheduling, image and containers, and the init container's log. It also stops
++a start whose clone failed twice instead of waiting out the deadline.
++"""
++
++from __future__ import annotations
++
++import os
++import subprocess
++from pathlib import Path
++from types import SimpleNamespace
++
++import click
++import omnigent_startup as startup
++import pytest
++
++import omnigent.onboarding.sandboxes.kubernetes as k8s
++from omnigent.onboarding.sandboxes.base import RUNNER_PYTHON
++from omnigent.onboarding.sandboxes.types import RepoWorkspace
++from tests.onboarding.sandboxes.test_kubernetes import (  # noqa: F401 - fixture
++    _MANIFEST_KW,
++    _FakeBatch,
++    _FakeCore,
++    _launcher,
++    _pod,
++    fake_clients,
++)
++
++SESSION = "conv_k8s_startup"
++
++
++@pytest.fixture(autouse=True)
++def _fresh_record() -> None:
++    startup._records.clear()
++    startup._host_sessions.clear()
++    startup.set_publisher(None)
++
++
++def _init(
++    *, state: str, exit_code: int | None = None, restarts: int = 0, last_exit: int | None = None
++):
++    states = {
++        "running": SimpleNamespace(running=SimpleNamespace(), waiting=None, terminated=None),
++        "waiting": SimpleNamespace(
++            running=None,
++            waiting=SimpleNamespace(reason="CrashLoopBackOff", message=""),
++            terminated=None,
++        ),
++        "terminated": SimpleNamespace(
++            running=None,
++            waiting=None,
++            terminated=SimpleNamespace(exit_code=exit_code, reason="Error"),
++        ),
++    }
++    return SimpleNamespace(
++        name="workspace-prep",
++        state=states[state],
++        last_state=SimpleNamespace(
++            terminated=SimpleNamespace(exit_code=last_exit, reason="Error")
++            if last_exit is not None
++            else None
++        ),
++        restart_count=restarts,
++    )
++
++
++def test_a_clone_that_fails_once_is_retried() -> None:
++    pod = _pod(phase="Pending", init_statuses=[_init(state="terminated", exit_code=128)])
++    assert k8s._terminal_failure(pod) is None
++
++
++def test_a_clone_that_fails_twice_ends_the_start() -> None:
++    waiting = _pod(
++        phase="Pending", init_statuses=[_init(state="waiting", restarts=1, last_exit=128)]
++    )
++    failure = k8s._terminal_failure(waiting)
++    assert failure is not None
++    assert failure[0] == "workspace-prep"
++    assert "workspace prep failed (exit 128, Error, after 2 attempts)" in failure[1]
++    running_again = _pod(
++        phase="Pending", init_statuses=[_init(state="running", restarts=1, last_exit=128)]
++    )
++    assert k8s._terminal_failure(running_again) is None
++
++
++def _run_prep(
++    workspace: Path, monkeypatch: pytest.MonkeyPatch, git: str
++) -> subprocess.CompletedProcess[str]:
++    """Run the real clone script with the runner's Python and git stubbed."""
++    command = k8s._render_workspace_prep_command(
++        str(workspace),
++        [RepoWorkspace(url="https://github.com/org/repo.git", branch=None, repo_name="repo")],
++        ":",
++        "host-test",
++    )
++    script = (
++        # The credential wiring is a no-op; the atomic rename runs for real.
++        f"function {RUNNER_PYTHON} {{\n"
++        '  if [ "$1" = "-c" ]; then return 0; fi; command python3 "$@"\n'
++        "}\n"
++        f'git() {{\n  if [ "$1" = "-C" ]; then command git "$@"; return; fi\n{git}\n}}\n'
++        + command[2]
++    )
++    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
++    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
++    monkeypatch.delenv("GIT_DIR", raising=False)
++    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
++    return subprocess.run(
++        ["bash", "-c", script], capture_output=True, text=True, env=os.environ.copy()
++    )
++
++
++_CLONES = (
++    '  clone_dir="${@: -1}"\n'
++    '  mkdir -p "$clone_dir/.git"\n'
++    '  printf "ref: refs/heads/main\\n" > "$clone_dir/.git/HEAD"'
++)
++
++
++def test_the_clone_prints_a_line_per_repository(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    workspace = tmp_path / "workspace"
++    result = _run_prep(workspace, monkeypatch, _CLONES)
++    assert result.returncode == 0, result.stderr
++    assert result.stdout.splitlines() == [
++        "omnigent-prep: cloning repo",
++        "omnigent-prep: cloned repo",
++    ]
++
++    # A woken Pod finds a real checkout and keeps it.
++    subprocess.run(["rm", "-rf", str(workspace / "repo")], check=True)
++    subprocess.run(["git", "init", "-q", str(workspace / "repo")], check=True)
++    result = _run_prep(workspace, monkeypatch, _CLONES)
++    assert result.returncode == 0, result.stderr
++    assert result.stdout.splitlines() == ["omnigent-prep: kept repo"]
++
++
++def test_a_failed_clone_says_which_repository(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    result = _run_prep(
++        tmp_path / "workspace",
++        monkeypatch,
++        "  echo \"fatal: Authentication failed for 'https://github.com/org/repo.git/'\" >&2\n"
++        "  return 128",
++    )
++    assert result.returncode != 0
++    assert "omnigent-prep: failed repo" in result.stdout.splitlines()
++    assert "omnigent-prep: cloned repo" not in result.stdout
++
++
++def test_the_host_container_knows_where_to_report() -> None:
++    manifest = k8s.build_job_manifest(
++        **{**_MANIFEST_KW, "host_id": "host_1", "server_url": "http://omnigent.svc:8000/"}
++    )
++    host = manifest["spec"]["template"]["spec"]["containers"][0]  # type: ignore[index]
++    env = {e["name"]: e.get("value") for e in host["env"]}
++    assert env["OMNIGENT_STARTUP_REPORT_URL"] == "http://omnigent.svc:8000/v1/hosts/host_1/startup"
++
++
++def test_the_pod_wait_reports_progress_to_the_session(
++    fake_clients: tuple[_FakeCore, _FakeBatch],  # noqa: F811 - the imported fixture
++) -> None:
++    core, _ = fake_clients
++    startup.on_stage(SESSION, "provisioning")
++    scheduled = [SimpleNamespace(type="PodScheduled", status="True", reason=None, message=None)]
++    cloning = _pod(
++        phase="Pending",
++        init_statuses=[_init(state="running")],
++        conditions=scheduled,
++    )
++    running = _pod(
++        phase="Running",
++        init_statuses=[_init(state="terminated", exit_code=0)],
++        container_statuses=[
++            SimpleNamespace(
++                name="host",
++                state=SimpleNamespace(running=SimpleNamespace(), waiting=None, terminated=None),
++                last_state=SimpleNamespace(terminated=None),
++                restart_count=0,
++            )
++        ],
++        conditions=scheduled,
++    )
++    core.pod_list_items = [cloning]
++    core.read_queue = [cloning, running]
++    core.logs["workspace-prep"] = "omnigent-prep: cloning repo\nCloning into 'repo'...\n"
++    startup.bind(SESSION)
++    _launcher()._wait_for_pod_running("omnigent-sandboxes", "omnigent-job-1")
++
++    record = startup.snapshot(SESSION)
++    assert record is not None
++    steps = {step["id"]: step for step in record["steps"]}
++    assert steps["schedule"]["state"] == "done"
++    assert steps["image"]["state"] == "done"
++    assert steps["clone"]["state"] == "done"
++    assert [c["name"] for c in steps["clone"]["children"]] == ["repo"]
++    assert steps["host"]["state"] == "running"
++    page = startup.log_page(SESSION)
++    assert page is not None
++    assert "Cloning into 'repo'..." in [line["text"] for line in page["lines"]]
++
++
++def test_a_missing_pod_explains_itself_with_events(
++    fake_clients: tuple[_FakeCore, _FakeBatch],  # noqa: F811 - the imported fixture
++) -> None:
++    core, _ = fake_clients
++    core.events = [SimpleNamespace(reason="FailedCreate", message="exceeded quota: runner-quota")]
++    launcher = _launcher()
++    launcher._pod_ready_timeout_s = 0
++    with pytest.raises(click.ClickException) as raised:
++        launcher._wait_for_pod_running("omnigent-sandboxes", "omnigent-job-1")
++    assert "did not create a child pod" in raised.value.message
++    assert "FailedCreate: exceeded quota: runner-quota" in raised.value.message
+diff --git a/tests/server/test_startup_progress.py b/tests/server/test_startup_progress.py
+new file mode 100644
+index 000000000..752f82eed
+--- /dev/null
++++ b/tests/server/test_startup_progress.py
+@@ -0,0 +1,241 @@
++"""The server side of the startup card (this deployment).
++
++Covers the startup routes, the runner wait that ends when the runner exits,
++and the host log read while the host connects. The record itself is tested in
++the deployment repo (tests/test_startup_progress.py).
++"""
++
++from __future__ import annotations
++
++import asyncio
++from types import SimpleNamespace
++
++import omnigent_startup as startup
++import pytest
++from fastapi import FastAPI, HTTPException
++from fastapi.testclient import TestClient
++from omnigent_startup_api import create_startup_router
++
++import omnigent.server.managed_hosts as managed_hosts
++from omnigent.server.managed_hosts import ManagedLaunchTracker
++from omnigent.server.routes._sessions import helpers
++
++SESSION = "conv_startup_routes"
++
++
++@pytest.fixture(autouse=True)
++def _fresh_record() -> None:
++    startup._records.clear()
++    startup._host_sessions.clear()
++    startup._runner_exits.clear()
++    startup.set_publisher(None)
++
++
++class _HostStore:
++    def __init__(self, online_after: int | None = None) -> None:
++        self.polls = 0
++        self.online_after = online_after
++
++    def resolve_launch_token(self, host_id: str, token: str) -> object | None:
++        return (
++            SimpleNamespace(user_id="alice") if (host_id, token) == ("host_1", "secret") else None
++        )
++
++    def is_online(self, host_id: str) -> bool:  # noqa: ARG002
++        self.polls += 1
++        return self.online_after is not None and self.polls > self.online_after
++
++
++def _client() -> TestClient:
++    app = FastAPI()
++    app.include_router(
++        create_startup_router(
++            conversation_store=SimpleNamespace(),  # type: ignore[arg-type]
++            host_store=_HostStore(),  # type: ignore[arg-type]
++            auth_provider=None,
++            permission_store=None,
++        ),
++        prefix="/v1",
++    )
++    return TestClient(app)
++
++
++def test_the_pod_reports_with_its_launch_token() -> None:
++    startup.on_stage(SESSION, "provisioning")
++    startup.attach_host("host_1", SESSION)
++    client = _client()
++    report = {"steps": [{"step": "setup", "child": "roadpass", "state": "running"}]}
++
++    assert client.post("/v1/hosts/host_1/startup", json=report).status_code == 401
++    assert (
++        client.post(
++            "/v1/hosts/host_1/startup", json=report, headers={"X-Omnigent-Host-Token": "nope"}
++        ).status_code
++        == 401
++    )
++    response = client.post(
++        "/v1/hosts/host_1/startup", json=report, headers={"X-Omnigent-Host-Token": "secret"}
++    )
++    assert response.json() == {"accepted": True}
++    record = startup.snapshot(SESSION)
++    assert record is not None
++    assert [s["id"] for s in record["steps"]] == ["sandbox", "host", "setup", "agent"]
++
++
++def test_a_report_that_is_not_an_object_is_refused() -> None:
++    response = _client().post(
++        "/v1/hosts/host_1/startup",
++        content=b"[1, 2]",
++        headers={"X-Omnigent-Host-Token": "secret", "Content-Type": "application/json"},
++    )
++    assert response.status_code == 400
++
++
++def test_the_log_is_read_after_a_line() -> None:
++    startup.on_stage(SESSION, "provisioning")
++    startup.log(SESSION, "k8s", "Scheduled: to vm-omnigent")
++    client = _client()
++
++    page = client.get(f"/v1/sessions/{SESSION}/startup-log").json()
++    assert [line["text"] for line in page["lines"]] == [
++        "Creating the sandbox",
++        "Scheduled: to vm-omnigent",
++    ]
++    assert page["live"] is True
++    later = client.get(f"/v1/sessions/{SESSION}/startup-log?after={page['next']}").json()
++    assert later["lines"] == []
++    assert client.get("/v1/sessions/conv_none/startup-log").json() == {
++        "started_at": None,
++        "lines": [],
++        "next": 0,
++        "live": False,
++    }
++
++
++class _Tunnels:
++    def __init__(self, delay: float, runner: object | None) -> None:
++        self.delay = delay
++        self.runner = runner
++
++    async def wait_for_runner(self, runner_id: str, timeout_s: float) -> object | None:  # noqa: ARG002
++        await asyncio.sleep(self.delay)
++        return self.runner
++
++
++def test_a_runner_that_exits_ends_the_wait_with_its_log(monkeypatch: pytest.MonkeyPatch) -> None:
++    published: list[tuple[str, str | None]] = []
++    monkeypatch.setattr(
++        helpers,
++        "_publish_sandbox_status",
++        lambda _sid, stage, error=None: published.append((stage, error)),
++    )
++    tracker = ManagedLaunchTracker()
++    tracker.begin(SESSION)
++
++    async def scenario() -> bool:
++        wait = asyncio.ensure_future(
++            helpers._wait_for_managed_runner_tunnel(
++                SESSION, "runner_1", _Tunnels(30, None), tracker
++            )
++        )
++        await asyncio.sleep(0.05)
++        startup.runner_exited("runner_1", "runner process exited with code 1\nImportError: x")
++        return await asyncio.wait_for(wait, 2)
++
++    assert asyncio.run(scenario()) is False
++    stage, error = published[-1]
++    assert stage == "failed"
++    assert (
++        error
++        == "the agent exited while starting: runner process exited with code 1\nImportError: x"
++    )
++    launch = tracker.get(SESSION)
++    assert launch is not None and launch.error == error
++
++
++def test_a_runner_that_connects_ends_the_wait() -> None:
++    tracker = ManagedLaunchTracker()
++    tracker.begin(SESSION)
++    connected = asyncio.run(
++        helpers._wait_for_managed_runner_tunnel(
++            SESSION, "runner_2", _Tunnels(0, object()), tracker
++        )
++    )
++    assert connected is True
++
++
++class _Launcher:
++    def __init__(self) -> None:
++        self.reads: list[tuple[str, str]] = []
++
++    def container_log(self, sandbox_id: str, container: str, tail_lines: int = 500) -> str:  # noqa: ARG002
++        self.reads.append((sandbox_id, container))
++        return "omnigent host: connecting to http://omnigent:8000\nERROR: bad token\n"
++
++
++def test_the_host_log_explains_a_host_that_never_connects(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setattr(managed_hosts, "MANAGED_HOST_ONLINE_TIMEOUT_S", 0.05)
++    monkeypatch.setattr(managed_hosts, "_ONLINE_POLL_INTERVAL_S", 0.01)
++    startup.on_stage(SESSION, "provisioning")
++    launcher = _Launcher()
++
++    async def scenario() -> None:
++        startup.bind(SESSION)
++        await managed_hosts._wait_for_host_online(
++            _HostStore(),
++            "host_1",
++            launcher=launcher,
++            sandbox_id="omnigent-x",  # type: ignore[arg-type]
++        )
++
++    with pytest.raises(HTTPException) as raised:
++        asyncio.run(scenario())
++    assert "Container 'host' log tail:" in raised.value.detail
++    assert "ERROR: bad token" in raised.value.detail
++    assert "/tmp/omnigent-host.log" not in raised.value.detail
++    assert ("omnigent-x", "host") in launcher.reads
++
++
++def test_the_host_step_finishes_when_it_connects(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setattr(managed_hosts, "_ONLINE_POLL_INTERVAL_S", 0.01)
++    startup.on_stage(SESSION, "provisioning")
++
++    async def scenario() -> None:
++        startup.bind(SESSION)
++        await managed_hosts._wait_for_host_online(
++            _HostStore(online_after=2),
++            "host_1",
++            launcher=_Launcher(),
++            sandbox_id="omnigent-x",  # type: ignore[arg-type]
++        )
++
++    asyncio.run(scenario())
++    record = startup.snapshot(SESSION)
++    assert record is not None
++    host = next(s for s in record["steps"] if s["id"] == "host")
++    assert host["state"] == "done"
++    page = startup.log_page(SESSION)
++    assert page is not None
++    assert "ERROR: bad token" in [line["text"] for line in page["lines"]]
++
++
++def test_a_message_waits_as_long_as_the_pod_may_take(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setattr(managed_hosts, "MANAGED_LAUNCH_RENDEZVOUS_TIMEOUT_S", 0.05)
++    monkeypatch.setattr(startup, "_pod_budget_s", 0.0)
++    tracker = ManagedLaunchTracker()
++    tracker.begin(SESSION)
++    launch = tracker.get(SESSION)
++    assert launch is not None
++
++    async def scenario() -> None:
++        async def settle() -> None:
++            # The launch notes its Pod budget once it reaches the Pod wait.
++            startup.note_pod_budget(0.2)
++            await asyncio.sleep(0.12)
++            tracker.finish(SESSION)
++
++        task = asyncio.ensure_future(settle())
++        await helpers._await_settled_managed_launch(launch)
++        await task
++
++    asyncio.run(scenario())

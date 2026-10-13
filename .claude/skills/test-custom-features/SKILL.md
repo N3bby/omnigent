@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, and the environment menu with Stop sandbox. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, the environment menu with Stop sandbox, and the startup card. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -91,6 +91,7 @@ PASS  images/server/patches/0012-repo-checkouts.patch
 PASS  images/server/patches/0013-subscriptions.patch
 PASS  images/server/patches/0014-session-subscription.patch
 PASS  images/server/patches/0015-environment-menu.patch
+PASS  images/server/patches/0016-startup-progress.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -112,6 +113,7 @@ PASS  images/server/web-patches/0017-subscriptions.patch
 PASS  images/server/web-patches/0018-composer-subscription.patch
 PASS  images/server/web-patches/0019-project-repositories.patch
 PASS  images/server/web-patches/0020-environment-menu.patch
+PASS  images/server/web-patches/0021-startup-progress.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -149,7 +151,7 @@ python -m unittest discover -s tests
 ```
 
 **Expected:** `configuration and manifests for <env> are valid` for both, and
-the unit tests end in `OK` (17 tests on 2026-10-07). Warnings that
+the unit tests end in `OK` (144 tests, 12 skipped, on 2026-10-13). Warnings that
 `ansible-playbook` or `shellcheck` isn't installed are fine. The tests cover
 the rendered settings behind several features, such as idle-session timing and
 the per-session home volume. They are the local part of the `Validate`
@@ -164,9 +166,9 @@ Image builds apply the patches, build the frontend, and check Python
 compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
-`@` file search, a project's repositories or the environment menu, or changing
-their native message, composer, file-index, project settings, Stop, sandbox
-lifecycle or runner idle paths:
+`@` file search, a project's repositories, the environment menu or the
+startup card, or changing their native message, composer, file-index, project
+settings, Stop, sandbox lifecycle, sandbox start or runner idle paths:
 
 ```bash
 .claude/skills/test-custom-features/scripts/check-patched-tests
@@ -177,18 +179,21 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx` | 896 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py` | 69 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx` | 927 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py` | 84 passed |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
 cases; a project's repositories adds 8 frontend cases; the environment menu
 and Stop sandbox add the four frontend files after it (93 cases, most of
 `HostBadge.test.tsx` and `ComposerSubscription.test.tsx` being earlier ones)
-and the seven backend files after the file index (44 cases). These are
+and the seven backend files after the file index (44 cases); the startup
+card adds the last three frontend files (31 cases) and the last two backend
+files (15 cases). These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
-stop, cancel, report and keep-running logic, not a live cluster. The
+stop, cancel, report and keep-running logic, not a live cluster. So does the
+startup card's, which runs the real clone script with Git stubbed. The
 fast-mode backend uses mocked CLI transports: a pass verifies command routing
 and lifecycle handling, not live Claude/Codex availability or billing. The
 file-index backend lists real temporary folders and Git repositories.
@@ -604,7 +609,11 @@ after the next message it names `feature-check`. Switch back, then remove
     - **Waking:** send a message. The menu says **Starting** and ticks off
       **Starting the Pod**, **Starting the agent** and **Connecting**; then
       the agent answers. `/home/omnigent/feature-check-stop` is still there,
-      and the web server isn't running.
+      and the web server isn't running. Below your message, the startup card
+      is headed **Starting the stopped sandbox** with a running clock, then
+      **Sandbox started again**, **Repositories kept from last time** and
+      **Setup scripts already ran** (when the session has repositories and
+      scripts). When the agent answers, it's gone.
     - **Cancel start:** stop the sandbox again from the environment menu, send
       a message, and while the menu says **Starting**, choose **Cancel start**.
       The menu says **Stopped** straight away, the message isn't sent, and
@@ -625,6 +634,27 @@ after the next message it names `feature-check`. Switch back, then remove
       submenu ticks **Usual idle timeout** again.
 
     Then delete the file.
+
+16. **The startup card:** it needs new sandboxes, so it's left to you.
+    - **A start:** start a new session on the sandbox with a repository that
+      has a setup script, and
+      send a message. Below it, the card lists the steps as they happen, with
+      times: **Sandbox created**, **Pod scheduled**, **Runner image ready**,
+      **Repositories cloned** with the repository's own line, **Host
+      connected** with **Tailscale** and **Docker**, the setup script, then
+      **Agent ready**. **Log** shows lines from **Kubernetes**, **Clone**,
+      **Host** and **Setup script**, and the repository's variable values show
+      as `[hidden]`. When the agent answers, the card is gone.
+    - **A failed clone:** start a new session on the same repository with a
+      branch that doesn't exist, such as `feature-check-missing`. Within about
+      a minute, not after the start's timeout, the card says **Couldn't clone
+      <repository>** and `The branch feature-check-missing doesn't exist in
+      <repository>.`, with Git's last lines, **Repository variables**, **Show
+      log** and **Copy error details**. The chat shows no other error for it.
+      Delete that session.
+    - **A terminal session:** in a session that opens in the agent's terminal,
+      stop the sandbox and send a message: the card is where **Starting up…**
+      was, and there's no **Resume session** button until the agent is up.
 
 ## 7. Clean up
 

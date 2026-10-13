@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Run the fast-mode and fuzzy "@" file search backend regressions and related
-# frontend suites, the project repositories frontend suites, and the
-# environment menu's backend and frontend suites, against a fresh, fully
-# patched upstream checkout. Keep logs and JUnit reports.
+# frontend suites, the project repositories frontend suites, the environment
+# menu's backend and frontend suites, and the startup card's, against a fresh,
+# fully patched upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -91,6 +91,7 @@ PY
       tests/onboarding/sandboxes/test_agent_sandbox_suspend.py \
       tests/onboarding/sandboxes/test_agent_sandbox_environment.py \
       tests/runner/test_environment_report.py \
+      tests/onboarding/sandboxes/test_startup_progress_k8s.py tests/server/test_startup_progress.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \
@@ -102,6 +103,8 @@ PY
       src/shell/ProjectSettingsDialog.test.tsx src/shell/NewChatDialog.projectPrefill.test.tsx \
       src/components/composer/EnvironmentMenu.test.tsx src/components/HostBadge.test.tsx \
       src/shell/Sidebar.stop.test.tsx src/components/composer/ComposerSubscription.test.tsx \
+      src/components/chat/SandboxStartupCard.test.tsx src/lib/sandboxStartup.test.ts \
+      src/shell/MainTerminalView.startup.test.tsx \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

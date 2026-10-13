@@ -25,6 +25,13 @@ mkdir -p "$state" /run/tailscale
 chmod 700 "$state"
 
 ts() { tailscale --socket="$socket" "$@"; }
+# Shows how joining goes in the session while the sandbox starts
+# (omnigent-startup-report); never fails this service.
+report() {
+    command -v omnigent-startup-report >/dev/null 2>&1 || return 0
+    omnigent-startup-report step host Tailscale "$@" </dev/null >/dev/null 2>&1 || true
+}
+report running "Joining your tailnet as $name"
 
 # The Pod has no /dev/net/tun. Userspace networking still delivers tailnet
 # connections to the Pod's own ports, and serves Tailscale SSH.
@@ -47,6 +54,7 @@ esac
 delay=15
 until ts up --auth-key="$key" --hostname="$name" --advertise-tags="$tags" --ssh --timeout=60s; do
     echo "omnigent-tailscale: could not join the tailnet; retrying in ${delay}s" >&2
+    report running "Couldn't join the tailnet; retrying in ${delay}s"
     sleep "$delay"
     [ "$delay" -ge 300 ] || delay=$((delay * 2))
 done
@@ -55,7 +63,13 @@ done
 # the name in Omnigent doesn't reach this Pod.
 dns=$(ts status --json | python3 -c 'import json, sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
 case $dns in
-    "$name".*) echo "omnigent-tailscale: joined as $dns" ;;
-    *) echo "omnigent-tailscale: joined as $dns because another device is named $name; Omnigent shows $name" >&2 ;;
+    "$name".*)
+        echo "omnigent-tailscale: joined as $dns"
+        report done "$dns"
+        ;;
+    *)
+        echo "omnigent-tailscale: joined as $dns because another device is named $name; Omnigent shows $name" >&2
+        report done "Joined as $dns, because another device is named $name"
+        ;;
 esac
 wait

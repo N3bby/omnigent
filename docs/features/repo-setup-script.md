@@ -75,10 +75,14 @@ pre-commit install
    `/home/omnigent/workspace/roadpass`, as root, with the same environment an
    agent's shell gets: the repository's [variables](repo-env.md), and the
    tools from [mise](mise-runtimes.md). It doesn't get your input, and its
-   output goes to a log, not to the chat.
+   output goes to a log, not to the chat. While the sandbox starts, the
+   session's [startup card](startup-progress.md) shows the script running,
+   and its **Log** shows the output as it comes.
 3. The agent waits for it for up to 45 seconds. A script that takes longer
    keeps running beside the agent.
-4. The agent is told how it went, in its
+4. The startup card says when it finished. When it failed, the card says so
+   with the script's last lines, and stays until you dismiss it.
+5. The agent is told how it went, in its
    [instructions](repo-instructions.md#what-the-agent-sees):
 
    - **finished:** where its output is.
@@ -161,7 +165,9 @@ before.
   repository's variables and mise from `/etc/profile.d` but not the Pod's own
   environment, which holds the host's launch token. Its own log is
   `/run/omnigent-repo-setup.log`. When it's done, it touches
-  `/run/omnigent-repo-setup/done`. A lock keeps it to one copy.
+  `/run/omnigent-repo-setup/done`. A lock keeps it to one copy. It reports
+  each script, and follows its log, through `omnigent-startup-report` (see
+  [how the startup card works](startup-progress.md#how-it-works)).
 - **The wait:** before starting the agent, the `claude` and `codex` wrappers
   call `omnigent_wait_for_repo_setup`
   (`images/runner/repo-env/agent-instructions.sh`), which waits for `done`

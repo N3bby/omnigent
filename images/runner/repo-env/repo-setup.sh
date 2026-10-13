@@ -10,6 +10,10 @@
 # writes the list of checkouts; the lock keeps it to one copy. When it's done,
 # it touches $run/done, which the agent wrappers wait for
 # (agent-instructions.sh).
+#
+# Each script's progress and output also go to the server, which shows them in
+# the session while the sandbox starts (omnigent-startup-report,
+# docs/features/startup-progress.md).
 set -u
 
 env_dir=${OMNIGENT_REPO_ENV_DIR:-/run/omnigent/repo-env}
@@ -49,6 +53,12 @@ run_script() {
     return "$status"
 }
 
+# Reports to the server when it can; it never fails this service.
+report() {
+    command -v omnigent-startup-report >/dev/null 2>&1 || return 0
+    omnigent-startup-report "$@" </dev/null >/dev/null 2>&1 || true
+}
+
 if [ -f "$run/checkouts" ]; then
     # The Podman service starts from the same login shell; give it a moment,
     # so a script can use docker straight away.
@@ -64,6 +74,7 @@ if [ -f "$run/checkouts" ]; then
         name=${checkout##*/}
         if [ -e "$state/$name.exit" ]; then
             echo "omnigent-repo-setup: $repository already ran its setup script in $checkout"
+            report step setup "$name" skipped "Ran on $(date -r "$state/$name.exit" '+%-d %b at %H:%M')"
             continue
         fi
         if [ ! -d "$checkout" ]; then
@@ -72,14 +83,27 @@ if [ -f "$run/checkouts" ]; then
         fi
         mkdir -p "$state"
         echo "omnigent-repo-setup: running the setup script of $repository in $checkout"
-        {
+        report step setup "$name" running "Running its setup script"
+        (
             echo "# omnigent-repo-setup: the setup script of $repository, in $checkout, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             run_script "$script" "$checkout"
             status=$?
             echo "# omnigent-repo-setup: exit status $status, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        } >"$state/$name.log" 2>&1
+            exit "$status"
+        ) >"$state/$name.log" 2>&1 &
+        job=$!
+        report follow setup "$state/$name.log" "$job" &
+        follower=$!
+        wait "$job"
+        status=$?
+        wait "$follower"
         printf '%s\n' "$status" >"$state/$name.exit"
         echo "omnigent-repo-setup: $repository finished with exit status $status; see $state/$name.log"
+        if [ "$status" -eq 0 ]; then
+            report step setup "$name" done "Finished"
+        else
+            report step setup "$name" failed "Exit status $status" --log "$state/$name.log"
+        fi
     done <"$run/checkouts"
 fi
 touch "$run/done"

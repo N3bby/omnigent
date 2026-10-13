@@ -29,6 +29,26 @@ healthchecks() {
 }
 healthchecks &
 
+# Shows when Docker is ready in the session while the sandbox starts
+# (omnigent-startup-report); never fails this service.
+report() {
+    command -v omnigent-startup-report >/dev/null 2>&1 || return 0
+    omnigent-startup-report step host Docker "$@" </dev/null >/dev/null 2>&1 || true
+}
+(
+    report running "Starting Podman's Docker API"
+    waited=0
+    while [ ! -S "$socket" ] && [ "$waited" -lt 120 ]; do
+        sleep 0.5
+        waited=$((waited + 1))
+    done
+    if [ -S "$socket" ]; then
+        report done "Docker API ready"
+    else
+        report failed "Podman's Docker API didn't start; see /run/omnigent-podman-service.log"
+    fi
+) &
+
 while :; do
     podman system service --time=0 "unix://$socket"
     sleep 1

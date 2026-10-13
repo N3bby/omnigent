@@ -16,6 +16,7 @@ What you see and choose while talking to an agent.
 | [Model picker straight away](model-picker.md) | Choose a model before your first session has run | No |
 | [Fuzzy file search with @](fuzzy-file-mentions.md) | Type `@auth` to find a file anywhere in the workspace, like in Claude Code | No |
 | [The environment menu](environment-menu.md) | See whether the sandbox is running, starting or stopped, copy its SSH command, restart the agent, or stop the sandbox and keep its files | Nothing to turn off |
+| [The startup card](startup-progress.md) | Each step of a sandbox's start as it happens, why it failed in plain words, and the whole startup log | Nothing to turn off |
 
 ## Subscriptions
 

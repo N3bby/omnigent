@@ -120,6 +120,44 @@ class SetupServiceTests(RunnerFixture):
         self.run_service()
         self.assertIn("npm:abc123\n", (self.state / "roadpass.log").read_text())
 
+    def test_reports_each_script_to_the_server(self) -> None:
+        # omnigent-startup-report sends these to the server; a stand-in records them.
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir()
+        calls = self.tmp / "reports"
+        reporter = bin_dir / "omnigent-startup-report"
+        reporter.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {calls}\n')
+        reporter.chmod(0o755)
+        path = f"{bin_dir}:{os.environ['PATH']}"
+        self.mount(ROADPASS, {"setup.sh": "echo hello\n"})
+        self.mount(OTHER, {"setup.sh": "exit 3\n"})
+        self.checkouts(ROADPASS, OTHER)
+        self.run_service(PATH=path)
+        lines = calls.read_text().splitlines()
+        roadpass_log = self.state / "roadpass.log"
+        other_log = self.state / "other.log"
+        self.assertEqual(lines[0], "step setup roadpass running Running its setup script")
+        self.assertIn("step setup roadpass done Finished", lines)
+        self.assertIn(f"step setup other failed Exit status 3 --log {other_log}", lines)
+        follows = [line for line in lines if line.startswith("follow setup ")]
+        self.assertEqual([line.split()[2] for line in follows], [str(roadpass_log), str(other_log)])
+        self.assertTrue(all(line.split()[3].isdigit() for line in follows))
+
+        # A woken Pod reports the scripts as having run before.
+        calls.unlink()
+        (self.run_dir / "done").unlink()
+        self.run_service(PATH=path)
+        lines = calls.read_text().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertRegex(lines[0], r"^step setup roadpass skipped Ran on \d+ \w+ at \d\d:\d\d$")
+
+    def test_without_the_reporter_it_runs_as_before(self) -> None:
+        self.mount(ROADPASS, {"setup.sh": "echo hello\n"})
+        self.checkouts(ROADPASS)
+        self.run_service(PATH="/usr/bin:/bin")
+        self.assertIn("hello\n", (self.state / "roadpass.log").read_text())
+        self.assertEqual((self.state / "roadpass.exit").read_text(), "0\n")
+
     def test_without_checkouts_it_only_marks_itself_done(self) -> None:
         self.run_service()
         self.assertTrue((self.run_dir / "done").exists())

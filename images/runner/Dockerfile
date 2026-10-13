@@ -44,6 +44,9 @@ COPY containers/storage.conf /etc/containers/storage.conf
 COPY --chmod=0755 containers/podman-service.sh /usr/local/bin/omnigent-podman-service
 COPY --chmod=0755 containers/docker-compose.sh /usr/local/bin/docker-compose
 COPY containers/podman-service-profile.sh /etc/profile.d/omnigent-podman-service.sh
+# Reports what runs in the Pod as it starts (setup scripts, Tailscale, Docker)
+# to the server, which shows it in the session (docs/features/startup-progress.md).
+COPY --chmod=0755 startup/startup-report.py /usr/local/bin/omnigent-startup-report
 COPY --chmod=0755 tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailscale
 COPY --chmod=0755 tailscale/tailscale-logout.sh /usr/local/bin/omnigent-tailscale-logout
 COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
