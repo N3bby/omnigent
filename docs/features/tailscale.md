@@ -34,6 +34,39 @@ curl http://omnigent-e1dcab9b:3000       # a dev server the agent started
 - **To open the session in IntelliJ**, see
   [JetBrains Gateway](jetbrains-gateway.md).
 
+## Reaching your devices from a session
+
+Agents can also connect out to devices on your tailnet, but only to those
+your tailnet policy lets sessions reach. Sessions get no access of their own
+(see [step 1](#1-add-a-tag-for-sessions-to-your-tailnet-policy)), so give
+them access to each device you want them to use. For example, for devices
+tagged `tag:agent-target`:
+
+```json
+"grants": [
+  {"src": ["tag:omnigent-runner"], "dst": ["tag:agent-target"], "ip": ["*"]}
+],
+"ssh": [
+  {"action": "accept", "src": ["tag:omnigent-runner"], "dst": ["tag:agent-target"], "users": ["root"]}
+]
+```
+
+Every session gets that access, so only give it to devices meant for agents.
+See the [threat model](../threat-model.md#runners-on-your-tailnet).
+
+In the session:
+
+- **SSH works as usual:** `ssh root@my-server`, with the short name, the full
+  `.ts.net` name or a `100.x` address.
+- **Other tools go through a proxy** on `localhost:1055`, which speaks SOCKS5
+  and HTTP and resolves MagicDNS names. Without it, tailnet names don't
+  resolve and tailnet addresses don't connect.
+  - curl: `curl --proxy socks5h://localhost:1055 http://my-server:3000`
+  - Chromium or Playwright: `--proxy-server=socks5://localhost:1055`
+- **The agent's browser tools** (`browser_navigate` and the others) drive the
+  browser in your Omnigent desktop app, so they reach whatever your own device
+  reaches, without the proxy.
+
 ## Set it up
 
 ### 1. Add a tag for sessions to your tailnet policy
@@ -140,6 +173,16 @@ a key.
     `OMNIGENT_HOST_ID`, with `--ssh` and the tags in
     `OMNIGENT_TAILSCALE_TAGS`.
   - The Pod has no TUN device, so `tailscaled` uses userspace networking.
+    The Pod gets no route to the tailnet and no MagicDNS, so connections out
+    have to go through `tailscaled`.
+- **Connecting out:**
+  - `images/runner/tailscale/ssh-tailnet.conf`, in
+    `/etc/ssh/ssh_config.d/`, sends SSH to tailnet hosts through
+    `tailscale nc`, and accepts their host keys the first time.
+  - `tailscaled` serves a SOCKS5 and an HTTP proxy on `localhost:1055`
+    (`--socks5-server` and `--outbound-http-proxy-listen`). Nothing is set to
+    use it by default, so the rest of the Pod's traffic doesn't depend on
+    Tailscale.
 - **Leaving:** the admission policy in
   `kubernetes/platform/runner-userns.yaml` gives the Pod a `preStop` hook,
   `images/runner/tailscale/tailscale-logout.sh`.

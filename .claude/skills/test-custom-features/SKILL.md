@@ -295,6 +295,10 @@ PASS  advertises tags tag:omnigent-runner
 PASS  Tailscale SSH enabled
 PASS  node state is on the home volume
 PASS  logs out when the Pod stops
+PASS  SSH to tailnet names goes through tailscale nc
+PASS  SSH to other hosts doesn't
+PASS  SOCKS5 proxy reaches omnigent-<8 hex>
+PASS  HTTP proxy reaches omnigent-<8 hex>.<tailnet>
 == Runtimes from mise
 PASS  login shells put mise shims first on PATH
 PASS  Claude is told to use mise

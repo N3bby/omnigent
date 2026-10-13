@@ -108,7 +108,8 @@ off until you store a key. Once it's on, every runner Pod is a node on your
 tailnet, and the agent is root in it, so treat the node as untrusted:
 
 - **What it can reach is up to your tailnet policy.** Grant your devices
-  access to `tag:omnigent-runner`, and grant `tag:omnigent-runner` nothing.
+  access to `tag:omnigent-runner`, and grant `tag:omnigent-runner` nothing,
+  or only the devices you want agents to use. Every session gets that access.
   With Tailscale's default allow-all policy, a compromised runner could
   connect to every device on your tailnet, including your own machine and
   the VM's Kubernetes API (port 6443), which the firewall only allows from

@@ -34,10 +34,14 @@ report() {
 report running "Joining your tailnet as $name"
 
 # The Pod has no /dev/net/tun. Userspace networking still delivers tailnet
-# connections to the Pod's own ports, and serves Tailscale SSH.
+# connections to the Pod's own ports, and serves Tailscale SSH. Connections
+# out to the tailnet need tailscaled too: SSH goes through `tailscale nc`
+# (ssh-tailnet.conf), and other tools through its SOCKS5 and HTTP proxy,
+# which share one port and resolve MagicDNS names.
 (
     while :; do
-        tailscaled --tun=userspace-networking --statedir="$state" --socket="$socket"
+        tailscaled --tun=userspace-networking --statedir="$state" --socket="$socket" \
+            --socks5-server=localhost:1055 --outbound-http-proxy-listen=localhost:1055
         sleep 1
     done
 ) &

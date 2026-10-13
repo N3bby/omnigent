@@ -195,6 +195,15 @@ else
   check "Tailscale SSH enabled" test "$(field "$(ts debug prefs 2>/dev/null)" 'd.get("RunSSH")')" = True
   check "node state is on the home volume" test -s "$HOME/.local/state/omnigent-tailscale/tailscaled.state"
   check "logs out when the Pod stops" test -x /usr/local/bin/omnigent-tailscale-logout
+  check "SSH to tailnet names goes through tailscale nc" sh -c "ssh -G '$short' | grep -qx 'proxycommand tailscale nc %h %p'"
+  check "SSH to other hosts doesn't" sh -c "! ssh -G github.com | grep -q '^proxycommand'"
+  # The proxy reaches this node's own ports by MagicDNS name, like any peer's.
+  port=18765
+  mkdir -p "$work/proxy" && echo ok >"$work/proxy/index.html"
+  timeout 30 python3 -m http.server "$port" --bind 127.0.0.1 --directory "$work/proxy" >/dev/null 2>&1 &
+  sleep 1
+  check "SOCKS5 proxy reaches $short" sh -c "curl -fsS -m 10 --proxy socks5h://localhost:1055 http://$short:$port/ | grep -qx ok"
+  check "HTTP proxy reaches $dns" sh -c "curl -fsS -m 10 --proxy http://localhost:1055 http://$dns:$port/ | grep -qx ok"
 fi
 
 echo "== Runtimes from mise"
