@@ -179,17 +179,18 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx` | 927 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py` | 87 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx` | 929 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py` | 87 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
 cases; a project's repositories adds 8 frontend cases; the environment menu
 and Stop sandbox add the four frontend files after it (93 cases, most of
 `HostBadge.test.tsx` and `ComposerSubscription.test.tsx` being earlier ones)
-and the seven backend files after the file index (44 cases); the startup
-card adds the last three frontend files (31 cases) and the last two backend
-files (15 cases). These are
+and the seven backend files after the file index (52 cases); the startup
+card adds the last three frontend files (33 cases) and the last two backend
+files (16 cases; the one that reads a log through the real Kubernetes client
+is skipped, because these suites don't install it). These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
