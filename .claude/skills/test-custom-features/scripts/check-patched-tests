@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the fast-mode and fuzzy "@" file search backend regressions and related
-# frontend suites against a fresh, fully patched upstream checkout. Keep logs
-# and JUnit reports.
+# frontend suites, and the project repositories frontend suites, against a
+# fresh, fully patched upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -93,6 +93,7 @@ PY
     pnpm --dir "$source_dir/web" exec vitest run \
       src/lib/fastMode.test.ts src/store/chatStore.test.ts src/pages/ChatPage.test.ts \
       src/lib/fuzzyPathMatch.test.ts src/pages/ChatPage.mention.test.tsx \
+      src/shell/ProjectSettingsDialog.test.tsx src/shell/NewChatDialog.projectPrefill.test.tsx \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

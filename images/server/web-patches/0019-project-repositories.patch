@@ -1,0 +1,795 @@
+Give a project the repositories its sandbox sessions clone.
+
+Project settings get a Repositories field when the project's host is the
+sandbox or no default: the composer's GitHub repository and branch pickers
+(made modal so their lists scroll inside the dialog), plus a field to paste any
+other URL, which Save keeps even when it wasn't added. They're stored in the
+project's config as sandbox_repos; the server keeps a project's config whole,
+so no server change is needed. A concrete host drops them, and for the sandbox
+the working directory field is hidden, as the composer does.
+A new session in the project picks them in place of the last repositories
+launched with, once the project's config has loaded, unless the user already
+changed the selection (tracked in the parked draft too). A project without
+repositories keeps the last ones.
+Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/lib/projectsApi.ts b/web/src/lib/projectsApi.ts
+index f680fc1..580b15a 100644
+--- a/web/src/lib/projectsApi.ts
++++ b/web/src/lib/projectsApi.ts
+@@ -50,6 +50,13 @@ export interface ProjectConfig {
+    * the harness's own configured default.
+    */
+   model?: string;
++  /**
++   * Repositories (and branches, `""` for the default branch) new sandbox
++   * sessions clone. When set, they're picked in the composer instead of the
++   * last repositories the user launched with. Unset or empty → the composer
++   * keeps its generic default.
++   */
++  sandbox_repos?: { url: string; branch: string }[];
+ }
+ 
+ /** A first-class project. Mirrors the `ProjectObject` response shape. */
+diff --git a/web/src/shell/NewChatDialog.projectPrefill.test.tsx b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
+index b7f93a1..1def59b 100644
+--- a/web/src/shell/NewChatDialog.projectPrefill.test.tsx
++++ b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
+@@ -216,7 +216,7 @@ function renderLanding(): { rerender: (ui: ReactNode) => void; unmount: () => vo
+ }
+ 
+ /** Same as renderLanding, but with the managed-sandbox host option enabled. */
+-function renderSandboxLanding(): { rerender: (ui: ReactNode) => void } {
++function renderSandboxLanding(): { rerender: (ui: ReactNode) => void; unmount: () => void } {
+   const info: ServerInfo = {
+     accounts_enabled: false,
+     single_user: false,
+@@ -246,8 +246,8 @@ function renderSandboxLanding(): { rerender: (ui: ReactNode) => void } {
+       </QueryClientProvider>
+     );
+   }
+-  const { rerender } = render(<NewChatLandingScreen />, { wrapper: Wrapper });
+-  return { rerender };
++  const { rerender, unmount } = render(<NewChatLandingScreen />, { wrapper: Wrapper });
++  return { rerender, unmount };
+ }
+ 
+ /** Render with Smart Routing enabled so a routing-eligible native agent can turn it on. */
+@@ -1130,3 +1130,119 @@ describe("NewChatLandingScreen global always-use-worktree default", () => {
+     expect(body.git).toBeUndefined();
+   });
+ });
++
++describe("NewChatLandingScreen project repositories", () => {
++  const LAST_REPOS_KEY = "omnigent:last-sandbox-repos";
++  const LAST = "https://github.com/org/last-used";
++  const PROJECT_REPO = "https://github.com/org/project-repo";
++
++  function pickSandbox(): void {
++    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-host-chip"), { button: 0 });
++    fireEvent.click(screen.getByTestId("new-chat-landing-sandbox-option"));
++  }
++
++  beforeEach(() => {
++    localStorage.setItem(LAST_REPOS_KEY, JSON.stringify([{ url: LAST, branch: "" }]));
++  });
++
++  it("picks the project's repositories instead of the last ones launched with", async () => {
++    setProjectConfig({
++      host_id: "__sandbox__",
++      sandbox_repos: [{ url: PROJECT_REPO, branch: "dev" }],
++    });
++    renderSandboxLanding();
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-repo-chip").textContent).toContain(
++        "project-repo#dev",
++      ),
++    );
++    const body = await submitAndReadBody();
++    expect(body.workspaces).toEqual([`${PROJECT_REPO}#dev`]);
++  });
++
++  it("keeps the last repositories for a project without any", async () => {
++    setProjectConfig({ host_id: "__sandbox__" });
++    renderSandboxLanding();
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-repo-chip").textContent).toContain("last-used"),
++    );
++  });
++
++  it("waits for the project's config, then replaces the remembered repositories", async () => {
++    setProjectConfig(undefined, true);
++    const { rerender } = renderSandboxLanding();
++    pickSandbox();
++    expect(screen.getByTestId("new-chat-landing-repo-chip").textContent).toContain("last-used");
++
++    setProjectConfig({ sandbox_repos: [{ url: PROJECT_REPO, branch: "" }] });
++    rerender(<NewChatLandingScreen />);
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-repo-chip").textContent).toContain(
++        "project-repo",
++      ),
++    );
++  });
++
++  it("doesn't replace repositories the user already changed", async () => {
++    setProjectConfig(undefined, true);
++    const { rerender } = renderSandboxLanding();
++    pickSandbox();
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-chip"));
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-remove"));
++
++    setProjectConfig({ sandbox_repos: [{ url: PROJECT_REPO, branch: "" }] });
++    rerender(<NewChatLandingScreen />);
++    const body = await submitAndReadBody();
++    expect(body.workspaces).toEqual([]);
++  });
++
++  it("picks repositories set while a draft was parked, but keeps the user's own", async () => {
++    setProjectConfig({ host_id: "__sandbox__" });
++    const first = renderSandboxLanding();
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-repo-chip").textContent).toContain("last-used"),
++    );
++    // Leave (draft parked), give the project a repository, come back.
++    first.unmount();
++    setProjectConfig({
++      host_id: "__sandbox__",
++      sandbox_repos: [{ url: PROJECT_REPO, branch: "" }],
++    });
++    const second = renderSandboxLanding();
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-repo-chip").textContent).toContain(
++        "project-repo",
++      ),
++    );
++
++    // The user's own change survives the same detour.
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-chip"));
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-remove"));
++    second.unmount();
++    renderSandboxLanding();
++    const body = await submitAndReadBody();
++    expect(body.workspaces).toEqual([]);
++  });
++
++  it("picks the next project's repositories when another pencil is clicked", async () => {
++    vi.mocked(useProjectConfig).mockImplementation((id) => {
++      const data: ProjectConfig =
++        id === "proj_beta"
++          ? { host_id: "__sandbox__", sandbox_repos: [{ url: PROJECT_REPO, branch: "" }] }
++          : { host_id: "__sandbox__" };
++      return { data, isLoading: false } as ReturnType<typeof useProjectConfig>;
++    });
++    const { rerender } = renderSandboxLanding();
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-repo-chip").textContent).toContain("last-used"),
++    );
++
++    searchParams = new URLSearchParams("project=Beta");
++    rerender(<NewChatLandingScreen />);
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-repo-chip").textContent).toContain(
++        "project-repo",
++      ),
++    );
++  });
++});
+diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
+index f88002a..2315788 100644
+--- a/web/src/shell/NewChatDialog.tsx
++++ b/web/src/shell/NewChatDialog.tsx
+@@ -1010,7 +1010,7 @@ export function composeSandboxWorkspaces(repos: LastSandboxRepo[]): string[] {
+ 
+ // Max repos a managed sandbox may clone — mirrors the server's
+ // `_MAX_MANAGED_WORKSPACES` so the picker stops adding before a create 422s.
+-const MAX_SANDBOX_REPOS = 10;
++export const MAX_SANDBOX_REPOS = 10;
+ 
+ /**
+  * Derive a repository's display name from its URL.
+@@ -1159,20 +1159,24 @@ function useComboboxPopover(): {
+  * @param repos The caller's accessible repos (newest-first from the API).
+  * @param value The selected repo's ``owner/name`` ("" = none).
+  * @param onSelect Called with the chosen repo (or ``null`` to clear).
++ * @param modal Make the popover modal, so its list scrolls inside a modal
++ *   Dialog's scroll lock (the project settings dialog).
+  */
+-function SandboxRepoCombobox({
++export function SandboxRepoCombobox({
+   repos,
+   value,
+   onSelect,
++  modal = false,
+ }: {
+   repos: GithubRepo[];
+   value: string;
+   onSelect: (repo: GithubRepo | null) => void;
++  modal?: boolean;
+ }): ReactNode {
+   const { open, setOpen, triggerRef, contentProps } = useComboboxPopover();
+   const selected = repos.find((r) => r.full_name === value) ?? null;
+   return (
+-    <Popover open={open} onOpenChange={setOpen}>
++    <Popover open={open} onOpenChange={setOpen} modal={modal}>
+       <PopoverTrigger asChild>
+         <button
+           ref={triggerRef}
+@@ -1235,17 +1239,20 @@ function SandboxRepoCombobox({
+  * @param value The currently selected branch ("" = default).
+  * @param defaultBranch The repo's default branch, for the sentinel label.
+  * @param onChange Called with the newly selected branch.
++ * @param modal Make the popover modal, as for ``SandboxRepoCombobox``.
+  */
+-function SandboxRepoBranchSelect({
++export function SandboxRepoBranchSelect({
+   fullName,
+   value,
+   defaultBranch,
+   onChange,
++  modal = false,
+ }: {
+   fullName: string;
+   value: string;
+   defaultBranch: string | null;
+   onChange: (branch: string) => void;
++  modal?: boolean;
+ }): ReactNode {
+   const { open, setOpen, triggerRef, contentProps } = useComboboxPopover();
+   const { data, isPending } = useQuery({
+@@ -1264,7 +1271,7 @@ function SandboxRepoBranchSelect({
+     options.unshift(value);
+   }
+   return (
+-    <Popover open={open} onOpenChange={setOpen}>
++    <Popover open={open} onOpenChange={setOpen} modal={modal}>
+       <PopoverTrigger asChild>
+         <button
+           ref={triggerRef}
+@@ -2195,6 +2202,9 @@ interface LandingDraft {
+   // neither turns an untouched seed into an "explicit" value nor the reverse.
+   agentFromConfig: boolean;
+   workspaceFromConfig: boolean;
++  // Whether the user changed the repo selection, so a project's repositories
++  // don't replace it when the screen comes back.
++  sandboxReposEdited: boolean;
+ }
+ 
+ let landingDraft: LandingDraft | null = null;
+@@ -2283,6 +2293,7 @@ export function NewChatLandingScreen() {
+       agentId: c.agent_id,
+       useWorktree: c.use_worktree,
+       model: c.model,
++      sandboxRepos: c.sandbox_repos,
+     };
+   }, [
+     projectParam,
+@@ -2377,6 +2388,7 @@ export function NewChatLandingScreen() {
+           // they are location state too — keeping them would clone another
+           // project's repository into this project's sandbox.
+           sandboxRepoSelections: [],
++          sandboxReposEdited: false,
+           workspace: "",
+           branchName: "",
+           // The branch may be the worktree-default's auto-seed, generated for
+@@ -2542,6 +2554,13 @@ export function NewChatLandingScreen() {
+   const [sandboxRepoSelections, setSandboxRepoSelections] = useState<LastSandboxRepo[]>(
+     () => restoredDraft?.sandboxRepoSelections ?? readLastSandboxRepos(),
+   );
++  // Whether the repo selection is the user's own rather than a default, so a
++  // project's repositories (consumed by the effect after the project prefill)
++  // never replace it. Parked with the draft.
++  const sandboxReposEditedRef = useRef<boolean>(restoredDraft?.sandboxReposEdited ?? false);
++  // Config signature the project's repositories were last seeded from, so the
++  // seed runs once per project visit or config change.
++  const sandboxReposSeededForRef = useRef<string | null>(null);
+   // Whether the launch provider clones several repos (server-declared per
+   // provider via /v1/info). A single-repo provider caps the picker at one, so
+   // it reads as a plain single-repo picker and never offers a multi-repo menu.
+@@ -2561,6 +2580,7 @@ export function NewChatLandingScreen() {
+     (url: string, branch = ""): void => {
+       const u = url.trim();
+       if (u === "") return;
++      sandboxReposEditedRef.current = true;
+       setSandboxRepoSelections((prev) =>
+         // Cap at the provider's limit so a selection can't only fail with a 422
+         // at create; a duplicate URL is a no-op.
+@@ -2572,9 +2592,11 @@ export function NewChatLandingScreen() {
+     [maxSandboxRepos],
+   );
+   const removeSandboxRepo = useCallback((url: string): void => {
++    sandboxReposEditedRef.current = true;
+     setSandboxRepoSelections((prev) => prev.filter((r) => r.url !== url));
+   }, []);
+   const setSandboxRepoBranch = useCallback((url: string, branch: string): void => {
++    sandboxReposEditedRef.current = true;
+     setSandboxRepoSelections((prev) => prev.map((r) => (r.url === url ? { ...r, branch } : r)));
+   }, []);
+   // Free-text URL being typed into the "paste a URL" adder (not yet added).
+@@ -2764,6 +2786,7 @@ export function NewChatLandingScreen() {
+     costControlMode,
+     agentFromConfig: agentFromConfigRef.current,
+     workspaceFromConfig: workspaceFromConfigRef.current,
++    sandboxReposEdited: sandboxReposEditedRef.current,
+   };
+   useEffect(() => {
+     // Re-set on setup so StrictMode's setup→cleanup→setup double-invoke
+@@ -2887,6 +2910,8 @@ export function NewChatLandingScreen() {
+     // would clone the previous project's repo into this project's sandbox.
+     setSandboxRepoSelections([]);
+     setPendingRepoUrl("");
++    sandboxReposEditedRef.current = false;
++    sandboxReposSeededForRef.current = null;
+     agentFromConfigRef.current = false;
+     workspaceFromConfigRef.current = false;
+     seededHostRef.current = null;
+@@ -2896,6 +2921,21 @@ export function NewChatLandingScreen() {
+     setPrefill(initialPrefillState(projectParam));
+   }, [projectParam, prefill.project, prefillConfigSig]);
+ 
++  // Pick the project's repositories, once its config has loaded, in place of
++  // the last repositories launched with. Not while the user's own selection
++  // stands (a repo added, removed or re-branched, here or in a parked draft).
++  // A project without repositories keeps the generic default.
++  useEffect(() => {
++    if (prefill.project !== projectParam || prefillConfigSig === null) return;
++    if (sandboxReposEditedRef.current) return;
++    if (sandboxReposSeededForRef.current === prefillConfigSig) return;
++    sandboxReposSeededForRef.current = prefillConfigSig;
++    const repos = (prefillConfig?.sandboxRepos ?? [])
++      .map((r) => ({ url: String(r.url ?? "").trim(), branch: String(r.branch ?? "").trim() }))
++      .filter((r) => r.url !== "");
++    if (repos.length > 0) setSandboxRepoSelections(repos);
++  }, [prefill.project, projectParam, prefillConfig, prefillConfigSig]);
++
+   // Record the config the machine settled from, once it's loaded and the
+   // machine is done, so the reseed effect above can spot a later change to it
+   // (the reseed on a project switch runs before the config has loaded, leaving
+diff --git a/web/src/shell/ProjectSettingsDialog.test.tsx b/web/src/shell/ProjectSettingsDialog.test.tsx
+index 3fa73ac..3967c7f 100644
+--- a/web/src/shell/ProjectSettingsDialog.test.tsx
++++ b/web/src/shell/ProjectSettingsDialog.test.tsx
+@@ -39,8 +39,10 @@ function pickerAgent(overrides: Record<string, unknown> = {}) {
+     ...overrides,
+   };
+ }
++// Hoisted so a case can offer managed sandboxes (the repositories field).
++const { serverInfoMock } = vi.hoisted(() => ({ serverInfoMock: vi.fn() }));
+ vi.mock("@/lib/CapabilitiesContext", () => ({
+-  useServerInfo: () => ({ managed_sandboxes_enabled: false, sandbox_provider: null }),
++  useServerInfo: serverInfoMock,
+ }));
+ // The filesystem browser owns its own data-fetching; stub it to a marker plus
+ // a button that reports a navigated path, so we can drive the disclosure and
+@@ -85,6 +87,8 @@ beforeEach(() => {
+   hostModelOptionsMock.mockReset();
+   hostModelOptionsMock.mockReturnValue({ data: [] });
+   updateMock.mockResolvedValue({ id: "p_1", name: "Work", config: {} });
++  serverInfoMock.mockReset();
++  serverInfoMock.mockReturnValue({ managed_sandboxes_enabled: false, sandbox_provider: null });
+ });
+ 
+ afterEach(cleanup);
+@@ -424,4 +428,88 @@ describe("ProjectSettingsDialog", () => {
+       expect(updateMock).toHaveBeenCalledWith("p_1", { agent_id: "ag_claude", model: "opus" }),
+     );
+   });
++
++  describe("repositories", () => {
++    const ALPHA = "https://github.com/org/alpha.git";
++    const BETA = "https://github.com/org/beta";
++
++    beforeEach(() => {
++      serverInfoMock.mockReturnValue({
++        managed_sandboxes_enabled: true,
++        sandbox_provider: "agent_sandbox",
++        sandbox_provider_capabilities: { agent_sandbox: { multi_repo: true } },
++      });
++    });
++
++    async function waitForSave() {
++      await waitFor(() =>
++        expect((screen.getByTestId("project-settings-save") as HTMLButtonElement).disabled).toBe(
++          false,
++        ),
++      );
++    }
++
++    it("edits the repositories sandbox sessions clone", async () => {
++      getProjectMock.mockResolvedValue({
++        id: "p_1",
++        name: "Work",
++        config: { host_id: "__sandbox__", sandbox_repos: [{ url: ALPHA, branch: "dev" }] },
++      });
++      renderDialog();
++      await waitFor(() =>
++        expect(screen.getAllByTestId("project-settings-repo-row")).toHaveLength(1),
++      );
++      expect(screen.getByTestId("project-settings-repo-row")).toHaveTextContent("alpha");
++      // The repositories stand in for the working directory, as in the composer.
++      expect(screen.queryByTestId("project-settings-workspace")).not.toBeInTheDocument();
++
++      fireEvent.change(screen.getByTestId("project-settings-repo-input"), {
++        target: { value: BETA },
++      });
++      fireEvent.click(screen.getByTestId("project-settings-repo-add"));
++      expect(screen.getAllByTestId("project-settings-repo-row")).toHaveLength(2);
++      fireEvent.click(screen.getAllByTestId("project-settings-repo-remove")[0]);
++      fireEvent.click(screen.getByTestId("project-settings-save"));
++
++      await waitFor(() =>
++        expect(updateMock).toHaveBeenCalledWith("p_1", {
++          host_id: "__sandbox__",
++          sandbox_repos: [{ url: BETA, branch: "" }],
++        }),
++      );
++    });
++
++    it("saves a pasted URL that wasn't added, and Enter doesn't submit", async () => {
++      getProjectMock.mockResolvedValue({ id: "p_1", name: "Work", config: {} });
++      renderDialog();
++      await waitForSave();
++
++      const input = screen.getByTestId("project-settings-repo-input");
++      fireEvent.change(input, { target: { value: "not a url" } });
++      fireEvent.keyDown(input, { key: "Enter" });
++      expect(updateMock).not.toHaveBeenCalled();
++      fireEvent.change(input, { target: { value: BETA } });
++      fireEvent.click(screen.getByTestId("project-settings-save"));
++
++      await waitFor(() =>
++        expect(updateMock).toHaveBeenCalledWith("p_1", {
++          sandbox_repos: [{ url: BETA, branch: "" }],
++        }),
++      );
++    });
++
++    it("hides the repositories and drops them for a host that isn't the sandbox", async () => {
++      getProjectMock.mockResolvedValue({
++        id: "p_1",
++        name: "Work",
++        config: { host_id: "h1", sandbox_repos: [{ url: ALPHA, branch: "" }] },
++      });
++      renderDialog();
++      await waitForSave();
++      expect(screen.queryByTestId("project-settings-repos")).not.toBeInTheDocument();
++
++      fireEvent.click(screen.getByTestId("project-settings-save"));
++      await waitFor(() => expect(updateMock).toHaveBeenCalledWith("p_1", { host_id: "h1" }));
++    });
++  });
+ });
+diff --git a/web/src/shell/ProjectSettingsDialog.tsx b/web/src/shell/ProjectSettingsDialog.tsx
+index f75b1b9..fc7f826 100644
+--- a/web/src/shell/ProjectSettingsDialog.tsx
++++ b/web/src/shell/ProjectSettingsDialog.tsx
+@@ -11,10 +11,14 @@
+ // harness stay per-agent run config, out of scope here. The host and agent
+ // pickers reuse the composer's components; the working directory reuses its
+ // filesystem browser (inline, so it scrolls inside the modal).
++// For sandbox sessions, the repositories they clone, picked in the composer
++// instead of the last ones launched with; the repository and branch pickers
++// are the composer's.
+ // Fields are optional: an unset one stores no default (an absent key), and an
+ // all-default dialog stores an empty config.
+ 
+-import { ChevronDownIcon } from "lucide-react";
++import { useQuery } from "@tanstack/react-query";
++import { ChevronDownIcon, PlusIcon, XIcon } from "lucide-react";
+ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+ import { Button } from "@/components/ui/button";
+ import {
+@@ -49,7 +53,16 @@ import {
+ } from "@/lib/nativeCodingAgents";
+ import type { ProjectConfig } from "@/lib/projectsApi";
+ import { shouldGuardDialogDismiss } from "@/lib/dialogDismissGuard";
+-import { AgentHarnessPicker } from "./NewChatDialog";
++import { fetchGithubRepos, type GithubRepo } from "@/lib/githubIntegration";
++import type { LastSandboxRepo } from "@/lib/repoPreferences";
++import {
++  AgentHarnessPicker,
++  deriveRepoName,
++  isValidSandboxRepoUrl,
++  MAX_SANDBOX_REPOS,
++  SandboxRepoBranchSelect,
++  SandboxRepoCombobox,
++} from "./NewChatDialog";
+ import { isNavigablePath, WorkspacePicker } from "./WorkspacePicker";
+ 
+ /** Select sentinel for "no default" — Radix Select can't hold an empty value. */
+@@ -60,13 +73,16 @@ function Field({
+   label,
+   hint,
+   htmlFor,
++  hidden = false,
+   children,
+ }: {
+   label: string;
+   hint?: string;
+   htmlFor?: string;
++  hidden?: boolean;
+   children: React.ReactNode;
+ }) {
++  if (hidden) return null;
+   return (
+     <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+       <label htmlFor={htmlFor} className="flex flex-col pt-1.5">
+@@ -78,6 +94,162 @@ function Field({
+   );
+ }
+ 
++/** The clone URL of a connected repo, matching the server's derivation. */
++function repoCloneUrl(r: GithubRepo): string {
++  return r.clone_url ?? `https://github.com/${r.full_name}.git`;
++}
++
++/**
++ * The repositories a project's sandbox sessions clone: one row per repository
++ * with its branch, then a picker over the connected GitHub account's
++ * repositories and a field to paste any other URL. Mirrors the composer's
++ * repository popover; its popovers are modal so their lists scroll inside the
++ * dialog.
++ */
++function ProjectReposEditor({
++  repos,
++  onChange,
++  pendingUrl,
++  onPendingUrlChange,
++  maxRepos,
++  disabled,
++}: {
++  repos: LastSandboxRepo[];
++  onChange: (repos: LastSandboxRepo[]) => void;
++  /** URL typed into the paste field, not yet added. */
++  pendingUrl: string;
++  onPendingUrlChange: (url: string) => void;
++  maxRepos: number;
++  disabled: boolean;
++}) {
++  const info = useServerInfo();
++  const githubEnabled = info !== "loading" && (info.enabled_connections ?? []).includes("github");
++  const { data: githubData, isError: githubErrored } = useQuery({
++    queryKey: ["github-repos"],
++    queryFn: fetchGithubRepos,
++    enabled: githubEnabled,
++    staleTime: 5 * 60_000,
++  });
++  const githubRepos = githubData?.connected ? githubData.repos : [];
++  const showPicker = githubEnabled && githubData?.connected === true;
++  const repoForUrl = (url: string) => githubRepos.find((r) => repoCloneUrl(r) === url.trim());
++  const add = (url: string) => {
++    const u = url.trim();
++    if (u === "" || repos.some((r) => r.url === u) || repos.length >= maxRepos) return;
++    onChange([...repos, { url: u, branch: "" }]);
++  };
++  const addPending = () => {
++    if (!isValidSandboxRepoUrl(pendingUrl)) return;
++    add(pendingUrl);
++    onPendingUrlChange("");
++  };
++  return (
++    <div className="flex flex-col gap-2" data-testid="project-settings-repos">
++      {repos.map((sel) => {
++        const repo = repoForUrl(sel.url);
++        const name = repo?.full_name ?? deriveRepoName(sel.url) ?? sel.url;
++        const setBranch = (branch: string) =>
++          onChange(repos.map((r) => (r.url === sel.url ? { ...r, branch } : r)));
++        return (
++          <div
++            key={sel.url}
++            className="flex items-center gap-2"
++            data-testid="project-settings-repo-row"
++          >
++            <span className="min-w-0 flex-1 truncate text-ui" title={sel.url}>
++              {name}
++            </span>
++            {repo ? (
++              <div className="w-36 shrink-0">
++                <SandboxRepoBranchSelect
++                  fullName={repo.full_name}
++                  value={sel.branch}
++                  defaultBranch={repo.default_branch}
++                  onChange={setBranch}
++                  modal
++                />
++              </div>
++            ) : (
++              <input
++                type="text"
++                value={sel.branch}
++                onChange={(e) => setBranch(e.target.value)}
++                placeholder="branch"
++                aria-label={`Branch for ${name}`}
++                disabled={disabled}
++                className="w-28 shrink-0 rounded-md border border-input bg-transparent px-2 py-1 text-xs outline-none transition-colors focus-visible:border-ring"
++              />
++            )}
++            <button
++              type="button"
++              onClick={() => onChange(repos.filter((r) => r.url !== sel.url))}
++              aria-label={`Remove ${name}`}
++              disabled={disabled}
++              className="shrink-0 rounded-sm p-1 text-muted-foreground transition-colors hover:text-foreground"
++              data-testid="project-settings-repo-remove"
++            >
++              <XIcon className="size-3.5" />
++            </button>
++          </div>
++        );
++      })}
++      {repos.length > maxRepos && (
++        <p className="text-sm text-warning">
++          This sandbox provider clones at most {maxRepos}{" "}
++          {maxRepos === 1 ? "repository" : "repositories"}. Remove the extra{" "}
++          {maxRepos === 1 ? "repositories" : "ones"}, or new sessions can't start.
++        </p>
++      )}
++      {repos.length < maxRepos && (
++        <>
++          {showPicker && (
++            <SandboxRepoCombobox
++              repos={githubRepos.filter((r) => !repos.some((s) => s.url === repoCloneUrl(r)))}
++              value=""
++              onSelect={(repo) => repo && add(repoCloneUrl(repo))}
++              modal
++            />
++          )}
++          {githubEnabled && githubErrored && (
++            <p className="text-destructive text-sm">
++              Couldn't load your GitHub repositories. Paste a repository URL below.
++            </p>
++          )}
++          <div className="flex items-center gap-2">
++            <input
++              type="text"
++              value={pendingUrl}
++              onChange={(e) => onPendingUrlChange(e.target.value)}
++              onKeyDown={(e) => {
++                // Enter adds the repository; it must never submit the form.
++                if (e.key === "Enter") {
++                  e.preventDefault();
++                  addPending();
++                }
++              }}
++              placeholder={showPicker ? "or paste a repository URL" : "https://github.com/org/repo"}
++              aria-label="Repository URL"
++              disabled={disabled}
++              className="min-w-0 flex-1 rounded-md border border-input bg-transparent px-3 py-2 text-ui outline-none transition-colors focus-visible:border-ring"
++              data-testid="project-settings-repo-input"
++            />
++            <button
++              type="button"
++              disabled={disabled || !isValidSandboxRepoUrl(pendingUrl)}
++              onClick={addPending}
++              className="flex shrink-0 items-center gap-1 rounded-md border border-input px-2.5 py-2 text-muted-foreground text-ui transition-colors hover:text-foreground disabled:opacity-40"
++              data-testid="project-settings-repo-add"
++            >
++              <PlusIcon className="size-3.5" />
++              Add
++            </button>
++          </div>
++        </>
++      )}
++    </div>
++  );
++}
++
+ /** Trim a text input to `undefined` when blank, so an empty field stores no
+  *  default (an unset key) rather than an empty string. */
+ function trimOrUndef(value: string): string | undefined {
+@@ -121,6 +293,12 @@ export function ProjectSettingsDialog({
+   // can only fail on create.
+   const managedSandboxesEnabled = info !== "loading" && info.managed_sandboxes_enabled;
+   const sandboxProvider = info !== "loading" ? info.sandbox_provider : null;
++  const maxSandboxRepos =
++    info !== "loading" &&
++    sandboxProvider !== null &&
++    info.sandbox_provider_capabilities?.[sandboxProvider]?.multi_repo === true
++      ? MAX_SANDBOX_REPOS
++      : 1;
+ 
+   // Draft fields. Seeded from the stored config each time the dialog opens (or
+   // the fetched config arrives); local until saved.
+@@ -141,6 +319,10 @@ export function ProjectSettingsDialog({
+   // a native harness with a model choice; NONE stores no default (unset key).
+   const [model, setModel] = useState<string>(NONE);
+   const [workspaceOpen, setWorkspaceOpen] = useState(false);
++  // Repositories new sandbox sessions clone, and a URL typed but not yet added
++  // (saved too when it's a valid URL, so Save doesn't drop it).
++  const [sandboxRepos, setSandboxRepos] = useState<LastSandboxRepo[]>([]);
++  const [pendingRepoUrl, setPendingRepoUrl] = useState("");
+ 
+   // The agent picker and the host Select portal their dropdowns OUTSIDE
+   // DialogContent, so their dismiss (pick an option / click the body while
+@@ -187,6 +369,8 @@ export function ProjectSettingsDialog({
+     setAgentId(c.agent_id ?? null);
+     setModel(c.model ?? NONE);
+     setWorkspaceOpen(false);
++    setSandboxRepos(Array.isArray(c.sandbox_repos) ? c.sandbox_repos : []);
++    setPendingRepoUrl("");
+   }, [open, stored, loadFailed]);
+ 
+   const onSubmit = (e: FormEvent) => {
+@@ -228,6 +412,21 @@ export function ProjectSettingsDialog({
+     const agentUnresolved = agentId != null && selectedAgent === null;
+     if (supportsModelDefault && model !== NONE) config.model = model;
+     else if (!agentUnresolved) delete config.model;
++    // Repositories only apply to sandbox sessions — drop them for a concrete
++    // host, like the working directory for the sandbox.
++    const repos = sandboxRepos
++      .map((r) => ({ url: r.url.trim(), branch: r.branch.trim() }))
++      .filter((r) => r.url !== "");
++    const pending = pendingRepoUrl.trim();
++    if (
++      isValidSandboxRepoUrl(pending) &&
++      !repos.some((r) => r.url === pending) &&
++      repos.length < maxSandboxRepos
++    ) {
++      repos.push({ url: pending, branch: "" });
++    }
++    if (reposApply && repos.length > 0) config.sandbox_repos = repos;
++    else delete config.sandbox_repos;
+ 
+     updateConfig.mutate(
+       { id: projectId, name: projectName, config },
+@@ -249,6 +448,9 @@ export function ProjectSettingsDialog({
+   // / an offline stored host). Otherwise the field is a plain path input.
+   const browsableHostId =
+     hostId !== NONE && hostId !== SANDBOX_HOST_CHOICE && !storedHostMissing ? hostId : null;
++  // Repositories are cloned by sandbox sessions: offered when the default is
++  // the sandbox, or no default (the composer then often picks the sandbox).
++  const reposApply = hostId === NONE || hostId === SANDBOX_HOST_CHOICE;
+ 
+   // Agent picker groups, mirroring the composer's split (native harness CLIs vs
+   // SDK / bundle agents). The picker takes both lists and a selection.
+@@ -355,6 +557,9 @@ export function ProjectSettingsDialog({
+ 
+           <Field
+             label="Working directory"
++            // The sandbox clones repositories instead (below), as in the
++            // composer, and a working directory is dropped for it on save.
++            hidden={hostId === SANDBOX_HOST_CHOICE}
+             hint={
+               hostId === NONE
+                 ? "Pick a host first"
+@@ -438,6 +643,25 @@ export function ProjectSettingsDialog({
+             )}
+           </Field>
+ 
++          {managedSandboxesEnabled && reposApply && (
++            <div className="flex flex-col gap-1.5">
++              <div className="flex flex-col">
++                <span className="font-medium text-ui">Repositories</span>
++                <span className="text-muted-foreground text-sm">
++                  Picked when you start a session in the sandbox, instead of the last ones you used
++                </span>
++              </div>
++              <ProjectReposEditor
++                repos={sandboxRepos}
++                onChange={setSandboxRepos}
++                pendingUrl={pendingRepoUrl}
++                onPendingUrlChange={setPendingRepoUrl}
++                maxRepos={maxSandboxRepos}
++                disabled={isLoading}
++              />
++            </div>
++          )}
++
+           <Field
+             label="Random worktree"
+             hint="Start each new session in a fresh randomly-named git worktree (vs. directly in the workspace). Overrides the global default in Settings › Git."
+diff --git a/web/src/shell/projectPrefill.ts b/web/src/shell/projectPrefill.ts
+index 2af79a7..09cb5c6 100644
+--- a/web/src/shell/projectPrefill.ts
++++ b/web/src/shell/projectPrefill.ts
+@@ -25,6 +25,10 @@ export interface ProjectPrefillConfig {
+    *  machine — the composer's harness-seed effect consumes it directly (it owns
+    *  the model slot and would otherwise clobber a machine write). */
+   model?: string;
++  /** Repositories new sandbox sessions clone. Not seeded by this machine — the
++   *  composer's repository effect consumes it, replacing the remembered last
++   *  repositories unless the user already changed them. */
++  sandboxRepos?: { url: string; branch: string }[];
+ }
+ 
+ export interface ProjectPrefillState {

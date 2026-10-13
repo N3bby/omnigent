@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, and subscriptions in Settings. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, and subscriptions in Settings. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -108,6 +108,7 @@ PASS  images/server/web-patches/0015-repo-instructions-setup.patch
 PASS  images/server/web-patches/0016-highlighted-textarea-caret.patch
 PASS  images/server/web-patches/0017-subscriptions.patch
 PASS  images/server/web-patches/0018-composer-subscription.patch
+PASS  images/server/web-patches/0019-project-repositories.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -159,9 +160,9 @@ applied; they are not standalone files in this deployment repo's `tests/`.
 Image builds apply the patches, build the frontend, and check Python
 compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
-frontend/backend tests.** Run them explicitly when testing fast mode or
-fuzzy `@` file search, or changing their native message, composer or
-file-index paths:
+frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
+`@` file search or a project's repositories, or changing their native message,
+composer, file-index or project settings paths:
 
 ```bash
 .claude/skills/test-custom-features/scripts/check-patched-tests
@@ -172,12 +173,12 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx` | 743 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx` | 799 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py` | 20 passed |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
-cases. These are selected suites, not the entire upstream test suite. The
+cases; a project's repositories adds 8 frontend cases. These are selected suites, not the entire upstream test suite. The
 fast-mode backend uses mocked CLI transports: a pass verifies command routing
 and lifecycle handling, not live Claude/Codex availability or billing. The
 file-index backend lists real temporary folders and Git repositories.
@@ -433,6 +434,7 @@ settings.
 | Repository variables page | If you're an admin, Settings has **Repository variables** under Admin. It lists repositories with their variable names and `••••••••`, never a value. Don't add, edit or remove anything. Not an admin: record SKIP. |
 | Subscriptions page | If you're an admin, Settings has **Subscriptions** under Admin. Opening it directly (`https://<hostname>/settings/subscriptions`, not through the nav) shows the page rather than a permission message. Claude and Codex each list their accounts with the active one selected and marked **Active**, or say **No accounts yet**. Nothing on the page shows a token. Don't switch, add, edit or remove anything. Not an admin: record SKIP. |
 | Subscription in the composer | If Settings has a Claude account, this session's composer shows a key and the name of the account Claude Code started with, left of the model picker (on a phone, the name without the key). It's the account the `selection.json` from step 4 names for `claude`, unless Settings switched since this session started; then a dot is on the key. Tapping it opens **Claude account** with the name and what it means. Close it with Escape. Without a Claude account in Settings there's no tag. |
+| A project's repositories | Open a project's ⋯ menu in the sidebar and choose **Project settings**. With **Host** on the Kubernetes sandbox or no default, the dialog has a **Repositories** field, with a **Choose a repository…** picker when GitHub is connected and a field to paste a URL; with the sandbox there's no **Working directory**. Close it with **Cancel**, without saving. No project: record SKIP. |
 | GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository picker lists repositories. If it isn't connected, record SKIP (optional setup). |
 
 Also check that `feature-check claude` from 5a now shows usage numbers in its
@@ -554,6 +556,13 @@ after the next message it names `feature-check`. Switch back, then remove
     `subscription-login-*` Pod, which `mise run status` lists while it runs.
     `mise run credential-status` lists the accounts by name, never a
     credential.
+
+14. **A project's repositories:** create a project `feature-check`, open its
+    **Project settings**, set **Host** to the sandbox, add a repository under
+    **Repositories** (one you didn't launch with last) and save. Its pencil in
+    the sidebar opens a new session with that repository picked, not the last
+    one you launched with. A project without repositories still picks the last
+    one. Then delete the project.
 
 ## 7. Clean up
 

@@ -45,6 +45,7 @@ Getting your repositories into a session, with what they need to build.
 | [A repository's own Git token](repo-git-token.md) | Pick, clone and push a repository the GitHub App can't reach, with its own token | Optional setup step |
 | [A repository's own agent instructions](repo-instructions.md) | Your own instructions for a repository's agents, kept out of its `CLAUDE.md` | Optional setup step |
 | [A repository's setup script](repo-setup-script.md) | A script that sets up each new session on a repository before the agent starts | Optional setup step |
+| [A project's repositories](project-repositories.md) | A new session in a project picks that project's repositories, not the last ones you used | A project without repositories keeps the old behaviour |
 
 ## Reaching a session from your devices
 
