@@ -1,0 +1,288 @@
+Start a session from the New session screen without a message.
+
+Start session was disabled until the composer had text or a file, so getting
+a sandbox up, for example to use @ file search in its repository, meant
+sending a throwaway message. An empty composer now starts the session too,
+from the button or Enter. The create was always separate from the first
+message: POST /v1/sessions starts the sandbox, and the message follows as an
+event. With nothing to send, beginLocalConversation adds no optimistic bubble
+and leaves the conversation idle instead of "streaming", and
+hydrateLocalConversation binds the session's stream instead of posting a
+message. The empty chat then shows the startup card while the sandbox starts,
+and "What should we work on?" once it's up. The sidebar row is named after
+the agent, such as "Claude Code", as for any untitled session.
+
+Smart Routing is allowed too: the server skips routing on a blank message
+and keeps the default harness.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0021-startup-progress.patch.
+
+diff --git a/web/src/shell/NewChatDialog.flow.test.tsx b/web/src/shell/NewChatDialog.flow.test.tsx
+index c9cd26b..1bdf60a 100644
+--- a/web/src/shell/NewChatDialog.flow.test.tsx
++++ b/web/src/shell/NewChatDialog.flow.test.tsx
+@@ -903,27 +903,54 @@ describe("NewChatLandingScreen create flow", () => {
+     expect(screen.getByTestId("new-chat-landing-workspace-chip").textContent).toContain("foo");
+   });
+ 
+-  it("does not create a session when Enter is pressed with an empty message", async () => {
+-    // Host, agent and workspace all seed automatically, so the only thing
+-    // gating submit is a non-empty message. The Send button is disabled in
+-    // this state, but Enter calls handleCreate() directly — its guard must
+-    // mirror canSubmit (the disabled condition) or this path POSTs a
+-    // blank-prompt session behind the disabled button. Regression for the
+-    // empty-message bug.
++  it("starts a session without a first message when Enter is pressed in the empty composer", async () => {
++    // Host, agent and workspace all seed automatically, so an empty composer
++    // can start the session: its sandbox and @ file search come up before the
++    // first message. The button and Enter share handleCreate's canSubmit guard.
++    beginLocalConversationMock.mockReturnValue({
++      tempConvId: "temp:1234567890abcdef1234567890abcdef",
++      pendingMsgTempId: "pend_1",
++      createToken: "1234567890abcdef1234567890abcdef",
++    });
++    vi.mocked(authenticatedFetch).mockResolvedValueOnce({
++      ok: true,
++      json: async () => ({ id: "conv_new" }),
++    } as unknown as Response);
++
+     renderLanding();
+     await waitForWorkspaceSeed();
+ 
+-    // Submit button reflects the gate: disabled while the message is empty.
+-    expect(screen.getByTestId("new-chat-landing-submit")).toBeDisabled();
+-
+-    // Enter on the empty textarea must be a no-op, not a create.
++    expect(screen.getByTestId("new-chat-landing-submit")).toBeEnabled();
+     fireEvent.keyDown(screen.getByTestId("new-chat-landing-input"), { key: "Enter" });
+ 
+-    // No POST fired and no navigation happened — the guard short-circuited.
+-    // Before the fix the old guard (host/agent/workspace/creating only) let
+-    // this through and created an unintended empty session.
+-    expect(authenticatedFetch).not.toHaveBeenCalled();
+-    expect(navigateMock).not.toHaveBeenCalled();
++    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(1));
++    const [url, init] = vi.mocked(authenticatedFetch).mock.calls[0]!;
++    expect(url).toBe("/v1/sessions");
++    expect(JSON.parse((init as RequestInit).body as string)).not.toHaveProperty(
++      "smart_routing_message",
++    );
++    // The empty prompt reaches the store, which skips the bubble and the POST.
++    expect(beginLocalConversationMock).toHaveBeenCalledWith(
++      "",
++      [],
++      expect.any(Object),
++      undefined,
++      expect.any(Object),
++    );
++    await waitFor(() =>
++      expect(hydrateLocalConversationMock).toHaveBeenCalledWith(
++        "temp:1234567890abcdef1234567890abcdef",
++        "conv_new",
++        "ag_hello",
++        "",
++        [],
++        "pend_1",
++        null,
++        navigateMock,
++        expect.any(Function),
++        undefined,
++      ),
++    );
+   });
+ 
+   it("does not create a session when Enter confirms active IME composition", async () => {
+diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
+index 4e46564..b7f3ef3 100644
+--- a/web/src/shell/NewChatDialog.test.tsx
++++ b/web/src/shell/NewChatDialog.test.tsx
+@@ -3417,6 +3417,8 @@ describe("NewChatLandingScreen", () => {
+   });
+ 
+   it("uses the scoped light tooltip treatment for submit errors", async () => {
++    // No hosts: nothing to start the session on, so submit is disabled.
++    mockHosts([]);
+     renderLanding();
+ 
+     const submit = screen.getByTestId("new-chat-landing-submit");
+@@ -4891,39 +4893,38 @@ describe("NewChatLandingScreen", () => {
+     );
+   });
+ 
+-  it("enables submit only once a message, host, agent and valid workspace are set", async () => {
++  it("enables submit once host, agent and valid workspace are set, with or without a message", async () => {
+     renderLanding();
+     const submit = screen.getByTestId("new-chat-landing-submit") as HTMLButtonElement;
+     // Host (auto-selected) + agent (default) + workspace (seeded from the
+-    // recent) are all present, but with no message there's no task → disabled.
++    // recent) are all present. No message is needed: an empty composer starts
++    // the session without one.
+     await waitFor(() =>
+       expect(screen.getByTestId("new-chat-landing-workspace-chip").textContent).toContain("repo"),
+     );
+-    expect(submit.disabled).toBe(true);
++    expect(submit.disabled).toBe(false);
+     fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+       target: { value: "   " },
+     });
+-    // Whitespace-only is still empty after trim — button stays disabled.
+-    expect(submit.disabled).toBe(true);
++    expect(submit.disabled).toBe(false);
+     fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+       target: { value: "inspect the repo" },
+     });
+-    // Real text + the other gates satisfied → enabled. If canSubmit regressed
+-    // (e.g. dropped the workspace gate), the blank cases above would have
+-    // enabled too.
+     expect(submit.disabled).toBe(false);
+   });
+ 
+   it("keeps the disabled reason tooltip on the new-chat submit button", async () => {
++    // No hosts: the tooltip names the next missing input.
++    mockHosts([]);
+     renderLanding();
+-    await waitFor(() =>
+-      expect(screen.getByTestId("new-chat-landing-workspace-chip").textContent).toContain("repo"),
+-    );
+     const submit = screen.getByTestId("new-chat-landing-submit");
++    expect(submit).toBeDisabled();
+ 
+     fireEvent.pointerMove(submit.parentElement!, { pointerType: "mouse" });
+ 
+-    expect(await screen.findByRole("tooltip")).toHaveTextContent("Enter a message to get started");
++    expect(await screen.findByRole("tooltip")).toHaveTextContent(
++      "Please choose a host and working directory",
++    );
+   });
+ 
+   it("shows the default shortcut in the new-chat submit tooltip", async () => {
+diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
+index 2315788..3b0321d 100644
+--- a/web/src/shell/NewChatDialog.tsx
++++ b/web/src/shell/NewChatDialog.tsx
+@@ -5002,8 +5002,9 @@ export function NewChatLandingScreen() {
+     }
+   }, [pickerLoading, pickerSelectionError, pickerEdits]);
+ 
++  // No message is needed: an empty composer starts the session without one,
++  // so its sandbox and @ file search are ready before you type.
+   const canSubmit =
+-    (message.trim().length > 0 || files.length > 0) &&
+     !pickerLoading &&
+     !workspaceLoading &&
+     !pendingSkillCompletion &&
+@@ -5037,9 +5038,7 @@ export function NewChatLandingScreen() {
+                   ? "Please choose a host and working directory"
+                   : configuredAgentUnavailable && selectedAgent == null
+                     ? "This project's configured agent is unavailable — pick an agent to continue"
+-                    : message.trim().length === 0 && files.length === 0
+-                      ? "Enter a message to get started"
+-                      : null;
++                    : null;
+ 
+   // Names the picked provider, else the server's default label.
+   const selectedSandboxLabel =
+@@ -5340,7 +5339,7 @@ export function NewChatLandingScreen() {
+   async function handleCreate() {
+     // Mirror the Send button's disabled condition (canSubmit) so the Enter-key
+     // and form-submit paths that call this directly can't create a session with
+-    // a blank message, host, agent, or workspace.
++    // a blank host, agent, or workspace.
+     if (!canSubmit) return;
+     // A create is actually happening: report it for pointer clicks (via the
+     // form submit) and Enter-key sends alike. After the guard so guarded no-ops
+@@ -5850,7 +5849,7 @@ export function NewChatLandingScreen() {
+       if (localConv !== null && effectiveAgentId !== null) {
+         const tempRouteSuffix = `/c/${localConv.tempConvId}`;
+         promoteSessionDraft(localConv.tempConvId, data.id);
+-        // Hydrate the temp id onto the real id and POST the first message.
++        // Hydrate the temp id onto the real id and POST the first message, if any.
+         hydrateLocalConversation(
+           localConv.tempConvId,
+           data.id,
+diff --git a/web/src/store/chatStore.test.ts b/web/src/store/chatStore.test.ts
+index 2801437..4eee3c2 100644
+--- a/web/src/store/chatStore.test.ts
++++ b/web/src/store/chatStore.test.ts
+@@ -3204,6 +3204,37 @@ describe("chatStore — navigate-first first send (B1/B2 regressions)", () => {
+     expect(posts).toHaveLength(1);
+   });
+ 
++  it("starts without a first message: no bubble, no POST, and binds the real stream", async () => {
++    seedSession("conv_real");
++    const { tempConvId, pendingMsgTempId } = beginLocalConversation("", undefined)!;
++    // Nothing to show or wait on while the create is in flight.
++    expect(useChatStore.getState().pendingUserMessages).toEqual([]);
++    expect(useChatStore.getState().status).toBe("idle");
++
++    hydrateLocalConversation(
++      tempConvId,
++      "conv_real",
++      "agent_xyz",
++      "",
++      undefined,
++      pendingMsgTempId,
++      null,
++      noopNavigate,
++    );
++    await settle();
++
++    expect(useChatStore.getState().conversationId).toBe("conv_real");
++    const real = conversationRegistry.peek("conv_real")!.getState();
++    expect(real.pendingUserMessages).toEqual([]);
++    expect(real.status).toBe("idle");
++    // The stream is bound so the launch shows, but no message was posted.
++    expect(real.abortController).not.toBeNull();
++    const posts = fetchMock.mock.calls.filter(
++      ([u]) => String(u) === "/v1/sessions/conv_real/events",
++    );
++    expect(posts).toEqual([]);
++  });
++
+   it("B1: a failed first message settles to idle (not stuck streaming)", async () => {
+     seedSession("conv_real");
+     fetchMock.mockImplementation((input, init) => {
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index f4ad824..3a8ea49 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -376,12 +376,14 @@ export function beginLocalConversation(
+             : {}),
+         };
+ 
++  // A session started without a first message has no bubble to show and no
++  // turn to wait on.
+   const entry = conversationRegistry.acquire(tempConvId);
+   entry.setState({
+     ...modelSeed,
+-    pendingUserMessages: [bubble],
++    pendingUserMessages: content.length > 0 ? [bubble] : [],
+     loadingConversation: false,
+-    status: "streaming",
++    status: content.length > 0 ? "streaming" : "idle",
+   });
+   useChatStore.setState({ conversationId: tempConvId });
+   conversationRegistry.setActive(tempConvId);
+@@ -394,7 +396,8 @@ export function beginLocalConversation(
+  * `createSession` returns: rekey the registry entry (carrying the optimistic
+  * bubble), the send chain, and the sidebar row from `tempConvId` to `realId`;
+  * flip the store + URL when still viewing it; then POST the first message via
+- * `send` (reusing the already-shown bubble), which binds the real stream.
++ * `send` (reusing the already-shown bubble), which binds the real stream. A
++ * session started without a first message only binds the stream.
+  *
+  * Navigate-away safe: the registry/chain/sidebar rekey is id-addressed and
+  * always runs. The store flip + `navigate` run ONLY when still on `tempConvId`,
+@@ -428,6 +431,13 @@ export function hydrateLocalConversation(
+     navigate(`/c/${realId}`, { replace: true });
+   }
+ 
++  if (skill === null && !text.trim() && !files?.length) {
++    // Started without a first message: nothing to POST, so bind the real
++    // stream here (the rekeyed entry has no live pump) to follow the launch.
++    const entry = conversationRegistry.acquire(realId);
++    void bindStream(realId, entrySetter(entry), entryGetter(entry), true).catch(() => undefined);
++    return;
++  }
+   const store = useChatStore.getState();
+   if (skill !== null) {
+     // Slash command: the server resolves the skill and emits its own receipt +

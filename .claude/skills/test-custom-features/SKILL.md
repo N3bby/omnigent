@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, the environment menu with Stop sandbox, and the startup card. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, and the sandbox picker under the composer. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -114,6 +114,8 @@ PASS  images/server/web-patches/0018-composer-subscription.patch
 PASS  images/server/web-patches/0019-project-repositories.patch
 PASS  images/server/web-patches/0020-environment-menu.patch
 PASS  images/server/web-patches/0021-startup-progress.patch
+PASS  images/server/web-patches/0022-start-without-message.patch
+PASS  images/server/web-patches/0023-sandbox-picker-under-composer.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -166,8 +168,8 @@ Image builds apply the patches, build the frontend, and check Python
 compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
-`@` file search, a project's repositories, the environment menu or the
-startup card, or changing their native message, composer, file-index, project
+`@` file search, a project's repositories, the environment menu, the
+startup card or the New session screen, or changing their native message, composer, file-index, project
 settings, Stop, sandbox lifecycle, sandbox start or runner idle paths:
 
 ```bash
@@ -179,7 +181,7 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx` | 929 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx` | 1545 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py` | 87 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
@@ -190,7 +192,9 @@ and Stop sandbox add the four frontend files after it (93 cases, most of
 and the seven backend files after the file index (52 cases); the startup
 card adds the last three frontend files (33 cases) and the last two backend
 files (16 cases; the one that reads a log through the real Kubernetes client
-is skipped, because these suites don't install it). These are
+is skipped, because these suites don't install it); the New session screen's
+two files cover starting without a message and the sandbox picker under the
+composer (616 cases, most of them earlier ones). These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -462,6 +466,7 @@ settings.
 | Subscription in the composer | If Settings has a Claude account, this session's composer shows a key and the name of the account Claude Code started with, left of the model picker (on a phone, the name without the key). It's the account the `selection.json` from step 4 names for `claude`, unless Settings switched since this session started; then a dot is on the key. Tapping it opens **Claude account** with the name and what it means. Close it with Escape. Without a Claude account in Settings there's no tag. |
 | A project's repositories | Open a project's ⋯ menu in the sidebar and choose **Project settings**. With **Host** on the Kubernetes sandbox or no default, the dialog has a **Repositories** field, with a **Choose a repository…** picker when GitHub is connected and a field to paste a URL; with the sandbox there's no **Working directory**. Close it with **Cancel**, without saving. No project: record SKIP. |
 | Environment menu | In this session's composer, the monitor icon left of the permission picker has a solid green dot while you work. Its menu is headed **Agent Sandbox** with `omnigent-<8 hex>` (the `joined as` short name from step 4) and a green **Running** badge, then `Agent  Working · Claude Code` (or `· Codex`), `Pod  Up <time> · <n> CPU, <n> GB` (within a few seconds of opening; compare `cat /sys/fs/cgroup/memory.current`), `VM disk  <used> of <total> GB` with a bar (`df -h /` in this Pod shows the same disk), `Idle stop  Not while the agent is working`, **Copy SSH command**, **Keep running** with a `›`, **Restart agent** (`keeps the Pod`) and **Stop sandbox** (`keeps files`) in red. Choose **Copy SSH command**: a check replaces the copy icon, and the clipboard holds `ssh root@omnigent-<8 hex>`, the short name without `.ts.net`. Hover **Keep running**: its submenu says `Don't stop this Pod when it's idle, so dev servers keep running.` and lists **Usual idle timeout** (ticked, unless someone chose otherwise), **For 2 hours**, **For 8 hours** and **Until I stop it**. Close the menus with Escape; don't choose anything in them, or Restart agent or Stop sandbox. Without Tailscale there's no Copy SSH command, and the header shows the host's name. |
+| Sandbox picker under the composer | Open the **New session** screen and don't send anything. In the bar with the repository, the first chip is labelled `Host: Agent Sandbox, Offline` and shows **Agent Sandbox** (or `Host: <machine>, Online` with the machine's name, if the last session ran on one). The composer has no monitor icon left of the permission picker. Opening the chip lists the sandbox and **Connect new host**; close it with Escape. Then leave the screen. |
 | GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository picker lists repositories. If it isn't connected, record SKIP (optional setup). |
 
 Also check that `feature-check claude` from 5a now shows usage numbers in its
@@ -658,6 +663,14 @@ after the next message it names `feature-check`. Switch back, then remove
     - **A terminal session:** in a session that opens in the agent's terminal,
       stop the sandbox and send a message: the card is where **Starting up…**
       was, and there's no **Resume session** button until the agent is up.
+
+17. **Starting without a message:** it starts a sandbox, so it's left to
+    you. On the **New session** screen, pick the sandbox and a repository and
+    press **Start session** without typing anything. The chat shows no message
+    and no **Working…**, the startup card runs, and then the chat reads
+    **What should we work on?**. The sidebar row says **Claude Code**. Type
+    `@` and part of a file's name: the menu is headed **Search workspace** and
+    finds files in the repository. Then delete the session.
 
 ## 7. Clean up
 

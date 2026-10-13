@@ -29,7 +29,8 @@ the search match case.
 
 - **Only the session's composer has it.** The `@` menu in the **New
   session** dialog lists the host's files and still browses one folder at a
-  time.
+  time. To search a sandbox before you've decided what to ask,
+  [start the session without a message](start-without-message.md).
 - **Ignored files aren't listed.** Inside a Git repository the menu offers
   what `git ls-files` lists: tracked files, and new files `.gitignore`
   doesn't exclude. A repository inside another one follows its own

@@ -17,6 +17,7 @@ What you see and choose while talking to an agent.
 | [Fuzzy file search with @](fuzzy-file-mentions.md) | Type `@auth` to find a file anywhere in the workspace, like in Claude Code | No |
 | [The environment menu](environment-menu.md) | See whether the sandbox is running, starting or stopped, copy its SSH command, restart the agent, or stop the sandbox and keep its files | Nothing to turn off |
 | [The startup card](startup-progress.md) | Each step of a sandbox's start as it happens, why it failed in plain words, and the whole startup log | Nothing to turn off |
+| [Start without a message](start-without-message.md) | Start a session from the New session screen with an empty composer, so its sandbox and @ file search are ready before you ask anything | Nothing to turn off |
 
 ## Subscriptions
 
@@ -65,6 +66,7 @@ Changes to how the web UI looks and behaves.
 | Feature | What you get | Can you turn it off? |
 | --- | --- | --- |
 | [Codex theme](codex-theme.md) | A colour theme that looks like the Codex app, beyond just the colours | It's off until you pick it in Settings → Appearance |
+| [The sandbox picker under the composer](sandbox-picker.md) | On the New session screen, where the session runs is a named chip next to the repository | No |
 | [Swipe for a session's menu](session-swipe-menu.md) | On a phone, swipe a session left for its menu; holding it down only moves it | No |
 | [No Share button](no-share-button.md) | Sessions can't be shared from the web UI | No |
 | [No pin or archive buttons in the sidebar](no-sidebar-quick-actions.md) | Hovering a session no longer shows buttons you can hit by accident; Pin and Archive are in its ⋯ menu | No |
