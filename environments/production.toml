@@ -59,7 +59,10 @@ runner_ephemeral_request = "2Gi"
 # far above node capacity so runners can use whatever the node has free.
 runner_cpu_limit = "1000"
 runner_memory_limit = "1024Gi"
-runner_ephemeral_limit = "8Gi"
+# The kubelet enforces the ephemeral-storage limit by evicting the Pod, which
+# ends its session, so keep it far above the disk too. When the disk runs low,
+# the kubelet still evicts the runner using the most beyond its request.
+runner_ephemeral_limit = "1024Gi"
 # Each session keeps its home directory on a volume of this size until the
 # session is deleted. local-path does not enforce the size.
 runner_home_limit = "8Gi"
