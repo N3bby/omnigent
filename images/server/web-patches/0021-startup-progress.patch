@@ -12,7 +12,9 @@ for a clone problem, and Copy error details. "Log" opens the startup log,
 polled from GET /v1/sessions/{id}/startup-log while the start is going, with
 a filter per source. A finished start folds to "Sandbox ready in 30s" and
 stays until the agent answers the message that waited for it, not one sent
-to the running sandbox later; a failed setup script stays until dismissed.
+to the running sandbox later. One no message asked for (Start now, Try
+again) stays until the next message; a failed setup script stays until
+dismissed.
 It sits above Working… and pending questions, since the start comes first.
 
 The record arrives in the session snapshot (`startup`) and in session.startup
@@ -31,10 +33,10 @@ Base: omnigent v0.15.0 (c8b9b85f822f), after 0020-environment-menu.patch.
 
 diff --git a/web/src/components/chat/SandboxStartupCard.test.tsx b/web/src/components/chat/SandboxStartupCard.test.tsx
 new file mode 100644
-index 000000000..8daa69494
+index 000000000..133937d80
 --- /dev/null
 +++ b/web/src/components/chat/SandboxStartupCard.test.tsx
-@@ -0,0 +1,353 @@
+@@ -0,0 +1,365 @@
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 +import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 +import { MemoryRouter } from "react-router-dom";
@@ -288,7 +290,7 @@ index 000000000..8daa69494
 +  });
 +
 +  it("shows a finished start only for the message that waited for it", () => {
-+    const ready = startup({ outcome: "ready", endedAt: NOW - 600 });
++    const ready = startup({ outcome: "ready", startedAt: NOW - 606, endedAt: NOW - 600 });
 +    // The message that woke the sandbox, sent while it started.
 +    expect(startupCardVisible(ready, true, false, NOW - 620)).toBe(true);
 +    // Its clock may be a little ahead of the server's.
@@ -296,6 +298,18 @@ index 000000000..8daa69494
 +    // A later message, to the sandbox that's running since.
 +    expect(startupCardVisible(ready, true, false, NOW - 30)).toBe(false);
 +    expect(startupCardVisible(ready, true, false, null)).toBe(false);
++    // Answered, the message that woke it, or a later one.
++    expect(startupCardVisible(ready, false, false, NOW - 620)).toBe(false);
++    expect(startupCardVisible(ready, false, false, NOW - 30)).toBe(false);
++  });
++
++  it("keeps a start no message asked for until the next message", () => {
++    // Start now on a sandbox stopped since the last answer an hour ago.
++    const woken = startup({ outcome: "ready", startedAt: NOW - 20, endedAt: NOW - 14 });
++    expect(startupCardVisible(woken, false, false, NOW - 3600)).toBe(true);
++    expect(startupCardVisible(woken, false, false, null)).toBe(true);
++    // The next message goes to the running sandbox.
++    expect(startupCardVisible(woken, true, false, NOW)).toBe(false);
 +  });
 +
 +  it("keeps a warning until it's dismissed, and a running setup script", () => {
@@ -390,10 +404,10 @@ index 000000000..8daa69494
 +});
 diff --git a/web/src/components/chat/SandboxStartupCard.tsx b/web/src/components/chat/SandboxStartupCard.tsx
 new file mode 100644
-index 000000000..a8b7f4332
+index 000000000..867e74a7b
 --- /dev/null
 +++ b/web/src/components/chat/SandboxStartupCard.tsx
-@@ -0,0 +1,773 @@
+@@ -0,0 +1,783 @@
 +import { useEffect, useMemo, useRef, useState } from "react";
 +import {
 +  CheckIcon,
@@ -883,15 +897,18 @@ index 000000000..a8b7f4332
 + * Whether the thread shows the startup card.
 + *
 + * Always while the sandbox starts and after it failed. A finished start stays
-+ * until the agent answers the message that waited for it, or, with a warning
-+ * (a failed setup script), until it's dismissed. A cancelled one doesn't show.
++ * until the agent answers the message that waited for it; one no message asked
++ * for (Start now, Try again) stays until the next message. With a warning (a
++ * failed setup script), it stays until it's dismissed. A cancelled one doesn't
++ * show.
 + *
 + * @param startup - The session's current or last start.
 + * @param awaitingReply - Whether the thread's last message is the user's.
 + * @param isDismissed - Whether its warning was dismissed.
-+ * @param sentAt - When that message was sent, in Unix seconds, or `null` when
-+ *   unknown. A message sent after the start ended, to a running sandbox,
-+ *   doesn't bring it back. Leave it out where any message counts.
++ * @param sentAt - When the user's last message was sent, answered or not, in
++ *   Unix seconds; `null` when unknown or there's none. A message sent after the
++ *   start ended, to a running sandbox, doesn't bring it back. Leave it out
++ *   where any unanswered message counts.
 + */
 +export function startupCardVisible(
 +  startup: SandboxStartup,
@@ -903,13 +920,20 @@ index 000000000..a8b7f4332
 +  if (startup.outcome === "cancelled") return false;
 +  if (startup.warning && !isDismissed) return true;
 +  if (startup.steps.some((s) => s.id === "setup" && s.state === "running")) return true;
-+  if (!awaitingReply) return false;
-+  if (sentAt === undefined || startup.endedAt === null) return true;
-+  return sentAt !== null && sentAt <= startup.endedAt + SENT_DURING_START_SLACK_S;
++  if (sentAt === undefined) return awaitingReply;
++  if (awaitingReply) {
++    if (startup.endedAt === null) return true;
++    return sentAt !== null && sentAt <= startup.endedAt + SENT_DURING_START_SLACK_S;
++  }
++  // Answered: shown only when the start came well after that message, so no
++  // message asked for it; it then stays until the next one.
++  return sentAt === null || sentAt < startup.startedAt - SENT_BEFORE_START_S;
 +}
 +
 +// The message's time is the browser's while live and the start's the server's.
 +const SENT_DURING_START_SLACK_S = 5;
++// A message wakes the sandbox straight away; one this much older didn't.
++const SENT_BEFORE_START_S = 30;
 +
 +/**
 + * The open session's startup card, from the chat store, or nothing when the
@@ -1168,7 +1192,7 @@ index 000000000..a8b7f4332
 +  });
 +}
 diff --git a/web/src/components/chat/Transcript.tsx b/web/src/components/chat/Transcript.tsx
-index ff179bcff..8262167c1 100644
+index ff179bcff..833b64aec 100644
 --- a/web/src/components/chat/Transcript.tsx
 +++ b/web/src/components/chat/Transcript.tsx
 @@ -31,6 +31,7 @@ import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
@@ -1187,15 +1211,15 @@ index ff179bcff..8262167c1 100644
 +  // sandbox starts, and stays until the agent answers.
 +  const startupRunning = useChatStore((s) => s.sandboxStartup?.outcome === "running");
 +  const startupFailed = useChatStore((s) => s.sandboxStartup?.outcome === "failed");
-+  // The unanswered message, if any, and when it was sent: a finished start
-+  // shows only for the message that waited for it.
++  // Whether the last message is unanswered, and when it was sent: a finished
++  // start shows for the message that waited for it, or, when no message asked
++  // for it (Start now), until the next one.
 +  const awaiting = useMemo((): { reply: boolean; sentAt: number | null } => {
++    let reply = true;
 +    for (let i = display.bubbles.length - 1; i >= 0; i--) {
 +      const b = display.bubbles[i];
-+      if (b.kind === "assistant") return { reply: false, sentAt: null };
-+      if (b.kind === "user" && !isSystemBubble(b)) {
-+        return { reply: true, sentAt: b.createdAtS ?? null };
-+      }
++      if (b.kind === "assistant") reply = false;
++      if (b.kind === "user" && !isSystemBubble(b)) return { reply, sentAt: b.createdAtS ?? null };
 +    }
 +    return { reply: false, sentAt: null };
 +  }, [display.bubbles]);
