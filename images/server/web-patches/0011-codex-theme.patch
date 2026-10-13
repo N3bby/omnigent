@@ -309,7 +309,7 @@ index 0000000..11cdce8
 +
 +/* Put every label in the bar on one baseline. Each chip centres its label's
 + * line box, but where the baseline falls in that box depends on the font, so
-+ * the monospace Tailscale name sat off its neighbours. Trimming each label to
++ * labels in different fonts sat off each other. Trimming each label to
 + * end at its baseline and pinning that edge 4px below the bar's middle lines
 + * them up whatever the fonts. The 8px under it keeps room for descenders and
 + * the dotted underline, which a truncated label would clip. */
@@ -323,7 +323,7 @@ index 0000000..11cdce8
 +  }
 +
 +  /* `truncate` makes a label a scroll container, and Firefox doesn't line up
-+   * the trimmed text inside one: the monospace name still sat 1-2px high.
++   * the trimmed text inside one: a label still sat 1-2px high.
 +   * Clipping keeps the ellipsis without making a scroll container. */
 +  [data-theme="codex"] .composer-workspace-surface .truncate:not(:has(*)) {
 +    overflow: clip;

@@ -506,7 +506,7 @@ Hand these to the user; they need their own devices or VM access:
     theme. The sidebar turns flat grey without pink, and a session shows your
     messages in a grey bubble, a line after **Worked**, a round send button and
     the working directory under the composer, a few pixels clear of its
-    shadow. The labels in that bar, including the monospace Tailscale name,
+    shadow. The labels in that bar, in one font and size,
     sit on one baseline, in Firefox as well as Chrome. A code block's wrap,
     copy and download buttons sit in one row in the middle of its header,
     evenly spaced and without a backdrop. Queue a message while
