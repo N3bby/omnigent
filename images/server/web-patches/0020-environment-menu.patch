@@ -679,7 +679,7 @@ index 0000000..8160264
 +export const Mobile: Story = { render: () => <Scene view={{ state: "running" }} mobile /> };
 diff --git a/web/src/components/composer/EnvironmentMenu.test.tsx b/web/src/components/composer/EnvironmentMenu.test.tsx
 new file mode 100644
-index 0000000..3581d7c
+index 0000000..0374a73
 --- /dev/null
 +++ b/web/src/components/composer/EnvironmentMenu.test.tsx
 @@ -0,0 +1,465 @@
@@ -822,10 +822,10 @@ index 0000000..3581d7c
 +    expect(screen.getByTestId("environment-stop-sandbox")).toBeInTheDocument();
 +  });
 +
-+  it("copies the SSH command with the full tailnet name", async () => {
++  it("copies the SSH command with the MagicDNS short name", async () => {
 +    renderMenu();
 +    fireEvent.click(screen.getByTestId("environment-copy-ssh"));
-+    expect(mocks.copyText).toHaveBeenCalledWith("ssh root@omnigent-d8ee7424.taild5bc1b.ts.net");
++    expect(mocks.copyText).toHaveBeenCalledWith("ssh root@omnigent-d8ee7424");
 +    // Stays open to show the check.
 +    await waitFor(() => expect(screen.getByTestId("composer-host-menu")).toBeInTheDocument());
 +  });
@@ -1150,10 +1150,10 @@ index 0000000..3581d7c
 +});
 diff --git a/web/src/components/composer/EnvironmentMenu.tsx b/web/src/components/composer/EnvironmentMenu.tsx
 new file mode 100644
-index 0000000..98e89f3
+index 0000000..8b9ddad
 --- /dev/null
 +++ b/web/src/components/composer/EnvironmentMenu.tsx
-@@ -0,0 +1,963 @@
+@@ -0,0 +1,966 @@
 +import { Fragment, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 +import {
 +  CheckIcon,
@@ -1863,7 +1863,10 @@ index 0000000..98e89f3
 +    : view;
 +  const { state } = shown;
 +  const up = state === "running" || state === "idle" || state === "agent_exited";
-+  const sshCommand = view.tailscaleHost ? `ssh root@${view.tailscaleHost}` : null;
++  // The MagicDNS short name, e.g. `ssh root@omnigent-d8ee7424`.
++  const sshCommand = view.tailscaleHost
++    ? `ssh root@${tailscaleShortName(view.tailscaleHost)}`
++    : null;
 +
 +  const restartAgent = () =>
 +    stop.mutate(sessionId, {

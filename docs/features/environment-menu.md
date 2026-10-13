@@ -25,9 +25,10 @@ While the sandbox is up, the menu shows:
 
 The menu refreshes them every few seconds while it's open. Then:
 
-- **Copy SSH command** copies `ssh root@<the Pod's full tailnet name>`, the
-  same name as the Tailscale chip in the workspace bar. It isn't there when
-  the session isn't on [your tailnet](tailscale.md).
+- **Copy SSH command** copies `ssh root@omnigent-<id>`, the Pod's MagicDNS
+  short name, as in the menu's header. It works from any device on [your
+  tailnet](tailscale.md) that uses Tailscale's DNS, and isn't there when the
+  session isn't on your tailnet.
 - **Keep running** stops the Pod from stopping when it's idle, so dev servers
   in the agent's terminal keep running: **For 2 hours**, **For 8 hours** or
   **Until I stop it**. **Usual idle timeout** goes back to normal. It isn't
