@@ -165,6 +165,9 @@ fi
 echo "== Environment menu: runner patch is installed"
 check "runner reports its Pod's use and idle deadline" grep -q 'EnvironmentReporter' "$site/omnigent/runner/_entry.py"
 check "runner can read its Pod's CPU and memory (cgroup v2)" test -r /sys/fs/cgroup/cpu.stat -a -r /sys/fs/cgroup/memory.current
+# The runner logs each request it makes; it reports every 5 seconds.
+runner_log="$(ls -t /home/omnigent/.omnigent/logs/runner/runner-*.log 2>/dev/null | head -1)"
+check "runner's reports reach the server" grep -q 'environment/report "HTTP/1.1 200' "${runner_log:-/dev/null}"
 check "Keep running holds off the runner's idle exit" grep -q '_busy_or_kept_running' "$site/omnigent/runner/_entry.py"
 check "Keep running holds off native pane reaping" grep -q 'def hold_while' "$site/omnigent/terminals/pane_reaper.py"
 

@@ -180,7 +180,7 @@ patch sets, and runs the following suites against that source:
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
 | Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx` | 927 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py` | 84 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py` | 87 passed |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
@@ -279,6 +279,7 @@ PASS  home directory is its own volume
 == Environment menu: runner patch is installed
 PASS  runner reports its Pod's use and idle deadline
 PASS  runner can read its Pod's CPU and memory (cgroup v2)
+PASS  runner's reports reach the server
 PASS  Keep running holds off the runner's idle exit
 PASS  Keep running holds off native pane reaping
 == Runners on your tailnet
@@ -355,6 +356,7 @@ What a failure usually means:
 | `runner reports its Pod's use and idle deadline` | `images/runner/patches/0011-environment-menu.patch` was dropped or upstream moved the runner's idle monitor (see step 2), or this session predates the deploy; the environment menu then shows no CPU, memory or agent countdown |
 | `Keep running holds off …` | `images/runner/patches/0011-environment-menu.patch` was dropped or upstream moved the idle monitor or the pane reaper (see step 2), or this session predates the deploy |
 | `runner can read its Pod's CPU and memory (cgroup v2)` | the node isn't on cgroup v2 any more; the menu's Pod row then shows only the uptime |
+| `runner's reports reach the server` | the runner doesn't start its reporter, or the server refuses its reports. It reports only when it sees `IS_SANDBOX`, which upstream's host image (the runner image's base) sets and the host passes on to runners; check that upstream's host still forwards it (`_RUNNER_ENV_ALLOWLIST` in `omnigent/host/connect.py`). A 403 means the report's tunnel token doesn't match the session's runner. The menu then shows no CPU, memory or agent countdown, and Keep running has no effect |
 | `Claude statusLine reports …` | the Claude Code statusLine payload changed shape, or it's not a Pro/Max login |
 | managed settings / wrappers | `images/runner/Dockerfile` no longer installs the wrappers over the real CLIs, or `claude_bypass_permissions` is off |
 | `… switch Claude back to bypass`, `running Claude has --allow-dangerously-skip-permissions` | `images/runner/patches/0003-claude-bypass-switch.patch` was dropped, or this session's Pod started before the deploy |
