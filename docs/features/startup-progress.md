@@ -36,8 +36,9 @@ variable values in the log show as `[hidden]`.
 ### When it's done
 
 A start that went well folds into one line, such as `Sandbox ready in 31s`,
-which opens again when you click it. It stays below your message until the
-agent replies.
+which opens again when you click it. It stays below your message, above the
+agent's working line, until the agent replies. A message you send later, to
+the sandbox that's running since, doesn't bring it back.
 
 A setup script that failed doesn't stop the session: the agent starts
 anyway. The card stays open with the script's last lines, **Show log** and

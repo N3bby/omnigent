@@ -11,7 +11,8 @@ goes wrong, why in plain words with the failed container's log, Try again
 for a clone problem, and Copy error details. "Log" opens the startup log,
 polled from GET /v1/sessions/{id}/startup-log while the start is going, with
 a filter per source. A finished start folds to "Sandbox ready in 30s" and
-stays until the agent answers; a failed setup script stays until dismissed.
+stays until the agent answers the message that waited for it, not one sent
+to the running sandbox later; a failed setup script stays until dismissed.
 It sits above Working… and pending questions, since the start comes first.
 
 The record arrives in the session snapshot (`startup`) and in session.startup
@@ -30,10 +31,10 @@ Base: omnigent v0.15.0 (c8b9b85f822f), after 0020-environment-menu.patch.
 
 diff --git a/web/src/components/chat/SandboxStartupCard.test.tsx b/web/src/components/chat/SandboxStartupCard.test.tsx
 new file mode 100644
-index 000000000..56bd3f9fb
+index 000000000..8daa69494
 --- /dev/null
 +++ b/web/src/components/chat/SandboxStartupCard.test.tsx
-@@ -0,0 +1,342 @@
+@@ -0,0 +1,353 @@
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 +import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 +import { MemoryRouter } from "react-router-dom";
@@ -286,6 +287,17 @@ index 000000000..56bd3f9fb
 +    expect(startupCardVisible(ready, false, false)).toBe(false);
 +  });
 +
++  it("shows a finished start only for the message that waited for it", () => {
++    const ready = startup({ outcome: "ready", endedAt: NOW - 600 });
++    // The message that woke the sandbox, sent while it started.
++    expect(startupCardVisible(ready, true, false, NOW - 620)).toBe(true);
++    // Its clock may be a little ahead of the server's.
++    expect(startupCardVisible(ready, true, false, NOW - 597)).toBe(true);
++    // A later message, to the sandbox that's running since.
++    expect(startupCardVisible(ready, true, false, NOW - 30)).toBe(false);
++    expect(startupCardVisible(ready, true, false, null)).toBe(false);
++  });
++
 +  it("keeps a warning until it's dismissed, and a running setup script", () => {
 +    const warned = startup({
 +      outcome: "ready",
@@ -378,10 +390,10 @@ index 000000000..56bd3f9fb
 +});
 diff --git a/web/src/components/chat/SandboxStartupCard.tsx b/web/src/components/chat/SandboxStartupCard.tsx
 new file mode 100644
-index 000000000..2943a0edd
+index 000000000..a8b7f4332
 --- /dev/null
 +++ b/web/src/components/chat/SandboxStartupCard.tsx
-@@ -0,0 +1,761 @@
+@@ -0,0 +1,773 @@
 +import { useEffect, useMemo, useRef, useState } from "react";
 +import {
 +  CheckIcon,
@@ -871,24 +883,33 @@ index 000000000..2943a0edd
 + * Whether the thread shows the startup card.
 + *
 + * Always while the sandbox starts and after it failed. A finished start stays
-+ * until the agent answers, or, with a warning (a failed setup script), until
-+ * it's dismissed. A cancelled one doesn't show.
++ * until the agent answers the message that waited for it, or, with a warning
++ * (a failed setup script), until it's dismissed. A cancelled one doesn't show.
 + *
 + * @param startup - The session's current or last start.
 + * @param awaitingReply - Whether the thread's last message is the user's.
 + * @param isDismissed - Whether its warning was dismissed.
++ * @param sentAt - When that message was sent, in Unix seconds, or `null` when
++ *   unknown. A message sent after the start ended, to a running sandbox,
++ *   doesn't bring it back. Leave it out where any message counts.
 + */
 +export function startupCardVisible(
 +  startup: SandboxStartup,
 +  awaitingReply: boolean,
 +  isDismissed: boolean,
++  sentAt?: number | null,
 +): boolean {
 +  if (startup.outcome === "running" || startup.outcome === "failed") return true;
 +  if (startup.outcome === "cancelled") return false;
 +  if (startup.warning && !isDismissed) return true;
 +  if (startup.steps.some((s) => s.id === "setup" && s.state === "running")) return true;
-+  return awaitingReply;
++  if (!awaitingReply) return false;
++  if (sentAt === undefined || startup.endedAt === null) return true;
++  return sentAt !== null && sentAt <= startup.endedAt + SENT_DURING_START_SLACK_S;
 +}
++
++// The message's time is the browser's while live and the start's the server's.
++const SENT_DURING_START_SLACK_S = 5;
 +
 +/**
 + * The open session's startup card, from the chat store, or nothing when the
@@ -896,12 +917,15 @@ index 000000000..2943a0edd
 + *
 + * @param awaitingReply - Whether the thread's last message is the user's: a
 + *   finished start stays until the agent answers.
++ * @param sentAt - When that message was sent; see {@link startupCardVisible}.
 + */
 +export function SessionStartupCard({
 +  awaitingReply,
++  sentAt,
 +  className,
 +}: {
 +  awaitingReply: boolean;
++  sentAt?: number | null;
 +  className?: string;
 +}) {
 +  const startup = useChatStore((s) => s.sandboxStartup);
@@ -910,7 +934,7 @@ index 000000000..2943a0edd
 +  const [, setDismissals] = useState(0);
 +  if (!startup || !sessionId) return null;
 +  const key = `${sessionId}:${startup.startedAt}`;
-+  if (!startupCardVisible(startup, awaitingReply, dismissed.has(key))) return null;
++  if (!startupCardVisible(startup, awaitingReply, dismissed.has(key), sentAt)) return null;
 +  const agentLabel =
 +    nativeCodingAgentForWrapper(session?.labels?.[WRAPPER_LABEL_KEY])?.displayName ?? null;
 +  return (
@@ -1144,7 +1168,7 @@ index 000000000..2943a0edd
 +  });
 +}
 diff --git a/web/src/components/chat/Transcript.tsx b/web/src/components/chat/Transcript.tsx
-index ff179bcff..a38468907 100644
+index ff179bcff..8262167c1 100644
 --- a/web/src/components/chat/Transcript.tsx
 +++ b/web/src/components/chat/Transcript.tsx
 @@ -31,6 +31,7 @@ import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
@@ -1155,7 +1179,7 @@ index ff179bcff..a38468907 100644
  import { CHAT_COLUMN_WIDTH } from "@/pages/chatLayout";
  import {
    type ConversationScroller,
-@@ -309,6 +310,18 @@ function TranscriptImpl({
+@@ -309,6 +310,22 @@ function TranscriptImpl({
    }, [nav]);
  
    const showWorkingIndicator = shouldShowWorkingIndicator(display.showsWorking, display.bubbles);
@@ -1163,18 +1187,22 @@ index ff179bcff..a38468907 100644
 +  // sandbox starts, and stays until the agent answers.
 +  const startupRunning = useChatStore((s) => s.sandboxStartup?.outcome === "running");
 +  const startupFailed = useChatStore((s) => s.sandboxStartup?.outcome === "failed");
-+  const awaitingReply = useMemo(() => {
++  // The unanswered message, if any, and when it was sent: a finished start
++  // shows only for the message that waited for it.
++  const awaiting = useMemo((): { reply: boolean; sentAt: number | null } => {
 +    for (let i = display.bubbles.length - 1; i >= 0; i--) {
 +      const b = display.bubbles[i];
-+      if (b.kind === "assistant") return false;
-+      if (b.kind === "user" && !isSystemBubble(b)) return true;
++      if (b.kind === "assistant") return { reply: false, sentAt: null };
++      if (b.kind === "user" && !isSystemBubble(b)) {
++        return { reply: true, sentAt: b.createdAtS ?? null };
++      }
 +    }
-+    return true;
++    return { reply: false, sentAt: null };
 +  }, [display.bubbles]);
    return (
      <>
        {/* Task tracker pinned above the thread. Sibling of the viewport (not an
-@@ -341,8 +354,11 @@ function TranscriptImpl({
+@@ -341,8 +358,11 @@ function TranscriptImpl({
                rowCount={display.streamBubbles.length}
              />
              {display.bubbles.length === 0 && !showWorkingIndicator && !display.mcpStartupActive ? (
@@ -1188,17 +1216,17 @@ index ff179bcff..a38468907 100644
                ) : (
                  <ConversationEmptyState>
                    <div className="space-y-1.5">
-@@ -373,6 +389,9 @@ function TranscriptImpl({
+@@ -373,6 +393,9 @@ function TranscriptImpl({
                    messageId={messageId}
                    onGeometryChange={onGeometryChange}
                  />
 +                {/* How the sandbox start is going, step by step (this deployment).
 +                The start comes before the reply, so it's above Working…. */}
-+                <SessionStartupCard awaitingReply={awaitingReply} />
++                <SessionStartupCard awaitingReply={awaiting.reply} sentAt={awaiting.sentAt} />
                  {/* Pending elicitation cards, floated to the bottom of the chat
                  so an outstanding question stays in view. Newest renders last,
                  nearest the composer. Above the Working… indicator. */}
-@@ -389,7 +408,7 @@ function TranscriptImpl({
+@@ -389,7 +412,7 @@ function TranscriptImpl({
                    </Message>
                  ))}
                  {/* Working… shimmer, lit for the whole busy turn. */}
