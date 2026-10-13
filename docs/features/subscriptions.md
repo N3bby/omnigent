@@ -41,8 +41,9 @@ reaches new sessions within about a minute, once Kubernetes has synced it into
 the runner Pods.
 
 A session that's already open keeps its account until its agent restarts:
-choose **Stop session** in its menu, then send another message. Interrupting a
-turn doesn't switch it, and a switch never interrupts a running turn.
+choose **Restart agent** in its [environment menu](environment-menu.md), then
+send another message. Interrupting a turn doesn't switch it, and a switch
+never interrupts a running turn.
 
 Each account keeps its own usage limits, so the numbers in the composer follow
 the account a session uses.
@@ -143,8 +144,8 @@ subscription login it had.
   `CODEX_HOME`, and the wrapper only moves the link while nobody holds it.
 - **Runner patches:** `images/runner/patches/0008-subscription-readiness.patch`
   makes Codex count the mounted login as signed in, and keys its model cache
-  by the selection. `0009-stop-codex-process.patch` makes **Stop session**
-  close Codex's app-server, so the next message starts it with the current
+  by the selection. `0009-stop-codex-process.patch` makes stopping the agent
+  (**Restart agent**) close Codex's app-server, so the next message starts it with the current
   account, as Claude already did.
 - **The composer's account name:** the wrappers record the ID of the account
   each agent starts with in an `omnigent-subscription` file, empty for the

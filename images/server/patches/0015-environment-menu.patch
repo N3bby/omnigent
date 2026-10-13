@@ -1,0 +1,1888 @@
+The environment menu, server side: Stop sandbox, Cancel start, the Pod's
+status and Keep running.
+
+Stop sandbox. Stop used to end only the runner: the Pod kept running until its
+shutdownTime passed, 30 minutes later in production, and the next message
+relaunched the runner on it. stop_session with data.suspend_sandbox now also
+suspends the session's managed sandbox the way an idle stop does:
+AgentSandboxLauncher.suspend moves spec.shutdownTime to now, the controller
+deletes the Pod and keeps the Sandbox and its volume, the host tunnel drops so
+the session reads as host_asleep, and the next message wakes it through
+resume_managed_host. managed_host_keepalive skips the stopped sandbox for two
+minutes and runs the suspend on its own worker, behind any refresh already
+queued, so a runner tunnel that hasn't dropped yet can't push the deadline
+back. Without the flag stop_session is unchanged; the composer's Restart agent
+uses that. A rejected suspend is a 502 whose detail the web UI shows. A
+claimed warm-pool Sandbox isn't named by its handle, so its suspend() raises a
+capability error rather than patching nothing and reporting success.
+
+Cancel start. Stop sandbox while a stopped sandbox wakes cancels the wake. Its
+provider calls run on worker threads and can't be interrupted, so the route
+marks the start cancelled (managed_hosts.cancel_managed_start) and publishes
+"ready", so the session reads as stopped straight away. Every stage of a start
+goes through _publish_sandbox_status, which raises StartCancelledError for a
+cancelled start, so the wake fails at its next stage and the message waiting
+on it gets "you cancelled the start" instead of being sent, even when the wake
+had already passed its last stage. Once the wake has stopped, the cleanup
+stops the sandbox again, in case the wake got as far as starting the Pod. A
+new session's first launch isn't cancelled, since losing its Pod would delete
+the new Sandbox: Stop sandbox answers 409 ("still being created") until it has
+started. A new start clears an old cancel that never settled.
+
+Status. GET /v1/sessions/{id}/environment returns when the Pod started, the
+Sandbox's spec.shutdownTime (when it stops, or stopped), the idle-stop window,
+the VM disk from os.statvfs("/") with the free fraction the kubelet evicts on
+(f_bavail / f_blocks), and the runner's latest report: CPU and memory in use
+and the agent's idle deadline. The runner posts it to
+POST /v1/sessions/{id}/environment/report every 5 seconds; only the session's
+bound runner may, by its tunnel token. Reports live in memory and one older
+than 30 seconds isn't shown. AgentSandboxLauncher.environment reads the
+Sandbox and its Pod, both of which the server's role already allows.
+
+Keep running. PUT /v1/sessions/{id}/environment/keep-running takes
+{"hours": n} (up to a week), {"forever": true}, or {} for the usual idle
+timeout, owner-only like Stop sandbox, and stores it in the
+omnigent.keep_running_until label as "<until>/<hours>" or "forever", so the
+menu can tick the choice. The answer to each runner report carries it, and
+GET .../environment shows it. A time in the past no longer holds. Stop sandbox
+clears it.
+Pairs with the runner patch 0011-environment-menu.patch and the web patch
+0020-environment-menu.patch.
+Applies after 0014-session-subscription.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/onboarding/sandboxes/agent_sandbox.py b/omnigent/onboarding/sandboxes/agent_sandbox.py
+index ac99143..14f034e 100644
+--- a/omnigent/onboarding/sandboxes/agent_sandbox.py
++++ b/omnigent/onboarding/sandboxes/agent_sandbox.py
+@@ -510,6 +510,101 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
+         finally:
+             self._close_clients()
+ 
++    def suspend(self, sandbox_id: str) -> None:
++        """
++        Move ``spec.shutdownTime`` to now, so the controller stops the Pod.
++
++        The same suspend as an idle expiry (``shutdownPolicy: Retain``): the Pod
++        goes, the ``Sandbox`` and its workspace claim stay, and :meth:`resume`
++        wakes it. Unlike :meth:`keep_alive` this raises, because a user asked
++        for it and should hear when it didn't land. A gone sandbox (404) has
++        nothing left to stop and counts as success.
++
++        :param sandbox_id: The ``Sandbox`` to suspend.
++        :raises click.ClickException: When the patch fails.
++        """
++        _ensure_sdk()
++        from kubernetes.client.rest import ApiException
++        from urllib3.exceptions import HTTPError
++
++        namespace = self._resolve_namespace()
++        try:
++            self._load_custom().patch_namespaced_custom_object(
++                API_GROUP,
++                API_VERSION,
++                namespace,
++                SANDBOX_PLURAL,
++                sandbox_id,
++                {"spec": {"shutdownTime": _shutdown_time(0)}},
++                _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
++            )
++        except ApiException as exc:
++            if getattr(exc, "status", None) == 404:
++                return
++            raise click.ClickException(
++                _format_api_error("suspend sandbox", sandbox_id, exc)
++            ) from exc
++        except HTTPError as exc:
++            raise click.ClickException(
++                f"Could not suspend agent-sandbox '{sandbox_id}': {_api_reason(exc)}"
++            ) from exc
++        finally:
++            self._close_clients()
++        _logger.info("suspended agent-sandbox '%s'", sandbox_id)
++
++    def environment(self, sandbox_id: str) -> dict[str, float | None]:
++        """
++        Read when the sandbox's Pod started and when the sandbox stops.
++
++        For the composer's environment menu. ``shutdown_at`` is the Sandbox's
++        ``spec.shutdownTime``: in the future while it runs, and when it stopped
++        once it has. Best-effort: anything unreadable is ``None``.
++
++        :param sandbox_id: The ``Sandbox`` (and its Pod's) name.
++        :returns: ``{"pod_started_at": ..., "shutdown_at": ...}`` as Unix
++            seconds; ``pod_started_at`` is ``None`` without a live Pod.
++        """
++        _ensure_sdk()
++        from kubernetes.client.rest import ApiException
++        from urllib3.exceptions import HTTPError
++
++        namespace = self._resolve_namespace()
++        shutdown_at: float | None = None
++        pod_started_at: float | None = None
++        try:
++            try:
++                sandbox = self._load_custom().get_namespaced_custom_object(
++                    API_GROUP,
++                    API_VERSION,
++                    namespace,
++                    SANDBOX_PLURAL,
++                    sandbox_id,
++                    _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
++                )
++                raw = (sandbox.get("spec") or {}).get("shutdownTime")
++                if isinstance(raw, str):
++                    shutdown_at = (
++                        datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ")
++                        .replace(tzinfo=UTC)
++                        .timestamp()
++                    )
++            except (ApiException, HTTPError, ValueError, AttributeError):
++                pass
++            try:
++                pod = self._load_core().read_namespaced_pod(
++                    sandbox_id, namespace, _request_timeout=_POD_READY_REQUEST_TIMEOUT_S
++                )
++                status = getattr(pod, "status", None)
++                started = getattr(status, "start_time", None)
++                deleting = getattr(getattr(pod, "metadata", None), "deletion_timestamp", None)
++                if isinstance(started, datetime) and not deleting:
++                    pod_started_at = started.timestamp()
++            except (ApiException, HTTPError):
++                pass
++        finally:
++            self._close_clients()
++        return {"pod_started_at": pod_started_at, "shutdown_at": shutdown_at}
++
+     def terminate(self, sandbox_id: str) -> None:
+         """
+         Delete the ``Sandbox`` (cascading to its Pod) and its token Secret.
+diff --git a/omnigent/onboarding/sandboxes/agent_sandbox_warm_pool.py b/omnigent/onboarding/sandboxes/agent_sandbox_warm_pool.py
+index a656148..f8d9c45 100644
+--- a/omnigent/onboarding/sandboxes/agent_sandbox_warm_pool.py
++++ b/omnigent/onboarding/sandboxes/agent_sandbox_warm_pool.py
+@@ -756,6 +756,18 @@ class AgentSandboxWarmPoolLauncher(AgentSandboxLauncher):
+         finally:
+             self._close_clients()
+ 
++    def suspend(self, sandbox_id: str) -> None:
++        # Stop sandbox: a claimed warm Sandbox isn't named by its handle, so
++        # the plain suspend would patch nothing and report success.
++        if sandbox_id.startswith(_HANDLE_PREFIX):
++            raise self._capability_error("stop a warm-pool sandbox and keep it resumable")
++        super().suspend(sandbox_id)
++
++    def environment(self, sandbox_id: str) -> dict[str, float | None]:
++        if sandbox_id.startswith(_HANDLE_PREFIX):
++            return {"pod_started_at": None, "shutdown_at": None}
++        return super().environment(sandbox_id)
++
+     def is_running(self, sandbox_id: str) -> bool | None:
+         if not sandbox_id.startswith(_HANDLE_PREFIX):
+             return super().is_running(sandbox_id)
+diff --git a/omnigent/onboarding/sandboxes/base.py b/omnigent/onboarding/sandboxes/base.py
+index 605e38c..c4272c5 100644
+--- a/omnigent/onboarding/sandboxes/base.py
++++ b/omnigent/onboarding/sandboxes/base.py
+@@ -705,6 +705,19 @@ class SandboxLifecycle(ABC):
+         del sandbox_id
+         return None
+ 
++    def suspend(self, sandbox_id: str) -> None:
++        """
++        Stop the sandbox now, the way an idle stop does, keeping it resumable.
++
++        Only providers with a stop/resume lifecycle implement this; a woken
++        sandbox comes back through :meth:`resume`.
++
++        :param sandbox_id: The sandbox to stop, e.g. ``"sb-a1b2c3"``.
++        :raises SandboxCapabilityError: When the provider cannot suspend.
++        :raises click.ClickException: If the suspend fails.
++        """
++        raise self._capability_error("stop a sandbox and keep it resumable")
++
+     def _capability_error(self, action: str) -> SandboxCapabilityError:
+         """
+         Build the error for an optional primitive this provider lacks.
+diff --git a/omnigent/server/managed_host_keepalive.py b/omnigent/server/managed_host_keepalive.py
+index 279e84a..ecd0f43 100644
+--- a/omnigent/server/managed_host_keepalive.py
++++ b/omnigent/server/managed_host_keepalive.py
+@@ -30,7 +30,7 @@ import contextvars
+ import logging
+ import threading
+ import time
+-from concurrent.futures import ThreadPoolExecutor
++from concurrent.futures import Future, ThreadPoolExecutor
+ from typing import TYPE_CHECKING
+ 
+ from omnigent.onboarding.sandboxes.base import (
+@@ -39,6 +39,7 @@ from omnigent.onboarding.sandboxes.base import (
+ )
+ 
+ if TYPE_CHECKING:
++    from omnigent.onboarding.sandboxes.base import SandboxHostLauncher
+     from omnigent.server.managed_hosts import ManagedSandboxDeployment
+     from omnigent.stores.conversation_store import ConversationStore
+     from omnigent.stores.host_store import HostStore
+@@ -75,6 +76,16 @@ _last_kept: dict[str, float] = {}
+ _inflight: set[str] = set()
+ _inflight_lock = threading.Lock()
+ 
++# How long a stopped sandbox ignores keepalives, in seconds. Covers the runner
++# tunnel's last ticks before it drops and a refresh already queued; the
++# controller deletes the Pod within seconds, which ends every runner on it. A
++# wake sets its own boot-grace deadline, so the hold can't strand one.
++_SUSPEND_HOLD_S = 120.0
++
++# sandbox_id -> monotonic seconds it was stopped (see suspend()).
++# custom-lint: disable-next=workspace-scoped-cache -- keyed by sandbox_id
++_suspended_at: dict[str, float] = {}
++
+ 
+ def configure(
+     conversation_store: ConversationStore,
+@@ -158,6 +169,51 @@ def touch(runner_id: str) -> None:
+     _executor.submit(ctx.run, _keep_alive_for_runner, runner_id)
+ 
+ 
++def suspend(launcher: SandboxHostLauncher, sandbox_id: str) -> Future[None]:
++    """Stop *sandbox_id* now and keep keepalives from pushing its deadline back.
++
++    The hold starts before the suspend runs, so a refresh queued after it skips
++    the sandbox. The suspend runs on the keepalive worker, behind any refresh
++    already queued or running, so none can land after it. Raises through the
++    returned future when the provider call fails, and lifts the hold then: the
++    sandbox is still running and still needs its keepalives.
++
++    :param launcher: The provider-matched launcher for the sandbox.
++    :param sandbox_id: The sandbox to stop, e.g. ``"omnigent-d8ee7424"``.
++    :returns: A future that resolves once the provider accepted the suspend.
++    """
++    _suspended_at[sandbox_id] = time.monotonic()
++
++    def _run() -> None:
++        try:
++            launcher.suspend(sandbox_id)
++        except BaseException:
++            _suspended_at.pop(sandbox_id, None)
++            raise
++
++    if _executor is None:
++        future: Future[None] = Future()
++        try:
++            _run()
++        except BaseException as exc:  # noqa: BLE001
++            future.set_exception(exc)
++        else:
++            future.set_result(None)
++        return future
++    return _executor.submit(contextvars.copy_context().run, _run)
++
++
++def _is_suspended(sandbox_id: str) -> bool:
++    """Whether *sandbox_id* was stopped within :data:`_SUSPEND_HOLD_S`."""
++    stopped = _suspended_at.get(sandbox_id)
++    if stopped is None:
++        return False
++    if time.monotonic() - stopped < _SUSPEND_HOLD_S:
++        return True
++    _suspended_at.pop(sandbox_id, None)
++    return False
++
++
+ def _prune_throttle(now: float) -> None:
+     """Drop throttle entries older than two slow intervals (their runners are gone)."""
+     cutoff = now - 2 * resolve_managed_keepalive_interval_s()
+@@ -187,6 +243,10 @@ def _keep_alive_for_runner(runner_id: str) -> None:
+             # no sandbox_id / provider and is left alone.
+             if host is None or not host.sandbox_id or not host.sandbox_provider:
+                 continue
++            # Stopped on purpose (suspend()): extending it would undo the stop.
++            if _is_suspended(host.sandbox_id):
++                _logger.debug("sandbox %s was just stopped; not extending it", host.sandbox_id)
++                continue
+             # for_provider, NOT recorded: recorded() falls back to the deployment
+             # default when the host's provider is no longer offered, which is safe
+             # only for callers that then compare launcher.provider against the row
+diff --git a/omnigent/server/managed_hosts.py b/omnigent/server/managed_hosts.py
+index fce1e0c..8b6ee6d 100644
+--- a/omnigent/server/managed_hosts.py
++++ b/omnigent/server/managed_hosts.py
+@@ -173,7 +173,7 @@ import re
+ import secrets
+ import time
+ import uuid
+-from collections.abc import Callable, Mapping, Sequence
++from collections.abc import Callable, Coroutine, Mapping, Sequence
+ from dataclasses import dataclass, replace
+ from dataclasses import field as dataclass_field
+ from functools import partial
+@@ -184,7 +184,7 @@ from fastapi import HTTPException
+ 
+ from omnigent.db.db_models import LABEL_VALUE_MAX_LEN
+ from omnigent.db.utils import builtin_agent_id, now_epoch
+-from omnigent.onboarding.sandboxes.base import SandboxGoneError
++from omnigent.onboarding.sandboxes.base import SandboxCapabilityError, SandboxGoneError
+ 
+ # RepoWorkspace lives in the launcher's own package so a launcher can accept it
+ # without importing omnigent.server; re-exported here (its parser is here) so
+@@ -469,6 +469,86 @@ def resolve_managed_agent_label(
+     return agent.name
+ 
+ 
++START_CANCELLED_REASON = "you cancelled the start"
++"""Why a cancelled start's waiting message wasn't sent."""
++
++
++class StartCancelledError(Exception):
++    """Raised at a cancelled start's next stage, so the start stops there."""
++
++
++# Starts the user cancelled ("Cancel start"), by session id: the event loop and
++# the cleanup to run there once the start has stopped. Read by
++# _publish_sandbox_status, which every stage of a start goes through, possibly
++# from a worker thread. See cancel_managed_start.
++# custom-lint: disable-next=workspace-scoped-cache -- keyed by session_id
++_cancelled_starts: dict[
++    str, tuple[asyncio.AbstractEventLoop, Callable[[], Coroutine[Any, Any, None]]]
++] = {}
++
++# Cleanups scheduled by settle_cancelled_start, kept until they finish.
++_cancel_cleanup_tasks: set[asyncio.Task[None]] = set()
++
++
++def cancel_managed_start(
++    session_id: str,
++    tracker: ManagedLaunchTracker,
++    cleanup: Callable[[], Coroutine[Any, Any, None]],
++) -> bool:
++    """
++    Cancel *session_id*'s start in flight: "Cancel start" in the composer.
++
++    The start isn't interrupted mid-call; its next stage raises
++    :class:`StartCancelledError` instead (see ``_publish_sandbox_status``), its
++    failure path settles the tracker, which fails the message that was waiting
++    on it, and *cleanup* then runs to stop the sandbox and show it stopped.
++
++    :param session_id: Session/conversation identifier.
++    :param tracker: The app's launch tracker.
++    :param cleanup: Runs once the start has stopped, instead of publishing its
++        final stage.
++    :returns: ``True`` when a wake was in flight and is now cancelled;
++        ``False`` for no start, or a first launch, which can't be.
++    """
++    launch = tracker.get(session_id)
++    if launch is None or launch.settled.is_set() or not launch.wake:
++        return False
++    launch.cancelled = True
++    _cancelled_starts[session_id] = (asyncio.get_running_loop(), cleanup)
++    return True
++
++
++def settle_cancelled_start(session_id: str, stage: str) -> bool:
++    """
++    Stop a cancelled start at *stage*, or run its cleanup once it has stopped.
++
++    Called for every stage a start publishes, from the event loop or a worker
++    thread.
++
++    :param session_id: Session/conversation identifier.
++    :param stage: The stage the start is about to publish, e.g. ``"connecting"``.
++    :returns: ``True`` when the start was cancelled and the stage must not be
++        published.
++    :raises StartCancelledError: For a cancelled start's non-final stage.
++    """
++    cancelled = _cancelled_starts.get(session_id)
++    if cancelled is None:
++        return False
++    if stage not in ("ready", "failed"):
++        raise StartCancelledError("the start was cancelled")
++    if _cancelled_starts.pop(session_id, None) is None:
++        return True
++    loop, cleanup = cancelled
++
++    def _spawn() -> None:
++        task = loop.create_task(cleanup())
++        _cancel_cleanup_tasks.add(task)
++        task.add_done_callback(_cancel_cleanup_tasks.discard)
++
++    loop.call_soon_threadsafe(_spawn)
++    return True
++
++
+ @dataclass
+ class ManagedLaunch:
+     """
+@@ -489,6 +569,12 @@ class ManagedLaunch:
+ 
+     settled: asyncio.Event
+     error: str | None = None
++    # A wake of a stopped sandbox, rather than a first launch: only a wake can
++    # be cancelled ("Cancel start"), since a first launch that fails deletes
++    # the sandbox it created.
++    wake: bool = False
++    # The user cancelled it: it settles as a failure, whatever the start did.
++    cancelled: bool = False
+ 
+ 
+ class ManagedLaunchTracker:
+@@ -523,6 +609,8 @@ class ManagedLaunchTracker:
+         :param session_id: Session/conversation identifier,
+             e.g. ``"conv_abc123"``.
+         """
++        # A new start isn't cancelled by an earlier cancel that never settled.
++        _cancelled_starts.pop(session_id, None)
+         self._by_session[session_id] = ManagedLaunch(settled=asyncio.Event())
+ 
+     def get(self, session_id: str) -> ManagedLaunch | None:
+@@ -545,6 +633,11 @@ class ManagedLaunchTracker:
+ 
+         :param session_id: Session/conversation identifier.
+         """
++        entry = self._by_session.get(session_id)
++        if entry is not None and entry.cancelled:
++            # The message waiting on a cancelled start mustn't be sent.
++            self.fail(session_id, START_CANCELLED_REASON)
++            return
+         entry = self._by_session.pop(session_id, None)
+         if entry is not None:
+             entry.settled.set()
+@@ -560,7 +653,7 @@ class ManagedLaunchTracker:
+         entry = self._by_session.get(session_id)
+         if entry is None:
+             return
+-        entry.error = error
++        entry.error = START_CANCELLED_REASON if entry.cancelled else error
+         entry.settled.set()
+ 
+ 
+@@ -3942,6 +4035,48 @@ def host_sandbox_is_running(
+     return launcher.is_running(host.sandbox_id)
+ 
+ 
++async def suspend_managed_host(
++    host_id: str,
++    host_store: HostStore,
++    config: ManagedSandboxDeployment | None,
++) -> bool:
++    """
++    Stop a managed host's sandbox now and keep it resumable: "Stop sandbox".
++
++    The same end state as an idle stop: the provider stops the sandbox, keeps
++    its volume, and the next message wakes it through
++    :func:`resume_managed_host`. Keepalives for the sandbox are held off for a
++    moment so a runner tunnel that hasn't dropped yet can't push the deadline
++    back (:func:`managed_host_keepalive.suspend`).
++
++    :param host_id: The session's bound host id, e.g. ``"host_a1b2c3d4..."``.
++    :param host_store: Persistent host registrations.
++    :param config: The deployment's managed-sandbox config, or ``None``.
++    :returns: ``True`` when the sandbox was stopped; ``False`` when the host
++        has no resumable sandbox to stop (a CLI host, or a provider without a
++        stop/resume lifecycle).
++    :raises HTTPException: 502 when the provider rejected the suspend.
++    """
++    from omnigent.server import managed_host_keepalive
++
++    host = await asyncio.to_thread(host_store.get_host, host_id)
++    if host is None:
++        return False
++    # The same gate as host_resume_supported: only stop what a message can wake.
++    launcher = _launcher_for_teardown(host, config)
++    if launcher is None or not launcher.capabilities.resume_stopped or host.sandbox_id is None:
++        return False
++    try:
++        await asyncio.wrap_future(managed_host_keepalive.suspend(launcher, host.sandbox_id))
++    except SandboxCapabilityError:
++        return False
++    except click.ClickException as exc:
++        # The web UI reads detail as the reason: "Couldn't stop the sandbox: …".
++        raise HTTPException(status_code=502, detail=exc.message) from exc
++    _logger.info("Stopped managed host %s (sandbox %s)", host_id, host.sandbox_id)
++    return True
++
++
+ # ── Managed-host wake (resume a dormant host on demand) ─────────────────────
+ 
+ # Per-host resume single-flight: one in-flight resume per host_id on this
+diff --git a/omnigent/server/routes/_sessions/helpers.py b/omnigent/server/routes/_sessions/helpers.py
+index 97c4006..54e06a4 100644
+--- a/omnigent/server/routes/_sessions/helpers.py
++++ b/omnigent/server/routes/_sessions/helpers.py
+@@ -108,6 +108,7 @@ from omnigent.server.managed_hosts import (
+     ManagedLaunchTracker,
+     ManagedSandboxDeployment,
+     RepoWorkspace,
++    settle_cancelled_start,
+ )
+ from omnigent.server.routes._auth_helpers import (
+     require_access as _require_access,
+@@ -5042,6 +5043,10 @@ def _publish_sandbox_status_impl(session_id: str, stage: str, error: str | None
+         ``"managed sandbox launch failed: spend limit reached"``.
+         ``None`` for non-terminal stages.
+     """
++    # A start the user cancelled stops at its next stage (this raises), and its
++    # cleanup publishes the outcome once it has stopped.
++    if settle_cancelled_start(session_id, stage):
++        return
+     # "ready" evicts: from then on the session looks like any
+     # host-bound session and the snapshot carries no launch state.
+     # Failures stay cached (mirroring ManagedLaunchTracker retention)
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index e2c747e..a65d17c 100644
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -4165,6 +4165,10 @@ def _kick_managed_wake_impl(
+         extra={"session_id": session_id},
+     )
+     tracker.begin(session_id)
++    # A wake, which "Cancel start" may cancel (a first launch can't be).
++    wake_launch = tracker.get(session_id)
++    if wake_launch is not None:
++        wake_launch.wake = True
+     # Seed the progress indicator immediately — the user is watching the
+     # session page when the wake fires (the composer let them send into a
+     # host_asleep session).
+diff --git a/omnigent/server/routes/sessions/__init__.py b/omnigent/server/routes/sessions/__init__.py
+index f3f7139..c3e74f7 100644
+--- a/omnigent/server/routes/sessions/__init__.py
++++ b/omnigent/server/routes/sessions/__init__.py
+@@ -880,6 +880,7 @@ def create_sessions_router(
+     from omnigent.server.routes.sessions.routes_browser import register_browser_routes
+     from omnigent.server.routes.sessions.routes_core import register_core_routes
+     from omnigent.server.routes.sessions.routes_elicitations import register_elicitations_routes
++    from omnigent.server.routes.sessions.routes_environment import register_environment_routes
+     from omnigent.server.routes.sessions.routes_events import register_events_routes
+     from omnigent.server.routes.sessions.routes_hooks import register_hooks_routes
+     from omnigent.server.routes.sessions.routes_items import register_items_routes
+@@ -942,6 +943,13 @@ def create_sessions_router(
+         permission_store=permission_store,
+     )
+ 
++    register_environment_routes(
++        router,
++        conversation_store=conversation_store,
++        auth_provider=auth_provider,
++        permission_store=permission_store,
++    )
++
+     register_elicitations_routes(
+         router,
+         conversation_store=conversation_store,
+diff --git a/omnigent/server/routes/sessions/routes_environment.py b/omnigent/server/routes/sessions/routes_environment.py
+new file mode 100644
+index 0000000..dda2b35
+--- /dev/null
++++ b/omnigent/server/routes/sessions/routes_environment.py
+@@ -0,0 +1,262 @@
++"""The composer's environment menu: what a sandbox session's Pod is doing.
++
++``GET /v1/sessions/{id}/environment`` gathers what the menu shows beyond the
++liveness the web UI already has: when the Pod started (or stopped) and when it
++stops for being idle, from the Sandbox and its Pod; how full the VM's disk is;
++and the Pod's CPU and memory use and the agent's idle deadline, which only the
++runner knows and reports to ``POST /v1/sessions/{id}/environment/report``
++(``omnigent/runner/environment_report.py``). The menu polls it only while it's
++open.
++
++Reports are kept in memory, per replica: they're replaced every 5 seconds, and
++a stale one is dropped rather than shown.
++
++"Keep running" (``PUT /v1/sessions/{id}/environment/keep-running``) is stored
++on the session, as the ``omnigent.keep_running_until`` label: ``<Unix
++time>/<hours chosen>``, or ``forever``. The server answers each runner report with it, and while it holds
++the runner neither exits for being idle nor reaps its panes, so the server
++keeps the Pod alive. Stop sandbox clears it.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import os
++import time
++
++from fastapi import APIRouter, Request
++from pydantic import BaseModel, Field, model_validator
++
++from omnigent.errors import ErrorCode, OmnigentError
++from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
++from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, AuthProvider
++from omnigent.server.routes._auth_helpers import get_user_id as _get_user_id
++from omnigent.server.routes._auth_helpers import require_access as _require_access
++from omnigent.stores import ConversationStore
++from omnigent.stores.permission_store import PermissionStore
++
++REPORT_MAX_AGE_S = 30.0
++"""A runner report older than this isn't shown: the runner has likely gone."""
++
++KEEP_RUNNING_LABEL_KEY = "omnigent.keep_running_until"
++"""Session label holding "Keep running": ``<Unix time>/<hours chosen>``, or ``forever``."""
++
++_KEEP_RUNNING_FOREVER = "forever"
++
++
++class KeepRunning(BaseModel):
++    """The menu's "Keep running" choice: for some hours, for good, or neither (the usual timeout)."""
++
++    hours: float | None = Field(default=None, gt=0, le=7 * 24)
++    forever: bool = False
++
++    @model_validator(mode="after")
++    def _one_choice(self) -> KeepRunning:
++        if self.forever and self.hours is not None:
++            raise ValueError("choose hours or forever, not both")
++        return self
++
++
++class KeepRunningState(BaseModel):
++    """The "Keep running" choice in force, as the runner and the menu read it."""
++
++    keep_running_until: float | None = None
++    keep_running_hours: float | None = None
++    """How many hours were chosen, so the menu can tick the choice."""
++    keep_running_forever: bool = False
++
++
++def keep_running_from_labels(labels: dict[str, str] | None) -> KeepRunningState:
++    """Read "Keep running" off a session's labels; a time in the past no longer holds."""
++    raw = (labels or {}).get(KEEP_RUNNING_LABEL_KEY)
++    if raw == _KEEP_RUNNING_FOREVER:
++        return KeepRunningState(keep_running_forever=True)
++    until_text, _, hours_text = (raw or "").partition("/")
++    try:
++        until = float(until_text)
++        hours = float(hours_text) if hours_text else None
++    except ValueError:
++        return KeepRunningState()
++    if until <= time.time():
++        return KeepRunningState()
++    return KeepRunningState(keep_running_until=until, keep_running_hours=hours)
++
++
++def clear_keep_running(conversation_store: ConversationStore, session_id: str) -> None:
++    """Drop the session's "Keep running", as Stop sandbox does. Blocking."""
++    conv = conversation_store.get_conversation(session_id)
++    if conv is not None and KEEP_RUNNING_LABEL_KEY in (conv.labels or {}):
++        conversation_store.delete_label(session_id, KEEP_RUNNING_LABEL_KEY)
++
++
++class EnvironmentReport(BaseModel):
++    """What the runner reports every 5 seconds and when the agent starts or stops working."""
++
++    cpu_cores: float | None = Field(default=None, ge=0, le=4096)
++    memory_bytes: int | None = Field(default=None, ge=0)
++    agent_active: bool = False
++    agent_idle_since: float | None = None
++    agent_exits_at: float | None = None
++
++
++class SessionEnvironment(BaseModel):
++    """What the environment menu shows. Times are Unix seconds."""
++
++    pod_started_at: float | None = None
++    """When the running Pod started; ``None`` when there's no Pod."""
++    shutdown_at: float | None = None
++    """The Sandbox's ``spec.shutdownTime``: when it stops, or when it stopped."""
++    idle_stop_window_s: int | None = None
++    """How long the Pod outlives its agent when idle."""
++    disk_used_bytes: int | None = None
++    disk_total_bytes: int | None = None
++    disk_available_fraction: float | None = None
++    """Free space as the kubelet counts it for eviction (``f_bavail / f_blocks``)."""
++    cpu_cores: float | None = None
++    memory_bytes: int | None = None
++    agent_active: bool | None = None
++    agent_idle_since: float | None = None
++    agent_exits_at: float | None = None
++    reported_at: float | None = None
++    keep_running_until: float | None = None
++    keep_running_hours: float | None = None
++    keep_running_forever: bool | None = None
++
++
++# Prune stale reports once there are more than this many (runners come and go).
++_MAX_REPORTS = 1024
++
++# session_id -> (report, when it arrived).
++# custom-lint: disable-next=workspace-scoped-cache -- keyed by session_id
++_reports: dict[str, tuple[EnvironmentReport, float]] = {}
++
++
++def _disk(path: str = "/") -> dict[str, float | int | None]:
++    """The VM disk as the server's own container sees it (one node, one disk)."""
++    try:
++        stat = os.statvfs(path)
++    except OSError:
++        return {}
++    if stat.f_blocks <= 0:
++        return {}
++    return {
++        "disk_total_bytes": stat.f_blocks * stat.f_frsize,
++        "disk_used_bytes": (stat.f_blocks - stat.f_bfree) * stat.f_frsize,
++        "disk_available_fraction": stat.f_bavail / stat.f_blocks,
++    }
++
++
++def register_environment_routes(
++    router: APIRouter,
++    *,
++    conversation_store: ConversationStore,
++    auth_provider: AuthProvider | None = None,
++    permission_store: PermissionStore | None = None,
++) -> None:
++    """Register the environment routes on router."""
++
++    @router.post(
++        "/sessions/{session_id}/environment/report",
++        include_in_schema=False,
++        response_model=KeepRunningState,
++    )
++    async def report_session_environment(
++        request: Request, session_id: str, body: EnvironmentReport
++    ) -> KeepRunningState:
++        """Keep the session's runner's latest report, and tell it whether to keep running.
++
++        Only the session's bound runner may post.
++        """
++        user_id = _get_user_id(request, auth_provider)
++        await _require_access(
++            user_id, session_id, LEVEL_EDIT, permission_store, conversation_store
++        )
++        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
++        token = (request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER) or "").strip()
++        if conv is None or not token or token_bound_runner_id(token) != conv.runner_id:
++            raise OmnigentError(
++                "Only the session's runner reports its environment",
++                code=ErrorCode.FORBIDDEN,
++            )
++        now = time.time()
++        _reports[session_id] = (body, now)
++        if len(_reports) > _MAX_REPORTS:
++            for stale in [sid for sid, (_, at) in _reports.items() if now - at > REPORT_MAX_AGE_S]:
++                _reports.pop(stale, None)
++        return keep_running_from_labels(conv.labels)
++
++    @router.put(
++        "/sessions/{session_id}/environment/keep-running",
++        include_in_schema=False,
++        response_model=KeepRunningState,
++    )
++    async def keep_session_running(
++        request: Request, session_id: str, body: KeepRunning
++    ) -> KeepRunningState:
++        """Keep the session's Pod running when idle, for some hours or for good, or stop doing so.
++
++        Owner-only, like Stop sandbox: it holds the Pod's resources. The runner
++        learns it with its next report, within seconds near its idle deadline.
++        """
++        user_id = _get_user_id(request, auth_provider)
++        await _require_access(
++            user_id, session_id, LEVEL_OWNER, permission_store, conversation_store
++        )
++        if body.forever:
++            value: str | None = _KEEP_RUNNING_FOREVER
++        elif body.hours is not None:
++            value = f"{int(time.time() + body.hours * 3600)}/{body.hours:g}"
++        else:
++            value = None
++        if value is None:
++            await asyncio.to_thread(clear_keep_running, conversation_store, session_id)
++        else:
++            await asyncio.to_thread(
++                conversation_store.set_labels, session_id, {KEEP_RUNNING_LABEL_KEY: value}
++            )
++        return keep_running_from_labels({KEEP_RUNNING_LABEL_KEY: value} if value else {})
++
++    @router.get(
++        "/sessions/{session_id}/environment",
++        include_in_schema=False,
++        response_model=SessionEnvironment,
++        response_model_exclude_none=True,
++    )
++    async def get_session_environment(request: Request, session_id: str) -> SessionEnvironment:
++        """What the session's sandbox is doing, for the composer's environment menu."""
++        from omnigent.server.managed_hosts import _launcher_for_teardown
++
++        user_id = _get_user_id(request, auth_provider)
++        await _require_access(
++            user_id, session_id, LEVEL_READ, permission_store, conversation_store
++        )
++        result = SessionEnvironment(**_disk())
++        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
++        if conv is not None:
++            kept = keep_running_from_labels(conv.labels)
++            result.keep_running_until = kept.keep_running_until
++            result.keep_running_hours = kept.keep_running_hours
++            result.keep_running_forever = kept.keep_running_forever or None
++        host_store = getattr(request.app.state, "host_store", None)
++        sandbox_config = getattr(request.app.state, "sandbox_config", None)
++        if conv is not None and conv.host_id and host_store is not None:
++            host = await asyncio.to_thread(host_store.get_host, conv.host_id)
++            launcher = _launcher_for_teardown(host, sandbox_config) if host is not None else None
++            read = getattr(launcher, "environment", None)
++            if host is not None and host.sandbox_id and callable(read):
++                from omnigent.onboarding.sandboxes.agent_sandbox import resolve_shutdown_window_s
++
++                times = await asyncio.to_thread(read, host.sandbox_id)
++                result.pod_started_at = times.get("pod_started_at")
++                result.shutdown_at = times.get("shutdown_at")
++                result.idle_stop_window_s = resolve_shutdown_window_s()
++        report = _reports.get(session_id)
++        if report is not None and time.time() - report[1] <= REPORT_MAX_AGE_S:
++            body, reported_at = report
++            result.cpu_cores = body.cpu_cores
++            result.memory_bytes = body.memory_bytes
++            result.agent_active = body.agent_active
++            result.agent_idle_since = body.agent_idle_since
++            result.agent_exits_at = body.agent_exits_at
++            result.reported_at = reported_at
++        return result
+diff --git a/omnigent/server/routes/sessions/routes_events.py b/omnigent/server/routes/sessions/routes_events.py
+index 20a6881..09cd06c 100644
+--- a/omnigent/server/routes/sessions/routes_events.py
++++ b/omnigent/server/routes/sessions/routes_events.py
+@@ -182,6 +182,7 @@ from omnigent.server.routes._sessions.helpers import (
+     _publish_interrupted,
+     _publish_mcp_startup,
+     _publish_policy_deny,
++    _publish_sandbox_status,
+     _publish_session_superseded,
+     _publish_status,
+     _remove_session_worktree_best_effort,
+@@ -1187,6 +1188,72 @@ def register_events_routes(
+                         conversation_store,
+                         int(time.time()) - RUNNER_LIVENESS_TTL_S,
+                     )
++            # "Stop sandbox" (data.suspend_sandbox): also stop the session's
++            # managed sandbox, as an idle stop would. Without the flag, Stop
++            # only ends the runner and its Pod keeps running ("Restart agent").
++            # The next message wakes it through the managed-host wake path.
++            host_store_for_stop = getattr(request.app.state, "host_store", None)
++            if (
++                body.data.get("suspend_sandbox") is True
++                and stop_conv is not None
++                and stop_conv.host_id
++                and host_store_for_stop is not None
++            ):
++                from omnigent.server.managed_hosts import (
++                    cancel_managed_start,
++                    host_resume_supported,
++                    suspend_managed_host,
++                )
++
++                stop_host_id = stop_conv.host_id
++                stop_sandbox_config = getattr(request.app.state, "sandbox_config", None)
++                stop_tracker = getattr(request.app.state, "managed_launches", None)
++
++                async def _after_cancelled_start() -> None:
++                    # The cancelled wake has stopped. It may have started the
++                    # Pod before it did, so stop it again, then show the
++                    # session as stopped rather than failed.
++                    try:
++                        await suspend_managed_host(
++                            stop_host_id, host_store_for_stop, stop_sandbox_config
++                        )
++                    except Exception:
++                        _logger.warning(
++                            "Couldn't stop the sandbox of cancelled start %s",
++                            session_id,
++                            exc_info=True,
++                        )
++                    _publish_sandbox_status(session_id, "ready")
++
++                # "Cancel start" is Stop sandbox while the sandbox wakes: the
++                # session shows as stopped straight away, and the wake stops at
++                # its next stage. Only a wake (a resumable host) can be
++                # cancelled; a first launch has no catch-all to stop in.
++                # Published first: once the start is marked cancelled, a
++                # "ready" would settle it.
++                stop_launch = stop_tracker.get(session_id) if stop_tracker is not None else None
++                stop_host = await asyncio.to_thread(host_store_for_stop.get_host, stop_host_id)
++                launching = stop_launch is not None and not stop_launch.settled.is_set()
++                if launching and not stop_launch.wake:
++                    # A first launch that loses its Pod deletes the new
++                    # sandbox; leave it to finish, then it can be stopped.
++                    raise OmnigentError(
++                        "The sandbox is still being created. Stop it once it has started.",
++                        code=ErrorCode.CONFLICT,
++                    )
++                if (
++                    stop_tracker is not None
++                    and launching
++                    and stop_host is not None
++                    and host_resume_supported(stop_host, stop_sandbox_config)
++                ):
++                    _publish_sandbox_status(session_id, "ready")
++                    cancel_managed_start(session_id, stop_tracker, _after_cancelled_start)
++                await suspend_managed_host(stop_host_id, host_store_for_stop, stop_sandbox_config)
++                # A stopped sandbox isn't kept running any more.
++                from omnigent.server.routes.sessions.routes_environment import clear_keep_running
++
++                await asyncio.to_thread(clear_keep_running, conversation_store, session_id)
+             # Stop is non-sticky: no persistent marker is written. The
+             # runner tunnel dropping above flips ``runner_online`` to false
+             # honestly, and the next message auto-relaunches the session on
+diff --git a/tests/onboarding/sandboxes/test_agent_sandbox_environment.py b/tests/onboarding/sandboxes/test_agent_sandbox_environment.py
+new file mode 100644
+index 0000000..e95a3ad
+--- /dev/null
++++ b/tests/onboarding/sandboxes/test_agent_sandbox_environment.py
+@@ -0,0 +1,95 @@
++"""``AgentSandboxLauncher.environment``: the Pod's start and the Sandbox's deadline."""
++
++from __future__ import annotations
++
++from datetime import UTC, datetime
++from types import SimpleNamespace
++
++import pytest
++
++from tests.onboarding.sandboxes.test_agent_sandbox import (  # noqa: F401 (fake_clients is a fixture)
++    _SANDBOX_ID,
++    _FakeApiException,
++    _FakeCore,
++    _FakeCustom,
++    _launcher,
++    fake_clients,
++)
++
++STARTED = datetime(2026, 10, 13, 14, 0, tzinfo=UTC)
++
++
++def _running(
++    core: _FakeCore,
++    custom: _FakeCustom,
++    monkeypatch: pytest.MonkeyPatch,
++    *,
++    shutdown_time: str = "2026-10-13T15:12:00Z",
++) -> None:
++    monkeypatch.setattr(
++        custom,
++        "get_namespaced_custom_object",
++        lambda *args, **kwargs: {"spec": {"shutdownTime": shutdown_time}},
++    )
++    monkeypatch.setattr(
++        core,
++        "read_namespaced_pod",
++        lambda *args, **kwargs: SimpleNamespace(
++            metadata=SimpleNamespace(deletion_timestamp=None),
++            status=SimpleNamespace(start_time=STARTED),
++        ),
++    )
++
++
++def test_a_running_sandbox(
++    fake_clients: tuple[_FakeCore, _FakeCustom],  # noqa: F811  (imported fixture)
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    core, custom = fake_clients
++    _running(core, custom, monkeypatch)
++    assert _launcher().environment(_SANDBOX_ID) == {
++        "pod_started_at": STARTED.timestamp(),
++        "shutdown_at": datetime(2026, 10, 13, 15, 12, tzinfo=UTC).timestamp(),
++    }
++
++
++def test_a_stopped_sandbox_has_no_pod(
++    fake_clients: tuple[_FakeCore, _FakeCustom],  # noqa: F811  (imported fixture)
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    core, custom = fake_clients
++    _running(core, custom, monkeypatch)
++    monkeypatch.setattr(
++        core,
++        "read_namespaced_pod",
++        lambda *args, **kwargs: (_ for _ in ()).throw(_FakeApiException(status=404)),
++    )
++    env = _launcher().environment(_SANDBOX_ID)
++    assert env["pod_started_at"] is None
++    assert env["shutdown_at"] is not None
++
++
++def test_a_pod_on_its_way_out_isnt_running(
++    fake_clients: tuple[_FakeCore, _FakeCustom],  # noqa: F811  (imported fixture)
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    core, custom = fake_clients
++    _running(core, custom, monkeypatch)
++    monkeypatch.setattr(
++        core,
++        "read_namespaced_pod",
++        lambda *args, **kwargs: SimpleNamespace(
++            metadata=SimpleNamespace(deletion_timestamp="2026-10-13T15:00:00Z"),
++            status=SimpleNamespace(start_time=STARTED),
++        ),
++    )
++    assert _launcher().environment(_SANDBOX_ID)["pod_started_at"] is None
++
++
++def test_unreadable_is_unknown_not_an_error(
++    fake_clients: tuple[_FakeCore, _FakeCustom],  # noqa: F811  (imported fixture)
++) -> None:
++    core, custom = fake_clients
++    custom.get_error = _FakeApiException(status=403, reason="Forbidden")
++    core.read_pod_error = _FakeApiException(status=403, reason="Forbidden")
++    assert _launcher().environment(_SANDBOX_ID) == {"pod_started_at": None, "shutdown_at": None}
+diff --git a/tests/onboarding/sandboxes/test_agent_sandbox_suspend.py b/tests/onboarding/sandboxes/test_agent_sandbox_suspend.py
+new file mode 100644
+index 0000000..f7ac3b0
+--- /dev/null
++++ b/tests/onboarding/sandboxes/test_agent_sandbox_suspend.py
+@@ -0,0 +1,72 @@
++"""``AgentSandboxLauncher.suspend``: Stop sandbox moves ``spec.shutdownTime`` to now."""
++
++from __future__ import annotations
++
++from datetime import UTC, datetime
++
++import click
++import pytest
++
++from tests.onboarding.sandboxes.test_agent_sandbox import (  # noqa: F401 (fake_clients is a fixture)
++    _SANDBOX_ID,
++    _FakeApiException,
++    _FakeCore,
++    _FakeCustom,
++    _launcher,
++    fake_clients,
++)
++
++
++def test_suspend_moves_the_deadline_to_now(
++    fake_clients: tuple[_FakeCore, _FakeCustom],  # noqa: F811  (imported fixture)
++) -> None:
++    """The same single-field patch as keep_alive, with the deadline at now."""
++    _, custom = fake_clients
++    _launcher().suspend(_SANDBOX_ID)
++
++    assert custom.calls == ["patch"]
++    name, body = custom.patches[0]
++    assert name == _SANDBOX_ID
++    assert list(body) == ["spec"] and list(body["spec"]) == ["shutdownTime"]
++    when = datetime.strptime(body["spec"]["shutdownTime"], "%Y-%m-%dT%H:%M:%SZ").replace(
++        tzinfo=UTC
++    )
++    assert abs((when - datetime.now(UTC)).total_seconds()) <= 2
++
++
++def test_suspend_raises_when_the_patch_fails(
++    fake_clients: tuple[_FakeCore, _FakeCustom],  # noqa: F811  (imported fixture)
++) -> None:
++    """Unlike keep_alive, a user asked for this, so a failure must surface."""
++    _, custom = fake_clients
++    custom.patch_error = _FakeApiException(status=403, reason="Forbidden")
++    with pytest.raises(click.ClickException):
++        _launcher().suspend(_SANDBOX_ID)
++
++
++def test_suspend_of_a_vanished_sandbox_is_success(
++    fake_clients: tuple[_FakeCore, _FakeCustom],  # noqa: F811  (imported fixture)
++) -> None:
++    """A deleted sandbox has nothing left to stop."""
++    _, custom = fake_clients
++    custom.patch_error = _FakeApiException(status=404, reason="NotFound")
++    _launcher().suspend(_SANDBOX_ID)
++
++
++def test_a_warm_pool_handle_cant_be_suspended() -> None:
++    """Its Sandbox isn't named by the handle, so a plain suspend would patch nothing."""
++    from omnigent.onboarding.sandboxes.agent_sandbox_warm_pool import (
++        _HANDLE_PREFIX,
++        AgentSandboxWarmPoolLauncher,
++    )
++    from omnigent.onboarding.sandboxes.base import SandboxCapabilityError
++
++    launcher = AgentSandboxWarmPoolLauncher(
++        warm_pool="warm-pool-v1",
++        image="host-image:test",
++        namespace="omnigent-sandboxes",
++        env=(),
++        in_cluster=True,
++    )
++    with pytest.raises(SandboxCapabilityError):
++        launcher.suspend(f"{_HANDLE_PREFIX}ns:claim:uid")
+diff --git a/tests/server/integration/test_session_environment.py b/tests/server/integration/test_session_environment.py
+new file mode 100644
+index 0000000..2d60d00
+--- /dev/null
++++ b/tests/server/integration/test_session_environment.py
+@@ -0,0 +1,200 @@
++"""The environment menu's data: ``GET/POST /v1/sessions/{id}/environment``.
++
++The runner reports its Pod's resource use and its idle deadline
++(``omnigent/runner/environment_report.py``); the server adds the Sandbox's
++times and the VM disk.
++"""
++
++from __future__ import annotations
++
++import time
++from types import SimpleNamespace
++
++import httpx
++import pytest
++from fastapi import FastAPI
++
++from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
++from omnigent.server.routes.sessions import routes_environment
++from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
++from tests.server.helpers import create_test_agent
++
++pytestmark = pytest.mark.asyncio
++
++TOKEN = "runner-binding-token-for-tests"
++REPORT = {
++    "cpu_cores": 1.5,
++    "memory_bytes": 8_000_000_000,
++    "agent_active": False,
++    "agent_idle_since": 1_000.0,
++    "agent_exits_at": 2_800.0,
++}
++
++
++@pytest.fixture(autouse=True)
++def _no_reports(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setattr(routes_environment, "_reports", {})
++
++
++async def _session(client: httpx.AsyncClient, db_uri: str) -> str:
++    """A session bound to the runner holding ``TOKEN``."""
++    agent = await create_test_agent(client)
++    resp = await client.post("/v1/sessions", json={"agent_id": agent["id"]})
++    assert resp.status_code == 201, resp.text
++    session_id = resp.json()["id"]
++    SqlAlchemyConversationStore(db_uri).replace_runner_id(session_id, token_bound_runner_id(TOKEN))
++    return session_id
++
++
++async def test_the_runners_report_reaches_the_menu(client: httpx.AsyncClient, db_uri: str) -> None:
++    session_id = await _session(client, db_uri)
++
++    resp = await client.post(
++        f"/v1/sessions/{session_id}/environment/report",
++        json=REPORT,
++        headers={RUNNER_TUNNEL_TOKEN_HEADER: TOKEN},
++    )
++    assert resp.status_code == 200, resp.text
++    # Not kept running: the runner exits as usual.
++    assert resp.json() == {
++        "keep_running_until": None,
++        "keep_running_hours": None,
++        "keep_running_forever": False,
++    }
++
++    env = (await client.get(f"/v1/sessions/{session_id}/environment")).json()
++    assert {key: env[key] for key in REPORT} == REPORT
++    # The VM disk, as the server's container sees it.
++    assert env["disk_total_bytes"] >= env["disk_used_bytes"] > 0
++    assert 0 <= env["disk_available_fraction"] <= 1
++
++
++@pytest.mark.parametrize("token", [None, "some-other-runner"])
++async def test_only_the_sessions_runner_reports(
++    client: httpx.AsyncClient, db_uri: str, token: str | None
++) -> None:
++    session_id = await _session(client, db_uri)
++    resp = await client.post(
++        f"/v1/sessions/{session_id}/environment/report",
++        json=REPORT,
++        headers={RUNNER_TUNNEL_TOKEN_HEADER: token} if token else {},
++    )
++    assert resp.status_code == 403, resp.text
++    env = (await client.get(f"/v1/sessions/{session_id}/environment")).json()
++    assert "cpu_cores" not in env
++
++
++async def test_a_stale_report_isnt_shown(
++    client: httpx.AsyncClient, db_uri: str, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    session_id = await _session(client, db_uri)
++    await client.post(
++        f"/v1/sessions/{session_id}/environment/report",
++        json=REPORT,
++        headers={RUNNER_TUNNEL_TOKEN_HEADER: TOKEN},
++    )
++    report, at = routes_environment._reports[session_id]
++    routes_environment._reports[session_id] = (
++        report,
++        at - routes_environment.REPORT_MAX_AGE_S - 1,
++    )
++    env = (await client.get(f"/v1/sessions/{session_id}/environment")).json()
++    assert "cpu_cores" not in env and "agent_exits_at" not in env
++
++
++async def test_a_sandbox_session_gets_its_pods_times(
++    client: httpx.AsyncClient, app: FastAPI, db_uri: str, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    from omnigent.server import managed_hosts
++
++    session_id = await _session(client, db_uri)
++    SqlAlchemyConversationStore(db_uri).set_host_id(session_id, "0" * 32, workspace="/work")
++    app.state.host_store = SimpleNamespace(
++        get_host=lambda _host_id: SimpleNamespace(sandbox_id="omnigent-d8ee7424")
++    )
++    read: list[str] = []
++
++    def _environment(sandbox_id: str) -> dict[str, float | None]:
++        read.append(sandbox_id)
++        return {"pod_started_at": 100.0, "shutdown_at": 3_700.0}
++
++    monkeypatch.setattr(
++        managed_hosts,
++        "_launcher_for_teardown",
++        lambda _host, _config: SimpleNamespace(environment=_environment),
++    )
++    monkeypatch.setenv("OMNIGENT_AGENT_SANDBOX_SHUTDOWN_WINDOW_S", "1800")
++
++    env = (await client.get(f"/v1/sessions/{session_id}/environment")).json()
++
++    assert read == ["omnigent-d8ee7424"]
++    assert env["pod_started_at"] == 100.0
++    assert env["shutdown_at"] == 3_700.0
++    assert env["idle_stop_window_s"] == 1800
++
++
++async def _report(client: httpx.AsyncClient, session_id: str) -> dict[str, object]:
++    resp = await client.post(
++        f"/v1/sessions/{session_id}/environment/report",
++        json=REPORT,
++        headers={RUNNER_TUNNEL_TOKEN_HEADER: TOKEN},
++    )
++    assert resp.status_code == 200, resp.text
++    return resp.json()
++
++
++async def test_keep_running_reaches_the_runner_and_the_menu(
++    client: httpx.AsyncClient, db_uri: str
++) -> None:
++    session_id = await _session(client, db_uri)
++    before = time.time()
++
++    resp = await client.put(
++        f"/v1/sessions/{session_id}/environment/keep-running", json={"hours": 8}
++    )
++    assert resp.status_code == 200, resp.text
++
++    reported = await _report(client, session_id)
++    assert before + 8 * 3600 - 1 <= reported["keep_running_until"] <= time.time() + 8 * 3600
++    assert reported["keep_running_hours"] == 8
++    env = (await client.get(f"/v1/sessions/{session_id}/environment")).json()
++    assert env["keep_running_until"] == reported["keep_running_until"]
++    assert env["keep_running_hours"] == 8
++
++    resp = await client.put(
++        f"/v1/sessions/{session_id}/environment/keep-running", json={"forever": True}
++    )
++    assert resp.json()["keep_running_forever"] is True
++    assert (await _report(client, session_id))["keep_running_forever"] is True
++
++    # "Usual idle timeout".
++    resp = await client.put(f"/v1/sessions/{session_id}/environment/keep-running", json={})
++    nothing = {
++        "keep_running_until": None,
++        "keep_running_hours": None,
++        "keep_running_forever": False,
++    }
++    assert resp.json() == nothing
++    assert await _report(client, session_id) == nothing
++
++
++@pytest.mark.parametrize(
++    "body",
++    [{"hours": 0}, {"hours": -2}, {"hours": 200}, {"hours": 2, "forever": True}],
++)
++async def test_keep_running_refuses_nonsense(
++    client: httpx.AsyncClient, db_uri: str, body: dict[str, object]
++) -> None:
++    session_id = await _session(client, db_uri)
++    resp = await client.put(f"/v1/sessions/{session_id}/environment/keep-running", json=body)
++    assert resp.status_code in (400, 422), resp.text
++
++
++async def test_a_lapsed_keep_running_no_longer_holds(
++    client: httpx.AsyncClient, db_uri: str
++) -> None:
++    session_id = await _session(client, db_uri)
++    SqlAlchemyConversationStore(db_uri).set_labels(
++        session_id, {routes_environment.KEEP_RUNNING_LABEL_KEY: f"{int(time.time()) - 60}/2"}
++    )
++    assert (await _report(client, session_id))["keep_running_until"] is None
+diff --git a/tests/server/integration/test_stop_sandbox.py b/tests/server/integration/test_stop_sandbox.py
+new file mode 100644
+index 0000000..1ed8c33
+--- /dev/null
++++ b/tests/server/integration/test_stop_sandbox.py
+@@ -0,0 +1,193 @@
++"""Stop sandbox: ``stop_session`` with ``data.suspend_sandbox`` stops the Pod too.
++
++Reuses the host-wired app and the real host tunnel helpers from
++``test_session_host_launch``, so the runner stop is the real round-trip and
++only the provider-side suspend is stubbed.
++"""
++
++from __future__ import annotations
++
++import asyncio
++from typing import Any
++
++import httpx
++import pytest
++from asgiref.testing import ApplicationCommunicator
++from fastapi import FastAPI, HTTPException
++
++from omnigent.runtime import set_runner_client
++from omnigent.server import managed_hosts
++from tests.server.integration.test_session_host_launch import (  # noqa: F401 (app is a fixture)
++    _HOST_ID,
++    _connect_host,
++    _inline_launch_session,
++    _serve_one_stop,
++    app,
++)
++
++pytestmark = pytest.mark.asyncio
++
++
++async def _stop(
++    client: httpx.AsyncClient,
++    comm: ApplicationCommunicator,
++    session_id: str,
++    data: dict[str, Any],
++) -> tuple[httpx.Response, str]:
++    """POST ``stop_session`` and answer the host's stop_runner.
++
++    :returns: The response and the runner id the host was told to stop.
++    """
++    fake_runner = httpx.AsyncClient(
++        transport=httpx.MockTransport(lambda _request: httpx.Response(204)),
++        base_url="http://runner",
++    )
++    set_runner_client(fake_runner)
++    try:
++        stop_responder = asyncio.create_task(_serve_one_stop(comm))
++        resp = await client.post(
++            f"/v1/sessions/{session_id}/events",
++            json={"type": "stop_session", "data": data},
++        )
++        stopped_runner_id = await stop_responder
++    finally:
++        await fake_runner.aclose()
++        set_runner_client(None)
++    return resp, stopped_runner_id
++
++
++def _record_suspends(monkeypatch: pytest.MonkeyPatch) -> list[str]:
++    suspended: list[str] = []
++
++    async def _suspend(host_id: str, host_store: object, config: object) -> bool:
++        suspended.append(host_id)
++        return True
++
++    monkeypatch.setattr(managed_hosts, "suspend_managed_host", _suspend)
++    return suspended
++
++
++async def test_stop_sandbox_stops_the_runner_then_suspends_the_host(
++    client: httpx.AsyncClient,
++    app: FastAPI,  # noqa: F811  (imported fixture)
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """The runner is stopped as for a plain Stop, then the session's host is suspended."""
++    suspended = _record_suspends(monkeypatch)
++    comm = await _connect_host(app)
++    session = await _inline_launch_session(client, comm)
++
++    resp, stopped_runner_id = await _stop(client, comm, session["id"], {"suspend_sandbox": True})
++
++    assert resp.status_code == 202, resp.text
++    assert stopped_runner_id == session["runner_id"]
++    assert suspended == [_HOST_ID]
++
++
++async def test_plain_stop_keeps_the_sandbox_running(
++    client: httpx.AsyncClient,
++    app: FastAPI,  # noqa: F811  (imported fixture)
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """Without the flag, Stop only ends the runner: "Restart agent"."""
++    suspended = _record_suspends(monkeypatch)
++    comm = await _connect_host(app)
++    session = await _inline_launch_session(client, comm)
++
++    resp, _ = await _stop(client, comm, session["id"], {})
++
++    assert resp.status_code == 202, resp.text
++    assert suspended == []
++
++
++async def test_stop_sandbox_reports_a_failed_suspend(
++    client: httpx.AsyncClient,
++    app: FastAPI,  # noqa: F811  (imported fixture)
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """A suspend the provider rejected fails the request, so the UI can say so."""
++
++    async def _suspend(host_id: str, host_store: object, config: object) -> bool:
++        raise HTTPException(status_code=502, detail="Forbidden")
++
++    monkeypatch.setattr(managed_hosts, "suspend_managed_host", _suspend)
++    comm = await _connect_host(app)
++    session = await _inline_launch_session(client, comm)
++
++    resp, _ = await _stop(client, comm, session["id"], {"suspend_sandbox": True})
++
++    assert resp.status_code == 502, resp.text
++    assert "Forbidden" in resp.text
++
++
++async def test_stop_sandbox_while_waking_cancels_the_start(
++    client: httpx.AsyncClient,
++    app: FastAPI,  # noqa: F811  (imported fixture)
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """Cancel start: the wake in flight is marked cancelled and the session reads as stopped."""
++    from omnigent.server.routes._sessions.common import _session_sandbox_status_cache
++    from omnigent.server.routes._sessions.helpers import _publish_sandbox_status
++
++    suspended = _record_suspends(monkeypatch)
++    monkeypatch.setattr(managed_hosts, "host_resume_supported", lambda _host, _config: True)
++    monkeypatch.setattr(managed_hosts, "_cancelled_starts", {})
++    comm = await _connect_host(app)
++    session = await _inline_launch_session(client, comm)
++    tracker = app.state.managed_launches
++    tracker.begin(session["id"])
++    tracker.get(session["id"]).wake = True
++    _publish_sandbox_status(session["id"], "provisioning")
++
++    resp, _ = await _stop(client, comm, session["id"], {"suspend_sandbox": True})
++
++    assert resp.status_code == 202, resp.text
++    assert suspended == [_HOST_ID]
++    assert session["id"] in managed_hosts._cancelled_starts
++    assert _session_sandbox_status_cache.get(session["id"]) is None
++    tracker.finish(session["id"])
++
++
++async def test_stop_sandbox_ends_keep_running(
++    client: httpx.AsyncClient,
++    app: FastAPI,  # noqa: F811  (imported fixture)
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """A stopped sandbox isn't kept running when it wakes again."""
++    from omnigent.server.routes.sessions.routes_environment import KEEP_RUNNING_LABEL_KEY
++
++    _record_suspends(monkeypatch)
++    comm = await _connect_host(app)
++    session = await _inline_launch_session(client, comm)
++    resp = await client.put(
++        f"/v1/sessions/{session['id']}/environment/keep-running", json={"forever": True}
++    )
++    assert resp.status_code == 200, resp.text
++
++    resp, _ = await _stop(client, comm, session["id"], {"suspend_sandbox": True})
++
++    assert resp.status_code == 202, resp.text
++    labels = (await client.get(f"/v1/sessions/{session['id']}")).json()["labels"]
++    assert KEEP_RUNNING_LABEL_KEY not in labels
++
++
++async def test_stop_sandbox_leaves_a_first_launch_alone(
++    client: httpx.AsyncClient,
++    app: FastAPI,  # noqa: F811  (imported fixture)
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """A first launch that loses its Pod deletes the new sandbox, so it isn't stopped."""
++    suspended = _record_suspends(monkeypatch)
++    monkeypatch.setattr(managed_hosts, "_cancelled_starts", {})
++    comm = await _connect_host(app)
++    session = await _inline_launch_session(client, comm)
++    tracker = app.state.managed_launches
++    tracker.begin(session["id"])
++    try:
++        resp, _ = await _stop(client, comm, session["id"], {"suspend_sandbox": True})
++    finally:
++        tracker.finish(session["id"])
++
++    assert resp.status_code == 409, resp.text
++    assert suspended == []
++    assert session["id"] not in managed_hosts._cancelled_starts
+diff --git a/tests/server/test_cancel_start.py b/tests/server/test_cancel_start.py
+new file mode 100644
+index 0000000..a90a46e
+--- /dev/null
++++ b/tests/server/test_cancel_start.py
+@@ -0,0 +1,157 @@
++"""Cancel start: a cancelled wake stops at its next stage and its sandbox stops.
++
++The composer's "Cancel start" is Stop sandbox while a sandbox wakes. The route
++marks the start cancelled (``cancel_managed_start``); every stage of a start goes
++through ``_publish_sandbox_status``, which then raises so the wake fails at that
++point, and the cleanup runs once it has.
++"""
++
++from __future__ import annotations
++
++import asyncio
++from types import SimpleNamespace
++
++import pytest
++
++from omnigent.server import managed_hosts
++from omnigent.server.managed_hosts import (
++    ManagedLaunchTracker,
++    StartCancelledError,
++    cancel_managed_start,
++    settle_cancelled_start,
++)
++from omnigent.server.routes._sessions.common import _session_sandbox_status_cache
++
++pytestmark = pytest.mark.asyncio
++
++
++@pytest.fixture(autouse=True)
++def _no_cancelled_starts(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setattr(managed_hosts, "_cancelled_starts", {})
++
++
++def _waking(tracker: ManagedLaunchTracker, session_id: str) -> None:
++    """Mark the start in flight as a wake, as _kick_managed_wake does."""
++    launch = tracker.get(session_id)
++    assert launch is not None
++    launch.wake = True
++
++
++async def _settle_tasks() -> None:
++    for _ in range(3):
++        await asyncio.sleep(0)
++    await asyncio.gather(*managed_hosts._cancel_cleanup_tasks)
++
++
++async def test_only_a_start_in_flight_can_be_cancelled() -> None:
++    tracker = ManagedLaunchTracker()
++
++    async def _cleanup() -> None:
++        return None
++
++    assert not cancel_managed_start("conv_1", tracker, _cleanup)
++    tracker.begin("conv_1")
++    # A first launch can't be cancelled: losing its Pod deletes the new sandbox.
++    assert not cancel_managed_start("conv_1", tracker, _cleanup)
++    _waking(tracker, "conv_1")
++    assert cancel_managed_start("conv_1", tracker, _cleanup)
++    tracker.finish("conv_1")
++    assert not cancel_managed_start("conv_1", tracker, _cleanup)
++
++
++async def test_a_cancelled_start_stops_at_its_next_stage() -> None:
++    tracker = ManagedLaunchTracker()
++    tracker.begin("conv_1")
++    _waking(tracker, "conv_1")
++    ran: list[str] = []
++
++    async def _cleanup() -> None:
++        ran.append("cleanup")
++
++    cancel_managed_start("conv_1", tracker, _cleanup)
++
++    with pytest.raises(StartCancelledError):
++        settle_cancelled_start("conv_1", "connecting")
++    assert settle_cancelled_start("conv_1", "failed")
++    await _settle_tasks()
++
++    assert ran == ["cleanup"]
++    # Settled once: later stages publish normally.
++    assert not settle_cancelled_start("conv_1", "ready")
++
++
++async def test_a_new_start_isnt_cancelled_by_an_old_cancel() -> None:
++    tracker = ManagedLaunchTracker()
++    tracker.begin("conv_1")
++    _waking(tracker, "conv_1")
++
++    async def _cleanup() -> None:
++        return None
++
++    cancel_managed_start("conv_1", tracker, _cleanup)
++    tracker.begin("conv_1")
++
++    assert not settle_cancelled_start("conv_1", "provisioning")
++
++
++async def test_a_cancelled_wake_fails_its_waiters_and_runs_the_cleanup(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """The wake stops at the stage it reports next; the cleanup publishes the outcome."""
++    from omnigent.server.routes._sessions import orchestration
++    from omnigent.server.routes._sessions.helpers import _publish_sandbox_status
++
++    async def _resume(*args: object, **kwargs: object) -> None:
++        # The provider reports its stage from start_host, as a real wake does.
++        kwargs["on_stage"]("starting")  # type: ignore[operator]
++        raise AssertionError("the wake should have stopped at its stage")
++
++    monkeypatch.setattr("omnigent.server.managed_hosts.resume_managed_host", _resume)
++    conv = SimpleNamespace(inference_snapshot=None, labels={}, host_id="host_1")
++    tracker = ManagedLaunchTracker()
++    tracker.begin("conv_1")
++    _waking(tracker, "conv_1")
++    launch = tracker.get("conv_1")
++    assert launch is not None
++    ran: list[str] = []
++
++    async def _cleanup() -> None:
++        ran.append("cleanup")
++        _publish_sandbox_status("conv_1", "ready")
++
++    cancel_managed_start("conv_1", tracker, _cleanup)
++    await orchestration._run_managed_wake(
++        session_id="conv_1",
++        conv=conv,
++        sandbox_config=SimpleNamespace(configs=()),
++        tracker=tracker,
++        conversation_store=SimpleNamespace(get_conversation=lambda _sid: conv),
++        host_store=SimpleNamespace(),
++        host_registry=None,
++        tunnel_registry=None,
++    )
++    await _settle_tasks()
++
++    # The message waiting on the wake gets an error instead of being sent.
++    assert launch.settled.is_set() and launch.error == managed_hosts.START_CANCELLED_REASON
++    assert ran == ["cleanup"]
++    # The session reads as stopped, not failed.
++    assert _session_sandbox_status_cache.get("conv_1") is None
++
++
++async def test_a_cancelled_wake_that_got_through_still_fails_its_waiters() -> None:
++    """Cancelled after its last stage, a wake that finishes mustn't send the message."""
++    tracker = ManagedLaunchTracker()
++    tracker.begin("conv_1")
++    _waking(tracker, "conv_1")
++    launch = tracker.get("conv_1")
++    assert launch is not None
++
++    async def _cleanup() -> None:
++        return None
++
++    cancel_managed_start("conv_1", tracker, _cleanup)
++    tracker.finish("conv_1")
++
++    assert launch.settled.is_set()
++    assert launch.error == managed_hosts.START_CANCELLED_REASON
+diff --git a/tests/server/test_stop_sandbox.py b/tests/server/test_stop_sandbox.py
+new file mode 100644
+index 0000000..4ae63a7
+--- /dev/null
++++ b/tests/server/test_stop_sandbox.py
+@@ -0,0 +1,211 @@
++"""Stop sandbox on the server: suspend_managed_host and the keepalive hold.
++
++``suspend_managed_host`` stops a resumable managed sandbox the way an idle stop
++does. The keepalive hold keeps a runner tunnel that hasn't dropped yet from
++pushing the stopped sandbox's deadline back.
++"""
++
++from __future__ import annotations
++
++from concurrent.futures import ThreadPoolExecutor
++from types import SimpleNamespace
++from typing import Any, ClassVar
++
++import click
++import pytest
++from fastapi import HTTPException
++
++from omnigent.db.utils import now_epoch
++from omnigent.onboarding.sandboxes.base import SandboxCapabilityError
++from omnigent.server import managed_host_keepalive
++from omnigent.server.managed_hosts import (
++    ManagedSandboxConfig,
++    ManagedSandboxDeployment,
++    suspend_managed_host,
++)
++from omnigent.stores.host_store import HostStore
++from tests.server.helpers import FakeSandboxLauncher
++
++_OWNER = "alice@example.com"
++
++
++class _Launcher:
++    """Records keep_alive and suspend calls, in order."""
++
++    def __init__(self, raises: BaseException | None = None) -> None:
++        self.calls: list[str] = []
++        self._raises = raises
++
++    def keep_alive(self, sandbox_id: str) -> None:
++        self.calls.append(f"keep_alive {sandbox_id}")
++
++    def suspend(self, sandbox_id: str) -> None:
++        self.calls.append(f"suspend {sandbox_id}")
++        if self._raises is not None:
++            raise self._raises
++
++
++class _ResumableFake(FakeSandboxLauncher):
++    """A provider with a stop/resume lifecycle that records suspends."""
++
++    provider: ClassVar[str] = "islo"
++
++    def __init__(self, raises: BaseException | None = None, **kwargs: Any) -> None:
++        super().__init__(**kwargs)
++        self.suspended: list[str] = []
++        self._raises = raises
++
++    def suspend(self, sandbox_id: str) -> None:
++        if self._raises is not None:
++            raise self._raises
++        self.suspended.append(sandbox_id)
++
++
++def _config(launcher: FakeSandboxLauncher) -> ManagedSandboxDeployment:
++    return ManagedSandboxDeployment.single(
++        ManagedSandboxConfig(
++            server_url="https://srv.example.com",
++            launcher_factory=lambda: launcher,
++            token_ttl_s=3600,
++        )
++    )
++
++
++def _wire_keepalive(monkeypatch: pytest.MonkeyPatch, launcher: _Launcher) -> None:
++    """Point the keepalive at one runner on one agent_sandbox host, sandbox "sbx1"."""
++    monkeypatch.setattr(
++        managed_host_keepalive,
++        "_conversation_store",
++        SimpleNamespace(
++            list_conversations_by_runner_id=lambda _r: [SimpleNamespace(host_id="h1")]
++        ),
++    )
++    monkeypatch.setattr(
++        managed_host_keepalive,
++        "_host_store",
++        SimpleNamespace(
++            get_host=lambda _h: SimpleNamespace(
++                sandbox_id="sbx1", sandbox_provider="agent_sandbox"
++            )
++        ),
++    )
++    monkeypatch.setattr(
++        managed_host_keepalive,
++        "_sandbox_config",
++        SimpleNamespace(
++            for_provider=lambda _p: SimpleNamespace(launcher_factory=lambda: launcher)
++        ),
++    )
++    monkeypatch.setattr(managed_host_keepalive, "_executor", None)
++    monkeypatch.setattr(managed_host_keepalive, "_suspended_at", {})
++
++
++def _register(host_store: HostStore, host_id: str, sandbox_id: str) -> None:
++    host_store.register_managed_host(
++        host_id=host_id,
++        name=f"managed-{sandbox_id}",
++        user_id=_OWNER,
++        token=f"tok-{sandbox_id}",
++        provider="islo",
++        sandbox_id=sandbox_id,
++        token_expires_at=now_epoch() + 3600,
++    )
++
++
++# ── keepalive hold ─────────────────────────────────────
++
++
++def test_a_stopped_sandbox_is_not_extended(monkeypatch: pytest.MonkeyPatch) -> None:
++    """A runner tunnel that hasn't dropped yet can't undo the stop."""
++    launcher = _Launcher()
++    _wire_keepalive(monkeypatch, launcher)
++
++    managed_host_keepalive.suspend(launcher, "sbx1").result()
++    managed_host_keepalive._keep_alive_for_runner("r1")
++
++    assert launcher.calls == ["suspend sbx1"]
++
++
++def test_the_hold_expires(monkeypatch: pytest.MonkeyPatch) -> None:
++    """A woken sandbox gets its keepalives back, however it was woken."""
++    launcher = _Launcher()
++    _wire_keepalive(monkeypatch, launcher)
++    held_since = managed_host_keepalive.time.monotonic() - managed_host_keepalive._SUSPEND_HOLD_S
++    monkeypatch.setattr(managed_host_keepalive, "_suspended_at", {"sbx1": held_since})
++
++    managed_host_keepalive._keep_alive_for_runner("r1")
++
++    assert launcher.calls == ["keep_alive sbx1"]
++    assert managed_host_keepalive._suspended_at == {}
++
++
++def test_a_failed_suspend_lifts_the_hold(monkeypatch: pytest.MonkeyPatch) -> None:
++    """The sandbox is still running, so it must keep getting its keepalives."""
++    launcher = _Launcher(raises=click.ClickException("Forbidden"))
++    _wire_keepalive(monkeypatch, launcher)
++
++    future = managed_host_keepalive.suspend(launcher, "sbx1")
++
++    assert isinstance(future.exception(), click.ClickException)
++    assert managed_host_keepalive._suspended_at == {}
++
++
++def test_suspend_runs_on_the_keepalive_worker(monkeypatch: pytest.MonkeyPatch) -> None:
++    """Behind a queued refresh, so none can land after the suspend."""
++    launcher = _Launcher()
++    _wire_keepalive(monkeypatch, launcher)
++    executor = ThreadPoolExecutor(max_workers=1)
++    monkeypatch.setattr(managed_host_keepalive, "_executor", executor)
++    try:
++        executor.submit(launcher.keep_alive, "sbx1")
++        managed_host_keepalive.suspend(launcher, "sbx1").result(timeout=5)
++    finally:
++        executor.shutdown(wait=True)
++
++    assert launcher.calls == ["keep_alive sbx1", "suspend sbx1"]
++
++
++# ── suspend_managed_host ───────────────────────────────
++
++
++@pytest.mark.asyncio
++async def test_suspend_managed_host_stops_a_resumable_sandbox(
++    db_uri: str, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """Stops the host's own sandbox, and only one a message can wake again."""
++    monkeypatch.setattr(managed_host_keepalive, "_executor", None)
++    monkeypatch.setattr(managed_host_keepalive, "_suspended_at", {})
++    host_store = HostStore(db_uri)
++    host_id = "5f0c6b1e2d3a4f5e6d7c8b9a0f1e2d3c"
++    _register(host_store, host_id, "sb-suspend")
++
++    resumable = _ResumableFake(can_resume=True)
++    assert await suspend_managed_host(host_id, host_store, _config(resumable))
++    assert resumable.suspended == ["sb-suspend"]
++
++    non_resumable = _ResumableFake(can_resume=False)
++    assert not await suspend_managed_host(host_id, host_store, _config(non_resumable))
++    assert non_resumable.suspended == []
++    assert not await suspend_managed_host(host_id, host_store, None)
++    assert not await suspend_managed_host("0" * 32, host_store, _config(resumable))
++
++
++@pytest.mark.asyncio
++async def test_suspend_managed_host_reports_a_rejected_suspend(
++    db_uri: str, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """A provider error is a 502 with the reason; no suspend support is a no-op."""
++    monkeypatch.setattr(managed_host_keepalive, "_executor", None)
++    monkeypatch.setattr(managed_host_keepalive, "_suspended_at", {})
++    host_store = HostStore(db_uri)
++    host_id = "6a1d7c2f3e4b5a6f7e8d9c0b1a2f3e4d"
++    _register(host_store, host_id, "sb-suspend-fails")
++
++    failing = _ResumableFake(raises=click.ClickException("Forbidden"), can_resume=True)
++    with pytest.raises(HTTPException) as caught:
++        await suspend_managed_host(host_id, host_store, _config(failing))
++    assert caught.value.status_code == 502
++    assert caught.value.detail == "Forbidden"
++
++    unsupported = _ResumableFake(raises=SandboxCapabilityError("nope"), can_resume=True)
++    assert not await suspend_managed_host(host_id, host_store, _config(unsupported))

@@ -11,9 +11,11 @@ on this machine, so `localhost` here means nothing to them.
   `docker compose` and Testcontainers work. `docker buildx` and BuildKit
   don't, and per-container resource limits don't apply.
 - Only `/home/omnigent` survives the Pod stopping, which happens after the
-  session has been idle for an hour. When the Pod wakes, packages
-  installed with `apt-get` and running processes, such as dev servers, are
-  gone.
+  session has been idle for an hour, unless the user chose Keep running, or
+  straight away when the user chooses Stop sandbox. When the Pod wakes,
+  packages installed with `apt-get` and running processes, such as dev
+  servers, are gone. A dev server the user needs while you're idle needs
+  Keep running in the composer's environment menu.
 
 ## Installing tools
 

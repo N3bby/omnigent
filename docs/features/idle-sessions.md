@@ -12,6 +12,11 @@ Idle sessions free the CPU and memory they reserved, but keep your files.
 Sending a message wakes a stopped session. Waking takes about as long as
 starting a new session.
 
+To stop a session's Pod before then, choose **Stop sandbox** in its
+[environment menu](environment-menu.md) or its menu in the sidebar. It stops
+the same way, straight away. To keep it longer, for example for a dev server,
+choose **Keep running** in the environment menu.
+
 ## What's kept, and what isn't
 
 **Kept:** the home directory, `/home/omnigent`. Your repositories,

@@ -1,0 +1,2659 @@
+The environment menu, and Stop sandbox in the sidebar.
+
+The monitor icon left of the permission picker opened a menu that only named
+the host. For a sandbox session it now opens EnvironmentMenu: a header with
+the provider, the Pod's tailnet name and its state (Running, Idle, Stopped,
+Starting or Failed, with a matching dot on the trigger), then rows for the
+agent (working, or idle and when it exits), the Pod (uptime with the CPU and
+memory it uses, or when it stopped), the VM disk (used of total, with a bar
+that turns amber at 80% and red at 90%, as the kubelet counts free space, and
+a warning at red) and when the idle Pod stops, or the start-up steps, or why
+the start failed. While open it polls GET /v1/sessions/{id}/environment every
+5 seconds (useSessionEnvironment); rows appear once their data has loaded.
+
+Its actions: Copy SSH command; Keep running (Usual idle timeout, For 2 hours,
+For 8 hours, Until I stop it, ticking the choice in force, saved with PUT
+.../environment/keep-running; not offered once the agent has exited, since its
+runner is what keeps the Pod); Restart agent (stop_session, keeps the Pod);
+Start agent when the agent has exited but the Pod is up; Stop sandbox (the
+shared StopSandboxDialog); Start now (stopped) and Try again (failed), which
+need a resumable host; Cancel start while a stopped sandbox wakes; and Copy
+error details. Start now, Try again and Start agent use retry_session, which
+wakes a resumable host or starts the runner on a live one without adding
+anything to the transcript. The state comes from the session's launch stage,
+its liveness and whether a turn is running; after an action the menu shows
+where it's heading until the ~10s liveness poll catches up. Controls are
+greyed out for anyone but the session's owner, and in read-only sessions. A
+new sandbox session shows the menu while it launches, before its host is
+bound. Sessions on other hosts keep the old menu. Spacing is scoped to
+.environment-menu in index.css: every block sits 16px from the menu edge or
+the nearest divider, and labels use text-box trimming so icons line up with
+their capitals. agent_sandbox is named "Agent Sandbox" instead of
+"Agent_sandbox Sandbox".
+
+The sidebar's Stop session becomes Stop sandbox for sandbox sessions: it sends
+stop_session with suspend_sandbox, so the Pod stops too, and confirms with
+"Stop the sandbox?". It stays while the Pod is up after the agent exits.
+Sessions on other hosts keep Stop session. The subscription tag's switch hint
+points at Restart agent, which keeps the Pod and is enough to pick up another
+account.
+Pairs with the server patch 0015-environment-menu.patch.
+Applies after 0019-project-repositories.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/web/src/components/HostBadge.test.tsx b/web/src/components/HostBadge.test.tsx
+index 4b484e3..a747115 100644
+--- a/web/src/components/HostBadge.test.tsx
++++ b/web/src/components/HostBadge.test.tsx
+@@ -1,6 +1,8 @@
+ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import type * as EnvironmentMenuModule from "@/components/composer/EnvironmentMenu";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
++import { useChatStore } from "@/store/chatStore";
+ import { HostBadge, resolveHostBadge } from "./HostBadge";
+ import type { Host } from "@/hooks/useHosts";
+ 
+@@ -79,8 +81,22 @@ vi.mock("@/hooks/useSession", () => ({
+ vi.mock("@/hooks/useHosts", () => ({
+   useHosts: (opts: unknown) => useHostsMock(opts),
+ }));
++vi.mock("@/hooks/useSessionEnvironment", () => ({
++  useSessionEnvironment: () => ({ data: undefined }),
++}));
+ vi.mock("@/hooks/RunnerHealthProvider", () => ({
+   useSessionHostOnline: (id: string | undefined) => useSessionHostOnlineMock(id),
++  useSessionRunnerOnline: () => true,
++}));
++// The environment menu's own test covers its rendering; here, only which menu
++// a session gets and what it is fed.
++vi.mock("@/components/composer/EnvironmentMenu", async (importOriginal) => ({
++  ...(await importOriginal<typeof EnvironmentMenuModule>()),
++  EnvironmentMenu: (props: { view: { state: string; providerLabel: string } }) => (
++    <div data-testid="environment-menu" data-state={props.view.state}>
++      {props.view.providerLabel}
++    </div>
++  ),
+ }));
+ // Stub the switch dialog: it owns its own network/query wiring, so the badge
+ // test only cares that it is mounted with the session's current binding.
+@@ -392,3 +408,45 @@ describe("HostBadge", () => {
+     expect(screen.getByTestId("host-badge").textContent).toBe("new-box, offline");
+   });
+ });
++
++describe("HostBadge in the composer", () => {
++  it("gives a sandbox session the environment menu", () => {
++    useSessionMock.mockReturnValue({
++      session: { hostId: "host_sb", permissionLevel: null },
++      isLoading: false,
++      error: null,
++    });
++    useHostsMock.mockReturnValue({
++      data: [
++        {
++          host_id: "host_sb",
++          name: "omnigent-managed-d8ee7424",
++          owner: "alice",
++          status: "online",
++          sandbox_provider: "agent_sandbox",
++        },
++      ],
++    });
++    render(<HostBadge sessionId="conv_1" appearance="composer" agentWorking />);
++    const menu = screen.getByTestId("environment-menu");
++    expect(menu).toHaveAttribute("data-state", "running");
++    expect(menu).toHaveTextContent("Agent Sandbox");
++  });
++
++  it("shows a new sandbox session's start before its host is bound", () => {
++    useSessionMock.mockReturnValue({ session: { hostId: null }, isLoading: false, error: null });
++    useChatStore.setState({ conversationId: "conv_1", sandboxStatus: { stage: "cloning" } });
++    try {
++      render(<HostBadge sessionId="conv_1" appearance="composer" />);
++      expect(screen.getByTestId("environment-menu")).toHaveAttribute("data-state", "starting");
++    } finally {
++      useChatStore.setState({ conversationId: null, sandboxStatus: null });
++    }
++  });
++
++  it("keeps the host menu for a session on your own machine", () => {
++    render(<HostBadge sessionId="conv_1" appearance="composer" />);
++    expect(screen.queryByTestId("environment-menu")).toBeNull();
++    expect(screen.getByTestId("composer-host-select")).toBeInTheDocument();
++  });
++});
+diff --git a/web/src/components/HostBadge.tsx b/web/src/components/HostBadge.tsx
+index 288f49a..b82d080 100644
+--- a/web/src/components/HostBadge.tsx
++++ b/web/src/components/HostBadge.tsx
+@@ -3,8 +3,15 @@ import { useRef, useState } from "react";
+ import { useHosts } from "@/hooks/useHosts";
+ import type { Host } from "@/hooks/useHosts";
+ import { useSession } from "@/hooks/useSession";
++import { useSessionEnvironment } from "@/hooks/useSessionEnvironment";
+ import { useSessionHostOnline } from "@/hooks/RunnerHealthProvider";
++import { livenessRowFromSession, useSessionLiveness } from "@/hooks/useSessionLiveness";
+ import { sandboxOptionLabel } from "@/lib/capabilities";
++import { useServerInfo } from "@/lib/CapabilitiesContext";
++import { nativeCodingAgentForWrapper, WRAPPER_LABEL_KEY } from "@/lib/nativeCodingAgents";
++import type { Session } from "@/lib/types";
++import { useChatStore } from "@/store/chatStore";
++import { deriveEnvironmentState, EnvironmentMenu } from "@/components/composer/EnvironmentMenu";
+ import { SwitchHostDialog } from "@/shell/SwitchHostDialog";
+ import { cn } from "@/lib/utils";
+ import { ComposerHostTrigger } from "@/components/composer/ComposerControls";
+@@ -77,11 +84,14 @@ export function HostBadge({
+   onReconnect,
+   appearance = "status",
+   readOnly = false,
++  agentWorking = false,
+ }: {
+   sessionId: string;
+   onReconnect?: () => void;
+   appearance?: "status" | "composer";
+   readOnly?: boolean;
++  /** Whether a turn is running, for the composer's environment menu. */
++  agentWorking?: boolean;
+ }) {
+   const [switchOpen, setSwitchOpen] = useState(false);
+   const { session } = useSession(sessionId);
+@@ -91,6 +101,8 @@ export function HostBadge({
+   // resolve — the badge renders nothing in that case anyway.
+   const { data: hosts } = useHosts({ includeSandbox: true, enabled: Boolean(hostId) });
+   const liveOnline = useSessionHostOnline(sessionId);
++  // A new sandbox session launches before its host is bound.
++  const launching = useChatStore((s) => s.conversationId === sessionId && s.sandboxStatus !== null);
+ 
+   const host = hostId ? hosts?.find((h) => h.host_id === hostId) : undefined;
+ 
+@@ -128,6 +140,19 @@ export function HostBadge({
+       : liveOnline;
+ 
+   const badge = resolveHostBadge({ hostId, host, online });
++  // A sandbox session gets the environment menu: its state and controls.
++  if (appearance === "composer" && (host?.sandbox_provider || (!hostId && launching))) {
++    return (
++      <SandboxEnvironmentMenu
++        sessionId={sessionId}
++        host={host}
++        session={session}
++        hostOnline={online}
++        readOnly={readOnly}
++        agentWorking={agentWorking}
++      />
++    );
++  }
+   if (appearance === "composer") {
+     const reconnectable = badge?.status === "offline" && !session?.hostResumable && !!onReconnect;
+     const canSwitch = host !== undefined && !host.sandbox_provider && !readOnly;
+@@ -268,3 +293,65 @@ export function HostBadge({
+     </>
+   );
+ }
++
++/**
++ * The composer's environment menu for a sandbox session, fed from the signals
++ * the open session already has: its launch stage, liveness and turn.
++ */
++function SandboxEnvironmentMenu({
++  sessionId,
++  host,
++  session,
++  hostOnline,
++  readOnly,
++  agentWorking,
++}: {
++  sessionId: string;
++  /** `undefined` while a new session's sandbox launches, before its host is bound. */
++  host: Host | undefined;
++  session: Session | null | undefined;
++  hostOnline: boolean | null | undefined;
++  readOnly: boolean;
++  agentWorking: boolean;
++}) {
++  // The chat store holds the open session's live state; ignore it for another.
++  const isOpen = useChatStore((s) => s.conversationId === sessionId);
++  const sandboxStatus = useChatStore((s) => (isOpen ? s.sandboxStatus : null));
++  const tailscaleHost = useChatStore((s) => (isOpen ? s.tailscaleHost : null));
++  const turnActive = useChatStore((s) => isOpen && s.status === "streaming");
++  const liveness = useSessionLiveness(sessionId, livenessRowFromSession(session), { turnActive });
++  const { state, startStep } = deriveEnvironmentState({
++    sandboxStatus,
++    liveness,
++    agentWorking,
++    hostOnline,
++  });
++  // Owner: an unshared session (null) or the owner grant (4).
++  const level = session?.permissionLevel;
++  const isOwner = level === null || level === undefined || level >= 4;
++  const wrapper = session?.labels?.[WRAPPER_LABEL_KEY];
++  const serverInfo = useServerInfo();
++  const [open, setOpen] = useState(false);
++  const { data: status } = useSessionEnvironment(sessionId, open);
++  const provider =
++    host?.sandbox_provider ?? (serverInfo === "loading" ? null : serverInfo.sandbox_provider);
++  return (
++    <EnvironmentMenu
++      sessionId={sessionId}
++      view={{
++        state,
++        startStep,
++        providerLabel: sandboxOptionLabel(provider),
++        tailscaleHost,
++        fallbackName: host?.name ?? null,
++        agentLabel: nativeCodingAgentForWrapper(wrapper)?.displayName ?? null,
++        error: sandboxStatus?.error ?? null,
++        canControl: isOwner && !readOnly,
++        canCancelStart: Boolean(session?.hostId && session.hostResumable),
++        canStart: Boolean(session?.hostId && session.hostResumable),
++        status: status ?? null,
++      }}
++      onOpenChange={setOpen}
++    />
++  );
++}
+diff --git a/web/src/components/StopSandboxDialog.tsx b/web/src/components/StopSandboxDialog.tsx
+new file mode 100644
+index 0000000..fda944f
+--- /dev/null
++++ b/web/src/components/StopSandboxDialog.tsx
+@@ -0,0 +1,99 @@
++import { useEffect, type MouseEvent } from "react";
++
++import { Button } from "@/components/ui/button";
++import {
++  Dialog,
++  DialogContent,
++  DialogDescription,
++  DialogFooter,
++  DialogHeader,
++  DialogTitle,
++} from "@/components/ui/dialog";
++import { useStopSession } from "@/hooks/useConversations";
++
++/**
++ * Confirms "Stop sandbox": stops the session's agent and its Pod, as an idle
++ * stop would. Files in the home directory are kept and the next message starts
++ * the sandbox again. Shared by the sidebar's session menu and the composer's
++ * environment menu.
++ */
++export function StopSandboxDialog({
++  sessionId,
++  open,
++  onOpenChange,
++  onStopped,
++  onContentClick,
++}: {
++  sessionId: string;
++  open: boolean;
++  onOpenChange: (open: boolean) => void;
++  /** Runs after the server accepted the stop, before the dialog closes. */
++  onStopped?: () => void;
++  /** Lets a caller inside a link keep the dialog's clicks to itself. */
++  onContentClick?: (event: MouseEvent<HTMLDivElement>) => void;
++}) {
++  const stopSession = useStopSession();
++  const { reset } = stopSession;
++  // Clear a previous failure each time the dialog opens, so a stale "couldn't
++  // stop" doesn't greet the next attempt. An effect rather than onOpenChange:
++  // Radix only reports the changes it makes itself, not a caller's open.
++  useEffect(() => {
++    if (open) reset();
++  }, [open, reset]);
++
++  return (
++    <Dialog open={open} onOpenChange={onOpenChange}>
++      {open && (
++        <DialogContent onClick={onContentClick} data-testid="stop-sandbox-dialog">
++          <DialogHeader>
++            <DialogTitle>Stop the sandbox?</DialogTitle>
++            <DialogDescription>
++              The agent and everything running in its Pod stop now, including dev servers and
++              containers. Files in <span className="font-mono">/home/omnigent</span> are kept, and
++              your next message starts it again.
++            </DialogDescription>
++          </DialogHeader>
++          {stopSession.isError && (
++            <p className="text-ui text-destructive" role="alert">
++              Couldn't stop the sandbox
++              {stopSession.error instanceof Error && stopSession.error.message
++                ? `: ${stopSession.error.message}`
++                : ""}
++              . Try again in a moment.
++            </p>
++          )}
++          <DialogFooter>
++            <Button
++              type="button"
++              variant="ghost"
++              onClick={() => onOpenChange(false)}
++              disabled={stopSession.isPending}
++            >
++              Cancel
++            </Button>
++            <Button
++              type="button"
++              variant="destructive"
++              data-testid="stop-sandbox-confirm"
++              onClick={() =>
++                stopSession.mutate(
++                  { id: sessionId, suspendSandbox: true },
++                  {
++                    onSuccess: () => {
++                      onStopped?.();
++                      onOpenChange(false);
++                    },
++                  },
++                )
++              }
++              loading={stopSession.isPending}
++              componentId="session.stop_sandbox"
++            >
++              Stop sandbox
++            </Button>
++          </DialogFooter>
++        </DialogContent>
++      )}
++    </Dialog>
++  );
++}
+diff --git a/web/src/components/composer/ComposerControls.tsx b/web/src/components/composer/ComposerControls.tsx
+index 9b546b5..61caecb 100644
+--- a/web/src/components/composer/ComposerControls.tsx
++++ b/web/src/components/composer/ComposerControls.tsx
+@@ -79,9 +79,11 @@ export const ComposerHostTrigger = forwardRef<
+     status: "online" | "offline" | "unknown";
+     cloud?: boolean;
+     testIdPrefix?: string;
++    /** Replaces the status dot, e.g. the environment menu's sandbox state. */
++    dot?: ReactNode;
+   }
+ >(function ComposerHostTrigger(
+-  { label, status, cloud = false, testIdPrefix = "composer", className, ...props },
++  { label, status, cloud = false, testIdPrefix = "composer", dot, className, ...props },
+   ref,
+ ) {
+   const Icon = cloud ? MonitorCloudIcon : LaptopIcon;
+@@ -98,15 +100,20 @@ export const ComposerHostTrigger = forwardRef<
+       {...props}
+     >
+       <span className="flex items-center">
+-        <span className="flex size-4 shrink-0 items-center justify-center">
+-          <span
+-            aria-hidden
+-            className={cn(
+-              "size-2 rounded-full",
+-              status === "online" ? "bg-success" : "border-[1.5px] border-muted-foreground",
+-            )}
+-            data-testid={`${testIdPrefix}-host-status`}
+-          />
++        <span
++          className="flex size-4 shrink-0 items-center justify-center"
++          data-testid={dot ? `${testIdPrefix}-host-status` : undefined}
++        >
++          {dot ?? (
++            <span
++              aria-hidden
++              className={cn(
++                "size-2 rounded-full",
++                status === "online" ? "bg-success" : "border-[1.5px] border-muted-foreground",
++              )}
++              data-testid={`${testIdPrefix}-host-status`}
++            />
++          )}
+         </span>
+         <Icon className="size-4 shrink-0" data-testid={`${testIdPrefix}-host-icon`} />
+       </span>
+diff --git a/web/src/components/composer/ComposerSubscription.test.tsx b/web/src/components/composer/ComposerSubscription.test.tsx
+index 3167304..6235bce 100644
+--- a/web/src/components/composer/ComposerSubscription.test.tsx
++++ b/web/src/components/composer/ComposerSubscription.test.tsx
+@@ -49,7 +49,7 @@ describe("SubscriptionTag", () => {
+     expect(tag).toHaveAccessibleName("ChatGPT account: Personal, not the account Settings selects");
+     fireEvent.click(tag);
+     expect(
+-      screen.getByText(/Settings now selects Work\. To use Work, choose Stop session/),
++      screen.getByText(/Settings now selects Work\. To use Work, choose Restart agent/),
+     ).toBeInTheDocument();
+     expect(screen.queryByRole("button", { name: "Manage subscriptions" })).not.toBeInTheDocument();
+   });
+@@ -62,6 +62,6 @@ describe("SubscriptionTag", () => {
+     expect(tag).toHaveTextContent("Removed account");
+     fireEvent.click(tag);
+     expect(screen.getByText(/has since been removed from Settings/)).toBeInTheDocument();
+-    expect(screen.getByText(/To use Work, choose Stop session/)).toBeInTheDocument();
++    expect(screen.getByText(/To use Work, choose Restart agent/)).toBeInTheDocument();
+   });
+ });
+diff --git a/web/src/components/composer/ComposerSubscription.tsx b/web/src/components/composer/ComposerSubscription.tsx
+index 0b39295..c57be6d 100644
+--- a/web/src/components/composer/ComposerSubscription.tsx
++++ b/web/src/components/composer/ComposerSubscription.tsx
+@@ -75,7 +75,7 @@ export function SubscriptionTag({
+   const stale = subscription.kind !== "account" || !subscription.active;
+   const switchHint =
+     subscription.activeName !== null
+-      ? `To use ${subscription.activeName}, choose Stop session in this session's menu, then send another message.`
++      ? `To use ${subscription.activeName}, choose Restart agent in the sandbox menu next to +, then send another message.`
+       : null;
+ 
+   return (
+diff --git a/web/src/components/composer/EnvironmentMenu.stories.tsx b/web/src/components/composer/EnvironmentMenu.stories.tsx
+new file mode 100644
+index 0000000..8160264
+--- /dev/null
++++ b/web/src/components/composer/EnvironmentMenu.stories.tsx
+@@ -0,0 +1,233 @@
++import type { Meta, StoryObj } from "@storybook/react-vite";
++import { ArrowUpIcon, FolderIcon, GitBranchIcon, PlusIcon } from "lucide-react";
++import type { ReactNode } from "react";
++
++import { Button } from "@/components/ui/button";
++import { StoryQueryRouter } from "@/storybook/StoryProviders";
++import { ChatComposer } from "./ChatComposer";
++import { ComposerWorkspaceBar } from "./ComposerControls";
++import type { SessionEnvironment } from "@/hooks/useSessionEnvironment";
++import { EnvironmentMenu, type EnvironmentView } from "./EnvironmentMenu";
++
++const TAILNET = "omnigent-d8ee7424.taild5bc1b.ts.net";
++const GIB = 1024 ** 3;
++const NOW = Date.now() / 1000;
++const MINUTE = 60;
++
++/** A Pod using 2 CPUs and 8 GB, on a VM disk with 59 of 193 GB used. */
++function status(overrides: Partial<SessionEnvironment> = {}): SessionEnvironment {
++  return {
++    pod_started_at: NOW - 63 * MINUTE,
++    shutdown_at: NOW + 5 * MINUTE,
++    idle_stop_window_s: 30 * MINUTE,
++    disk_used_bytes: 59 * GIB,
++    disk_total_bytes: 193 * GIB,
++    disk_available_fraction: (193 - 59) / 193,
++    cpu_cores: 2,
++    memory_bytes: 8 * GIB,
++    agent_active: true,
++    agent_idle_since: NOW,
++    ...overrides,
++  };
++}
++
++/** The agent idle for 12 minutes, exiting in 18; the Pod stops 30 minutes after. */
++const IDLE = status({
++  pod_started_at: NOW - (3 * 60 + 41) * MINUTE,
++  agent_active: false,
++  agent_idle_since: NOW - 12 * MINUTE,
++  agent_exits_at: NOW + 18 * MINUTE,
++});
++
++function disk(usedGb: number): Partial<SessionEnvironment> {
++  return {
++    disk_used_bytes: usedGb * GIB,
++    disk_available_fraction: (193 - usedGb) / 193,
++  };
++}
++
++const BASE: EnvironmentView = {
++  state: "running",
++  startStep: 0,
++  providerLabel: "Agent Sandbox",
++  tailscaleHost: TAILNET,
++  fallbackName: "omnigent-managed-d8ee7424",
++  agentLabel: "Claude Code",
++  error: null,
++  canControl: true,
++  canCancelStart: true,
++  canStart: true,
++  status: status(),
++};
++
++/** The open menu in a composer, as it sits in a session. */
++function Scene({ view, mobile = false }: { view: Partial<EnvironmentView>; mobile?: boolean }) {
++  const full = { ...BASE, ...view };
++  return (
++    <StoryQueryRouter>
++      <div
++        className={
++          mobile
++            ? "flex h-[720px] w-[390px] flex-col justify-end bg-background pb-3"
++            : "flex h-[600px] w-[720px] flex-col justify-end bg-background px-6 pb-6"
++        }
++      >
++        <Composer mobile={mobile} stopped={full.state === "stopped"}>
++          <EnvironmentMenu sessionId="conversation-environment-story" view={full} defaultOpen />
++        </Composer>
++      </div>
++    </StoryQueryRouter>
++  );
++}
++
++function Composer({
++  children,
++  mobile,
++  stopped,
++}: {
++  children: ReactNode;
++  mobile: boolean;
++  stopped: boolean;
++}) {
++  return (
++    <div className="w-full">
++      <ComposerWorkspaceBar>
++        <span className="inline-flex h-6 items-center gap-1 px-1 text-xs text-muted-foreground">
++          <FolderIcon className="size-3.5" />
++          omnigent
++        </span>
++        <span className="inline-flex h-6 items-center gap-1 px-1 text-xs text-muted-foreground">
++          <GitBranchIcon className="size-3.5" />
++          main
++        </span>
++        {!stopped && !mobile && (
++          <span className="inline-flex h-6 items-center px-1 font-mono text-xs text-muted-foreground">
++            omnigent-d8ee7424
++          </span>
++        )}
++      </ComposerWorkspaceBar>
++      <ChatComposer
++        keyboard={{ submitWithModEnter: false, preventsKeyboardSubmit: false }}
++        input={{ value: "", onChange: () => {}, placeholder: "Ask Claude anything…" }}
++        actions={{
++          leading: (
++            <>
++              <button
++                type="button"
++                className="flex size-7 items-center justify-center rounded-lg text-muted-foreground"
++              >
++                <PlusIcon className="size-4" />
++              </button>
++              {children}
++            </>
++          ),
++          trailing: (
++            <>
++              <span className="px-2 text-ui text-muted-foreground">Opus 5.5</span>
++              <Button size="icon" className="size-7 rounded-full" disabled>
++                <ArrowUpIcon className="size-4" />
++              </Button>
++            </>
++          ),
++        }}
++      />
++    </div>
++  );
++}
++
++const meta = {
++  title: "Components/Composer/EnvironmentMenu",
++  parameters: { layout: "fullscreen" },
++} satisfies Meta;
++
++export default meta;
++type Story = StoryObj<typeof meta>;
++
++export const Running: Story = { render: () => <Scene view={{ state: "running" }} /> };
++export const Idle: Story = { render: () => <Scene view={{ state: "idle", status: IDLE }} /> };
++/** The agent exited after its idle timeout; the Pod is still up. */
++export const AgentExited: Story = {
++  render: () => (
++    <Scene
++      view={{
++        state: "agent_exited",
++        status: status({ agent_active: false, shutdown_at: NOW + 18 * MINUTE }),
++      }}
++    />
++  ),
++};
++export const Stopped: Story = {
++  render: () => (
++    <Scene
++      view={{
++        state: "stopped",
++        status: status({ pod_started_at: undefined, shutdown_at: NOW - 2 * 60 * MINUTE }),
++      }}
++    />
++  ),
++};
++/** Keep running's choices; hover it to open them. */
++export const KeepRunning: Story = {
++  render: () => <Scene view={{ state: "idle", status: IDLE }} />,
++};
++/** Kept running for 8 hours. */
++export const KeepRunningChosen: Story = {
++  render: () => (
++    <Scene
++      view={{
++        state: "idle",
++        status: {
++          ...IDLE,
++          agent_exits_at: NOW + 8 * 60 * MINUTE,
++          keep_running_until: NOW + 8 * 60 * MINUTE,
++          keep_running_hours: 8,
++        },
++      }}
++    />
++  ),
++};
++/** Kept running until Stop sandbox. */
++export const KeepRunningForever: Story = {
++  render: () => (
++    <Scene
++      view={{
++        state: "idle",
++        status: { ...IDLE, agent_exits_at: undefined, keep_running_forever: true },
++      }}
++    />
++  ),
++};
++/** The VM disk at 85%: past the amber line. */
++export const DiskHigh: Story = {
++  render: () => <Scene view={{ state: "idle", status: { ...IDLE, ...disk(164) } }} />,
++};
++/** The VM disk at 92%: the kubelet is evicting Pods. */
++export const DiskCritical: Story = {
++  render: () => <Scene view={{ state: "idle", status: { ...IDLE, ...disk(178) } }} />,
++};
++/** Before the menu's first status loads. */
++export const Loading: Story = {
++  render: () => <Scene view={{ state: "running", status: null }} />,
++};
++export const Starting: Story = {
++  render: () => <Scene view={{ state: "starting", startStep: 1 }} />,
++};
++export const Failed: Story = {
++  render: () => (
++    <Scene
++      view={{
++        state: "failed",
++        error: "managed host wake failed: ImagePullBackOff",
++      }}
++    />
++  ),
++};
++/** Someone else's session: the controls are greyed out. */
++export const NotOwner: Story = {
++  render: () => <Scene view={{ state: "idle", status: IDLE, canControl: false }} />,
++};
++/** No tailnet name: no Copy SSH command, and the host's name in the header. */
++export const NoTailnet: Story = {
++  render: () => <Scene view={{ state: "idle", status: IDLE, tailscaleHost: null }} />,
++};
++export const Mobile: Story = { render: () => <Scene view={{ state: "running" }} mobile /> };
+diff --git a/web/src/components/composer/EnvironmentMenu.test.tsx b/web/src/components/composer/EnvironmentMenu.test.tsx
+new file mode 100644
+index 0000000..3581d7c
+--- /dev/null
++++ b/web/src/components/composer/EnvironmentMenu.test.tsx
+@@ -0,0 +1,465 @@
++import {
++  act,
++  cleanup,
++  fireEvent,
++  render,
++  renderHook,
++  screen,
++  waitFor,
++  within,
++} from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++
++import { TooltipProvider } from "@/components/ui/tooltip";
++import type { SessionLiveness } from "@/hooks/useSessionLiveness";
++
++const mocks = vi.hoisted(() => ({
++  stop: {
++    mutate: vi.fn(),
++    reset: vi.fn(),
++    isPending: false,
++    isError: false,
++    error: null as Error | null,
++  },
++  copyText: vi.fn((_text: string) => Promise.resolve()),
++  retrySession: vi.fn((_id: string) => Promise.resolve({ queued: false })),
++  keepRunning: { mutate: vi.fn() },
++}));
++
++vi.mock("@/hooks/useConversations", () => ({ useStopSession: () => mocks.stop }));
++vi.mock("@/lib/clipboard", () => ({ copyText: (text: string) => mocks.copyText(text) }));
++vi.mock("@/lib/sessionsApi", () => ({ retrySession: (id: string) => mocks.retrySession(id) }));
++vi.mock("@/hooks/useSessionEnvironment", () => ({ useSetKeepRunning: () => mocks.keepRunning }));
++
++import {
++  deriveEnvironmentState,
++  diskLevel,
++  EnvironmentMenu,
++  useOptimisticState,
++  formatAgo,
++  formatCpu,
++  formatDuration,
++  formatMemory,
++  type EnvironmentState,
++  type EnvironmentView,
++} from "./EnvironmentMenu";
++
++const VIEW: EnvironmentView = {
++  state: "running",
++  startStep: 0,
++  providerLabel: "Agent Sandbox",
++  tailscaleHost: "omnigent-d8ee7424.taild5bc1b.ts.net",
++  fallbackName: "omnigent-managed-d8ee7424",
++  agentLabel: "Claude Code",
++  error: null,
++  canControl: true,
++  canCancelStart: true,
++  canStart: true,
++};
++
++const queryClient = new QueryClient();
++
++function menu(view: Partial<EnvironmentView>) {
++  return (
++    <QueryClientProvider client={queryClient}>
++      <TooltipProvider>
++        <EnvironmentMenu sessionId="conv_1" view={{ ...VIEW, ...view }} defaultOpen />
++      </TooltipProvider>
++    </QueryClientProvider>
++  );
++}
++
++function renderMenu(view: Partial<EnvironmentView> = {}) {
++  return render(menu(view));
++}
++
++function rerenderMenu(rerender: (ui: React.ReactNode) => void, view: Partial<EnvironmentView>) {
++  rerender(menu(view));
++}
++
++beforeEach(() => {
++  mocks.retrySession.mockClear();
++  mocks.keepRunning.mutate.mockReset();
++  mocks.stop.mutate.mockReset();
++  mocks.stop.reset.mockReset();
++  mocks.copyText.mockClear();
++});
++
++afterEach(() => cleanup());
++
++const online: SessionLiveness = { kind: "online" };
++
++describe("deriveEnvironmentState", () => {
++  const derive = (args: Partial<Parameters<typeof deriveEnvironmentState>[0]>) =>
++    deriveEnvironmentState({
++      sandboxStatus: null,
++      liveness: online,
++      agentWorking: false,
++      hostOnline: true,
++      ...args,
++    });
++
++  it.each([
++    [{ agentWorking: true }, "running", 0],
++    [{}, "idle", 0],
++    [{ liveness: { kind: "runner_asleep" } }, "agent_exited", 0],
++    [{ liveness: { kind: "host_asleep" } }, "stopped", 0],
++    [{ sandboxStatus: { stage: "provisioning" } }, "starting", 0],
++    [{ sandboxStatus: { stage: "cloning" } }, "starting", 0],
++    [{ sandboxStatus: { stage: "starting" } }, "starting", 1],
++    [{ sandboxStatus: { stage: "connecting" } }, "starting", 2],
++    [{ sandboxStatus: { stage: "failed", error: "x" } }, "failed", 0],
++    // The agent relaunching on a live Pod, and a Pod waking.
++    [{ liveness: { kind: "starting" }, hostOnline: true }, "starting", 1],
++    [{ liveness: { kind: "starting" }, hostOnline: false }, "starting", 0],
++    [{ liveness: { kind: "unknown" }, hostOnline: false }, "stopped", 0],
++    [{ liveness: { kind: "unknown" }, hostOnline: true }, "idle", 0],
++  ] as const)("%j is %s", (args, state, startStep) => {
++    expect(derive(args as Parameters<typeof derive>[0])).toEqual({ state, startStep });
++  });
++
++  it("lets a launch in progress win over liveness, which lags it", () => {
++    expect(
++      derive({ sandboxStatus: { stage: "starting" }, liveness: { kind: "host_asleep" } }).state,
++    ).toBe("starting");
++  });
++});
++
++describe("EnvironmentMenu", () => {
++  it("shows a working agent and the controls", () => {
++    renderMenu();
++    expect(screen.getByTestId("environment-badge")).toHaveTextContent("Running");
++    expect(screen.getByText("omnigent-d8ee7424")).toBeInTheDocument();
++    expect(screen.getByText(/Working/)).toHaveTextContent("Working · Claude Code");
++    expect(screen.getByTestId("environment-restart-agent")).toBeInTheDocument();
++    expect(screen.getByTestId("environment-stop-sandbox")).toBeInTheDocument();
++  });
++
++  it("copies the SSH command with the full tailnet name", async () => {
++    renderMenu();
++    fireEvent.click(screen.getByTestId("environment-copy-ssh"));
++    expect(mocks.copyText).toHaveBeenCalledWith("ssh root@omnigent-d8ee7424.taild5bc1b.ts.net");
++    // Stays open to show the check.
++    await waitFor(() => expect(screen.getByTestId("composer-host-menu")).toBeInTheDocument());
++  });
++
++  it("has no SSH command without a tailnet name, and shows the host's name", () => {
++    renderMenu({ tailscaleHost: null });
++    expect(screen.queryByTestId("environment-copy-ssh")).toBeNull();
++    expect(screen.getByText("omnigent-managed-d8ee7424")).toBeInTheDocument();
++  });
++
++  it("stops the sandbox only after the dialog confirms", () => {
++    renderMenu();
++    fireEvent.click(screen.getByTestId("environment-stop-sandbox"));
++    expect(mocks.stop.mutate).not.toHaveBeenCalled();
++    expect(screen.getByText("Stop the sandbox?")).toBeInTheDocument();
++    fireEvent.click(screen.getByTestId("stop-sandbox-confirm"));
++    expect(mocks.stop.mutate.mock.calls[0][0]).toEqual({ id: "conv_1", suspendSandbox: true });
++  });
++
++  it("shows the sandbox as stopped once the stop is accepted, before the poll catches up", () => {
++    mocks.stop.mutate.mockImplementation((_vars, opts?: { onSuccess?: () => void }) =>
++      opts?.onSuccess?.(),
++    );
++    const { rerender } = renderMenu();
++    fireEvent.click(screen.getByTestId("environment-stop-sandbox"));
++    fireEvent.click(screen.getByTestId("stop-sandbox-confirm"));
++    // The dialog closed the menu; the trigger names the state.
++    const trigger = () => screen.getByTestId("composer-host-select");
++    expect(trigger()).toHaveAccessibleName("Agent Sandbox, stopped");
++    // The agent stops first; that's still on the way to stopped.
++    rerenderMenu(rerender, { state: "agent_exited" });
++    expect(trigger()).toHaveAccessibleName("Agent Sandbox, stopped");
++    // A new start takes over.
++    rerenderMenu(rerender, { state: "starting" });
++    expect(trigger()).toHaveAccessibleName("Agent Sandbox, starting");
++  });
++
++  it("restarts the agent with a plain stop, keeping the Pod", () => {
++    renderMenu();
++    fireEvent.click(screen.getByTestId("environment-restart-agent"));
++    expect(mocks.stop.mutate.mock.calls[0][0]).toBe("conv_1");
++  });
++
++  it("has no Restart agent once the agent has exited", () => {
++    renderMenu({ state: "agent_exited" });
++    expect(screen.getByText(/Not running/)).toHaveTextContent(
++      "Not running · starts with your next message",
++    );
++    expect(screen.queryByTestId("environment-restart-agent")).toBeNull();
++    expect(screen.getByTestId("environment-stop-sandbox")).toBeInTheDocument();
++  });
++
++  it("greys out the controls for someone else's session", () => {
++    renderMenu({ canControl: false });
++    expect(screen.getByTestId("environment-restart-agent")).toHaveAttribute("data-disabled");
++    expect(screen.getByTestId("environment-stop-sandbox")).toHaveAttribute("data-disabled");
++    // Copying isn't a control.
++    expect(screen.getByTestId("environment-copy-ssh")).not.toHaveAttribute("data-disabled");
++  });
++
++  it("says a stopped sandbox starts with the next message", () => {
++    renderMenu({ state: "stopped" });
++    expect(screen.getByTestId("environment-badge")).toHaveTextContent("Stopped");
++    expect(screen.getByText(/Your next message starts it again/)).toBeInTheDocument();
++    expect(screen.queryByTestId("environment-stop-sandbox")).toBeNull();
++  });
++
++  it("shows the start-up steps and cancels the start", () => {
++    renderMenu({ state: "starting", startStep: 1 });
++    expect(screen.getByTestId("environment-steps")).toHaveTextContent(
++      "Starting the PodStarting the agentConnecting",
++    );
++    fireEvent.click(screen.getByTestId("environment-cancel-start"));
++    expect(mocks.stop.mutate.mock.calls[0][0]).toEqual({ id: "conv_1", suspendSandbox: true });
++  });
++
++  it("can't cancel a start with no sandbox to stop yet", () => {
++    renderMenu({ state: "starting", canCancelStart: false });
++    expect(screen.queryByTestId("environment-cancel-start")).toBeNull();
++  });
++
++  it("shows the reason without the server's step prefix, and copies all of it", () => {
++    const error = "managed host wake failed: pod never became ready (ImagePullBackOff)";
++    renderMenu({ state: "failed", error });
++    expect(screen.getByText(/The Pod couldn't start/)).toHaveTextContent(
++      "The Pod couldn't start: Pod never became ready (ImagePullBackOff).",
++    );
++    fireEvent.click(screen.getByTestId("environment-copy-error"));
++    expect(mocks.copyText).toHaveBeenCalledWith(error);
++  });
++
++  it("shows why the start failed and copies it", () => {
++    renderMenu({ state: "failed", error: "ImagePullBackOff" });
++    expect(screen.getByText(/The Pod couldn't start/)).toHaveTextContent(
++      "The Pod couldn't start: ImagePullBackOff.Your files are kept.",
++    );
++    fireEvent.click(screen.getByTestId("environment-copy-error"));
++    expect(mocks.copyText).toHaveBeenCalledWith("ImagePullBackOff");
++  });
++});
++
++const GIB = 1024 ** 3;
++
++describe("formatting", () => {
++  it.each([
++    [30, "1m"],
++    [12 * 60, "12m"],
++    [63 * 60, "1h 03m"],
++    [(3 * 60 + 41) * 60, "3h 41m"],
++    [26 * 3600, "1d 2h"],
++  ])("a span of %ss is %s", (seconds, text) => {
++    expect(formatDuration(seconds)).toBe(text);
++  });
++
++  it.each([
++    [120, "2m ago"],
++    [2 * 3600 + 600, "2h ago"],
++    [3 * 86400, "3d ago"],
++  ])("%ss ago is %s", (seconds, text) => {
++    expect(formatAgo(seconds)).toBe(text);
++  });
++
++  it("writes CPUs and memory in use as the menu shows them", () => {
++    expect(formatCpu(2)).toBe("2 CPU");
++    expect(formatCpu(0.34)).toBe("0.3 CPU");
++    expect(formatCpu(1.96)).toBe("2 CPU");
++    expect(formatMemory(8 * GIB)).toBe("8 GB");
++    expect(formatMemory(1.25 * GIB)).toBe("1.3 GB");
++    expect(formatMemory(512 * 1024 ** 2)).toBe("512 MB");
++  });
++
++  it("colours the disk from free space, as the kubelet evicts", () => {
++    expect(diskLevel(0.25)).toBe("ok");
++    expect(diskLevel(0.2)).toBe("high");
++    expect(diskLevel(0.1)).toBe("critical");
++  });
++});
++
++describe("EnvironmentMenu status rows", () => {
++  const NOW = 1_800_000_000;
++  beforeEach(() => {
++    vi.useFakeTimers({ toFake: ["Date"] });
++    vi.setSystemTime(NOW * 1000);
++  });
++  afterEach(() => vi.useRealTimers());
++
++  const STATUS = {
++    pod_started_at: NOW - 63 * 60,
++    shutdown_at: NOW + 300,
++    idle_stop_window_s: 1800,
++    disk_used_bytes: 59 * GIB,
++    disk_total_bytes: 193 * GIB,
++    disk_available_fraction: 134 / 193,
++    cpu_cores: 2,
++    memory_bytes: 8 * GIB,
++    agent_active: true,
++    agent_idle_since: NOW,
++  };
++
++  it("shows a working agent's Pod, disk and that it won't stop", () => {
++    renderMenu({ status: STATUS });
++    expect(screen.getByText(/^Up /)).toHaveTextContent("Up 1h 03m · 2 CPU, 8 GB");
++    expect(screen.getByText(/of 193 GB/).parentElement).toHaveTextContent("59 of 193 GB");
++    expect(screen.getByTestId("environment-disk-bar")).toHaveAttribute("data-level", "ok");
++    expect(screen.getByText("Not while the agent is working")).toBeInTheDocument();
++  });
++
++  it("counts down an idle agent's exit and the Pod's stop after it", () => {
++    renderMenu({
++      state: "idle",
++      status: {
++        ...STATUS,
++        agent_active: false,
++        agent_idle_since: NOW - 12 * 60,
++        agent_exits_at: NOW + 18 * 60,
++      },
++    });
++    expect(screen.getByText(/^Idle 12m/)).toHaveTextContent("Idle 12m · exits in 18m");
++    // 18 minutes until the agent exits, then the 30-minute window.
++    expect(screen.getByText(/Pod stops in/)).toHaveTextContent("Pod stops in 48m");
++  });
++
++  it("goes by the Sandbox's deadline once the agent has exited, without usage", () => {
++    renderMenu({ state: "agent_exited", status: { ...STATUS, shutdown_at: NOW + 18 * 60 } });
++    expect(screen.getByText(/^Up /)).toHaveTextContent(/^Up 1h 03m$/);
++    expect(screen.getByText(/Pod stops in/)).toHaveTextContent("Pod stops in 18m");
++  });
++
++  it("says when a stopped Pod stopped", () => {
++    renderMenu({
++      state: "stopped",
++      status: { ...STATUS, pod_started_at: undefined, shutdown_at: NOW - 2 * 3600 },
++    });
++    expect(screen.getByText(/^Stopped /)).toHaveTextContent("Stopped 2h ago · files kept");
++  });
++
++  it("warns when the VM disk is nearly full", () => {
++    renderMenu({
++      state: "idle",
++      status: { ...STATUS, disk_used_bytes: 178 * GIB, disk_available_fraction: 15 / 193 },
++    });
++    expect(screen.getByTestId("environment-disk-bar")).toHaveAttribute("data-level", "critical");
++    expect(screen.getByText("Pods may be stopped to free disk")).toBeInTheDocument();
++  });
++
++  it("shows only the agent until the status loads", () => {
++    renderMenu({ status: null });
++    expect(screen.queryByText(/^Up /)).toBeNull();
++    expect(screen.queryByText("VM disk")).toBeNull();
++  });
++});
++
++describe("EnvironmentMenu: Start now and Keep running", () => {
++  it("starts a stopped sandbox without a message", async () => {
++    renderMenu({ state: "stopped" });
++    fireEvent.click(screen.getByTestId("environment-start-now"));
++    await waitFor(() => expect(mocks.retrySession).toHaveBeenCalledWith("conv_1"));
++    // Starting straight away, before the launch stage arrives.
++    expect(screen.getByTestId("composer-host-select")).toHaveAccessibleName(
++      "Agent Sandbox, starting",
++    );
++  });
++
++  it("tries a failed start again", async () => {
++    renderMenu({ state: "failed", error: "ImagePullBackOff" });
++    fireEvent.click(screen.getByTestId("environment-try-again"));
++    await waitFor(() => expect(mocks.retrySession).toHaveBeenCalledWith("conv_1"));
++  });
++
++  it("can't start a new session's sandbox before it has one", () => {
++    renderMenu({ state: "stopped", canStart: false });
++    expect(screen.queryByTestId("environment-start-now")).toBeNull();
++    renderMenu({ state: "failed", error: "x", canStart: false });
++    expect(screen.queryByTestId("environment-try-again")).toBeNull();
++  });
++
++  it("keeps the Pod running for the chosen hours", async () => {
++    renderMenu({ state: "idle" });
++    fireEvent.keyDown(screen.getByTestId("environment-keep-running"), { key: "ArrowRight" });
++    const options = await screen.findByTestId("environment-keep-running-menu");
++    // The usual idle timeout is in force.
++    expect(
++      within(options).getByText("Usual idle timeout").closest("[data-checked]"),
++    ).not.toBeNull();
++    fireEvent.click(within(options).getByText("For 2 hours"));
++    expect(mocks.keepRunning.mutate.mock.calls[0][0]).toEqual({ hours: 2 });
++  });
++
++  it("shows how long it's kept running", () => {
++    const until = Date.now() / 1000 + 8 * 3600;
++    renderMenu({
++      state: "idle",
++      status: { keep_running_until: until, keep_running_hours: 8 },
++    });
++    expect(screen.getByTestId("environment-keep-running")).toHaveTextContent(/until/);
++    expect(screen.getByText("Kept running").parentElement).toHaveTextContent(
++      /Kept running · until/,
++    );
++  });
++
++  it("says it's kept running until Stop sandbox", () => {
++    renderMenu({ state: "running", status: { keep_running_forever: true } });
++    expect(screen.getByText("Kept running").parentElement).toHaveTextContent(
++      "Kept running · until you stop it",
++    );
++  });
++
++  it("starts an exited agent without a message", async () => {
++    renderMenu({ state: "agent_exited" });
++    expect(screen.queryByTestId("environment-restart-agent")).toBeNull();
++    fireEvent.click(screen.getByTestId("environment-start-agent"));
++    await waitFor(() => expect(mocks.retrySession).toHaveBeenCalledWith("conv_1"));
++    expect(screen.getByTestId("composer-host-select")).toHaveAccessibleName(
++      "Agent Sandbox, starting",
++    );
++    // The Pod is up: only the agent is starting.
++    fireEvent.keyDown(screen.getByTestId("composer-host-select"), { key: "Enter" });
++    expect(screen.getByText("Starting the Pod").closest("[data-step]")).toHaveAttribute(
++      "data-step",
++      "done",
++    );
++  });
++
++  it("greys out Start agent for someone else's session", () => {
++    renderMenu({ state: "agent_exited", canControl: false });
++    expect(screen.getByTestId("environment-start-agent")).toHaveAttribute("data-disabled");
++  });
++
++  it("has no Keep running once the agent has exited", () => {
++    renderMenu({ state: "agent_exited" });
++    expect(screen.queryByTestId("environment-keep-running")).toBeNull();
++  });
++
++  it("greys out Keep running and Start now for someone else's session", () => {
++    renderMenu({ state: "idle", canControl: false });
++    expect(screen.getByTestId("environment-keep-running")).toHaveAttribute("data-disabled");
++    cleanup();
++    renderMenu({ state: "stopped", canControl: false });
++    expect(screen.getByTestId("environment-start-now")).toHaveAttribute("data-disabled");
++  });
++});
++
++describe("useOptimisticState", () => {
++  it("lets go once a started agent is up, even if no poll saw it start", () => {
++    const { result, rerender } = renderHook(({ actual }) => useOptimisticState(actual), {
++      initialProps: { actual: "agent_exited" as EnvironmentState },
++    });
++    act(() => result.current[1]("starting"));
++    expect(result.current[0]).toBe("starting");
++    rerender({ actual: "idle" });
++    expect(result.current[0]).toBeNull();
++  });
++
++  it("holds Stopped while a stopping sandbox finishes its turn", () => {
++    const { result, rerender } = renderHook(({ actual }) => useOptimisticState(actual), {
++      initialProps: { actual: "running" as EnvironmentState },
++    });
++    act(() => result.current[1]("stopped"));
++    rerender({ actual: "idle" });
++    expect(result.current[0]).toBe("stopped");
++  });
++});
+diff --git a/web/src/components/composer/EnvironmentMenu.tsx b/web/src/components/composer/EnvironmentMenu.tsx
+new file mode 100644
+index 0000000..98e89f3
+--- /dev/null
++++ b/web/src/components/composer/EnvironmentMenu.tsx
+@@ -0,0 +1,963 @@
++import { Fragment, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
++import {
++  CheckIcon,
++  CircleStopIcon,
++  CoffeeIcon,
++  CopyIcon,
++  Loader2Icon,
++  MonitorCloudIcon,
++  PlayIcon,
++  RotateCcwIcon,
++  TerminalIcon,
++  TriangleAlertIcon,
++} from "lucide-react";
++import { useMutation } from "@tanstack/react-query";
++import { toast } from "sonner";
++
++import { ComposerHostTrigger } from "@/components/composer/ComposerControls";
++import { StopSandboxDialog } from "@/components/StopSandboxDialog";
++import {
++  DropdownMenu,
++  DropdownMenuContent,
++  DropdownMenuGroup,
++  DropdownMenuItem,
++  DropdownMenuSeparator,
++  DropdownMenuSub,
++  DropdownMenuSubContent,
++  DropdownMenuSubTrigger,
++  DropdownMenuTrigger,
++} from "@/components/ui/dropdown-menu";
++import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
++import {
++  useSetKeepRunning,
++  type KeepRunningChoice,
++  type SessionEnvironment,
++} from "@/hooks/useSessionEnvironment";
++import type { SessionLiveness } from "@/hooks/useSessionLiveness";
++import { useStopSession } from "@/hooks/useConversations";
++import { copyText } from "@/lib/clipboard";
++import { retrySession } from "@/lib/sessionsApi";
++import { tailscaleShortName } from "@/lib/tailscale";
++import type { SandboxStatus } from "@/lib/types";
++import { cn } from "@/lib/utils";
++
++/**
++ * What the composer's environment menu shows for a sandbox session.
++ *
++ * - `running`: the agent is working on a turn.
++ * - `idle`: the agent is up, with no turn running.
++ * - `agent_exited`: the agent exited after its idle timeout; the Pod is still up.
++ * - `stopped`: the Pod is stopped (idle stop or Stop sandbox); files are kept.
++ * - `starting`: the Pod or the agent is starting.
++ * - `failed`: the sandbox couldn't start.
++ */
++export type EnvironmentState =
++  "running" | "idle" | "agent_exited" | "stopped" | "starting" | "failed";
++
++/** Start-up step being worked on: the Pod, the agent, then connecting. */
++export type StartStep = 0 | 1 | 2;
++
++const START_STEPS = ["Starting the Pod", "Starting the agent", "Connecting"] as const;
++
++/**
++ * Derive the menu's state from the signals the web UI already has.
++ *
++ * A launch in progress (`sandboxStatus`) wins over liveness, which lags it
++ * by a poll. Liveness `starting` without a launch stage is the agent
++ * relaunching on a live Pod, or a Pod waking, depending on the host.
++ *
++ * @param sandboxStatus - The session's managed-sandbox launch stage, or `null`.
++ * @param liveness - The open session's liveness.
++ * @param agentWorking - Whether a turn is running.
++ * @param hostOnline - The host's last known liveness, for `unknown` liveness.
++ */
++export function deriveEnvironmentState({
++  sandboxStatus,
++  liveness,
++  agentWorking,
++  hostOnline,
++}: {
++  sandboxStatus: SandboxStatus | null;
++  liveness: SessionLiveness;
++  agentWorking: boolean;
++  hostOnline: boolean | null | undefined;
++}): { state: EnvironmentState; startStep: StartStep } {
++  if (sandboxStatus?.stage === "failed") return { state: "failed", startStep: 0 };
++  if (sandboxStatus && sandboxStatus.stage !== "ready") {
++    const step: StartStep =
++      sandboxStatus.stage === "starting" ? 1 : sandboxStatus.stage === "connecting" ? 2 : 0;
++    return { state: "starting", startStep: step };
++  }
++  switch (liveness.kind) {
++    case "online":
++      return { state: agentWorking ? "running" : "idle", startStep: 0 };
++    case "starting":
++      return { state: "starting", startStep: hostOnline === true ? 1 : 0 };
++    case "runner_asleep":
++      return { state: "agent_exited", startStep: 0 };
++    case "unknown":
++      // Not polled yet: go by the host's record rather than flash "Stopped".
++      return { state: hostOnline === false ? "stopped" : "idle", startStep: 0 };
++    default:
++      return { state: "stopped", startStep: 0 };
++  }
++}
++
++/** Everything the menu renders, so it can be shown without live data. */
++export interface EnvironmentView {
++  state: EnvironmentState;
++  startStep: StartStep;
++  /** The provider's name, e.g. `"Agent Sandbox"`. */
++  providerLabel: string;
++  /** The Pod's full tailnet name, or `null` when it isn't on a tailnet. */
++  tailscaleHost: string | null;
++  /** Shown under the provider when there's no tailnet name, e.g. the host's name. */
++  fallbackName: string | null;
++  /** The agent's name, e.g. `"Claude Code"`. */
++  agentLabel: string | null;
++  /** Why the sandbox couldn't start, for `failed`. */
++  error: string | null;
++  /** Owner of a writable session: may restart, stop and cancel. */
++  canControl: boolean;
++  /** Whether a start in progress can be cancelled (a resumable host is bound). */
++  canCancelStart: boolean;
++  /**
++   * Whether the sandbox can be started without a message (Start now, Try
++   * again): a resumable host is bound. A new session that never got one
++   * starts with the next message instead.
++   */
++  canStart?: boolean;
++  /** The Pod's times and usage, the VM disk and the agent's idle deadline, once loaded. */
++  status?: SessionEnvironment | null;
++}
++
++/** Badge word per state. */
++const STATE_WORD: Record<EnvironmentState, string> = {
++  running: "Running",
++  idle: "Idle",
++  agent_exited: "Idle",
++  stopped: "Stopped",
++  starting: "Starting",
++  failed: "Failed",
++};
++
++const BADGE_CLASS: Record<EnvironmentState, string> = {
++  running: "bg-success/12 text-success",
++  idle: "bg-muted text-muted-foreground",
++  agent_exited: "bg-muted text-muted-foreground",
++  stopped: "bg-muted text-muted-foreground",
++  starting: "bg-warning/15 text-warning",
++  failed: "bg-destructive/12 text-destructive",
++};
++
++/** The trigger's and badge's dot: solid, faded, hollow, pulsing or red. */
++export function EnvironmentDot({
++  state,
++  className,
++}: {
++  state: EnvironmentState;
++  className?: string;
++}) {
++  return (
++    <span className={cn("relative flex size-2 shrink-0", className)}>
++      {state === "starting" && (
++        <span className="absolute inset-0 animate-ping rounded-full bg-warning opacity-60" />
++      )}
++      <span
++        aria-hidden
++        className={cn(
++          "relative size-full rounded-full",
++          state === "running"
++            ? "bg-success"
++            : state === "idle" || state === "agent_exited"
++              ? "bg-success/45"
++              : state === "starting"
++                ? "bg-warning"
++                : state === "failed"
++                  ? "bg-destructive"
++                  : "border-[1.5px] border-muted-foreground",
++        )}
++      />
++    </span>
++  );
++}
++
++function Header({ view }: { view: EnvironmentView }) {
++  const name = view.tailscaleHost ? tailscaleShortName(view.tailscaleHost) : view.fallbackName;
++  return (
++    <div className="flex items-center gap-3 p-2.5">
++      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
++        <MonitorCloudIcon className="size-4 text-muted-foreground" />
++      </span>
++      <div className="min-w-0 flex-1">
++        <div className="flex items-center gap-2">
++          <span className="truncate text-[13px] leading-5 font-medium">{view.providerLabel}</span>
++          <span
++            data-testid="environment-badge"
++            className={cn(
++              "ml-auto inline-flex h-5 shrink-0 items-center gap-1.5 rounded-full px-2 text-[11px] leading-4 font-medium",
++              BADGE_CLASS[view.state],
++            )}
++          >
++            <EnvironmentDot state={view.state} className="size-1.5" />
++            <span data-cap>{STATE_WORD[view.state]}</span>
++          </span>
++        </div>
++        {name && (
++          <div className="truncate font-mono text-[11px] leading-4 text-muted-foreground">
++            {name}
++          </div>
++        )}
++      </div>
++    </div>
++  );
++}
++
++function Row({ label, children }: { label: string; children: ReactNode }) {
++  return (
++    <div className="flex items-baseline gap-4 px-2.5 py-1 text-xs leading-5">
++      <span className="w-[68px] shrink-0 text-muted-foreground">{label}</span>
++      <span className="min-w-0 flex-1 whitespace-normal text-foreground">{children}</span>
++    </div>
++  );
++}
++
++function Muted({ children }: { children: ReactNode }) {
++  return <span className="text-muted-foreground">{children}</span>;
++}
++
++function Hint({ children }: { children: ReactNode }) {
++  return (
++    <span data-cap className="ml-auto pl-4 text-[11px] leading-4 text-muted-foreground">
++      {children}
++    </span>
++  );
++}
++
++function Steps({ current }: { current: StartStep }) {
++  return (
++    <div className="flex flex-col px-2.5" data-testid="environment-steps">
++      {START_STEPS.map((step, i) => (
++        <div
++          key={step}
++          className="flex h-7 items-center gap-2 text-xs leading-5"
++          data-step={i < current ? "done" : i === current ? "current" : "next"}
++        >
++          {i < current ? (
++            <CheckIcon className="size-3.5 text-success" />
++          ) : i === current ? (
++            <Loader2Icon className="size-3.5 animate-spin text-muted-foreground" />
++          ) : (
++            <span className="flex size-3.5 items-center justify-center">
++              <span className="size-1 rounded-full bg-muted-foreground/50" />
++            </span>
++          )}
++          <span data-cap className={i > current ? "text-muted-foreground" : undefined}>
++            {step}
++          </span>
++        </div>
++      ))}
++    </div>
++  );
++}
++
++// ── Status rows ───────────────────────────────────────
++
++const GIB = 1024 ** 3;
++
++/** A span of time, e.g. `"12m"`, `"1h 03m"` or `"2d 4h"`; at least a minute. */
++export function formatDuration(seconds: number): string {
++  const minutes = Math.max(1, Math.round(seconds / 60));
++  if (minutes < 60) return `${minutes}m`;
++  const hours = Math.floor(minutes / 60);
++  if (hours < 24) return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
++  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
++}
++
++/** How long ago, e.g. `"12m ago"`, `"2h ago"`, `"3d ago"`. */
++export function formatAgo(seconds: number): string {
++  const minutes = Math.max(1, Math.floor(seconds / 60));
++  if (minutes < 60) return `${minutes}m ago`;
++  const hours = Math.floor(minutes / 60);
++  return hours < 24 ? `${hours}h ago` : `${Math.floor(hours / 24)}d ago`;
++}
++
++/** One decimal, without a trailing `.0`: `1.5`, `2`, `0.3`. */
++function oneDecimal(value: number): string {
++  return value >= 10 ? String(Math.round(value)) : String(Math.round(value * 10) / 10);
++}
++
++/** CPUs in use, e.g. `"2 CPU"`, `"0.3 CPU"`. */
++export function formatCpu(cores: number): string {
++  return `${oneDecimal(cores)} CPU`;
++}
++
++/** Memory in use, e.g. `"8 GB"`, `"1.2 GB"`, `"512 MB"`. */
++export function formatMemory(bytes: number): string {
++  return bytes >= GIB ? `${oneDecimal(bytes / GIB)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
++}
++
++/** A clock time, e.g. `"15:12"` or `"3:12 PM"`, as the viewer's locale writes it. */
++function formatClock(epochSeconds: number): string {
++  return new Date(epochSeconds * 1000).toLocaleTimeString([], {
++    hour: "numeric",
++    minute: "2-digit",
++  });
++}
++
++/**
++ * How full the VM disk is, as the kubelet sees it: it evicts Pods once less
++ * than 10% is free, so the bar turns amber at 80% used and red at 90%.
++ * Measured from free space (`f_bavail`), not used space, so blocks reserved
++ * for root can't put the colours out of step with eviction.
++ */
++export function diskLevel(availableFraction: number): "ok" | "high" | "critical" {
++  const used = 1 - availableFraction;
++  return used >= 0.9 ? "critical" : used >= 0.8 ? "high" : "ok";
++}
++
++const DISK_BAR_CLASS = {
++  ok: "bg-foreground/50",
++  high: "bg-warning",
++  critical: "bg-destructive",
++} as const;
++
++function DiskRow({ status }: { status: SessionEnvironment }) {
++  const { disk_used_bytes: used, disk_total_bytes: total } = status;
++  if (used === undefined || total === undefined || total <= 0) return null;
++  const level = diskLevel(status.disk_available_fraction ?? 1 - used / total);
++  return (
++    <Row label="VM disk">
++      <span className="flex items-center gap-2">
++        <span className="tabular-nums">
++          {Math.round(used / GIB)} <Muted>of {Math.round(total / GIB)} GB</Muted>
++        </span>
++        <span className="h-1 w-16 overflow-hidden rounded-full bg-muted">
++          <span
++            data-testid="environment-disk-bar"
++            data-level={level}
++            className={cn("block h-full rounded-full", DISK_BAR_CLASS[level])}
++            style={{ width: `${Math.min(100, Math.round((used / total) * 100))}%` }}
++          />
++        </span>
++      </span>
++      {level === "critical" && (
++        <span className="block text-[11px] leading-4 text-destructive">
++          Pods may be stopped to free disk
++        </span>
++      )}
++    </Row>
++  );
++}
++
++function AgentRow({ view, now }: { view: EnvironmentView; now: number }) {
++  const agent = view.agentLabel ? <Muted>· {view.agentLabel}</Muted> : null;
++  if (view.state === "running") return <Row label="Agent">Working {agent}</Row>;
++  if (view.state === "idle") {
++    const status = view.status;
++    const idleSince = status?.agent_active === false ? status.agent_idle_since : undefined;
++    if (idleSince === undefined) return <Row label="Agent">Idle {agent}</Row>;
++    const exitsAt = status?.agent_exits_at;
++    return (
++      <Row label="Agent">
++        Idle {formatDuration(now - idleSince)}{" "}
++        {exitsAt !== undefined ? <Muted>· exits in {formatDuration(exitsAt - now)}</Muted> : agent}
++      </Row>
++    );
++  }
++  return (
++    <Row label="Agent">
++      Not running <Muted>· starts with your next message</Muted>
++    </Row>
++  );
++}
++
++function PodRow({ view, now }: { view: EnvironmentView; now: number }) {
++  const status = view.status;
++  if (!status) return null;
++  if (view.state === "stopped") {
++    const stoppedAt = status.shutdown_at;
++    return (
++      <Row label="Pod">
++        {stoppedAt !== undefined && stoppedAt <= now
++          ? `Stopped ${formatAgo(now - stoppedAt)}`
++          : "Stopped"}{" "}
++        <Muted>· files kept</Muted>
++      </Row>
++    );
++  }
++  if (status.pod_started_at === undefined) return null;
++  // Usage comes from the agent's runner; once it has exited there's none.
++  const usage =
++    view.state !== "agent_exited" && status.cpu_cores !== undefined
++      ? [
++          formatCpu(status.cpu_cores),
++          status.memory_bytes !== undefined ? formatMemory(status.memory_bytes) : null,
++        ]
++          .filter(Boolean)
++          .join(", ")
++      : null;
++  return (
++    <Row label="Pod">
++      Up {formatDuration(now - status.pod_started_at)} {usage ? <Muted>· {usage}</Muted> : null}
++    </Row>
++  );
++}
++
++/** "Keep running" in force: `"forever"`, the time it ends, or `null`. */
++function keptRunning(status: SessionEnvironment | null | undefined, now: number) {
++  if (status?.keep_running_forever) return "forever" as const;
++  const until = status?.keep_running_until;
++  return until !== undefined && until > now ? until : null;
++}
++
++function IdleStopRow({ view, now }: { view: EnvironmentView; now: number }) {
++  const status = view.status;
++  if (!status) return null;
++  // Kept running, the agent and its Pod stay up until then however idle.
++  const kept = view.state === "agent_exited" ? null : keptRunning(status, now);
++  if (kept !== null) {
++    return (
++      <Row label="Idle stop">
++        Kept running <Muted>· until {kept === "forever" ? "you stop it" : formatClock(kept)}</Muted>
++      </Row>
++    );
++  }
++  if (view.state === "running") {
++    return (
++      <Row label="Idle stop">
++        <Muted>Not while the agent is working</Muted>
++      </Row>
++    );
++  }
++  // The agent is up: the Pod stops a window after the agent exits. Once the
++  // agent has exited, the Sandbox's deadline is the stop.
++  const stopsAt =
++    view.state === "idle"
++      ? status.agent_exits_at !== undefined && status.idle_stop_window_s !== undefined
++        ? status.agent_exits_at + status.idle_stop_window_s
++        : undefined
++      : status.shutdown_at;
++  if (stopsAt === undefined || stopsAt <= now) return null;
++  return (
++    <Row label="Idle stop">
++      Pod stops in {formatDuration(stopsAt - now)} <Muted>· at {formatClock(stopsAt)}</Muted>
++    </Row>
++  );
++}
++
++function Body({ view }: { view: EnvironmentView }) {
++  const now = Date.now() / 1000;
++  const status = view.status;
++  switch (view.state) {
++    case "running":
++    case "idle":
++    case "agent_exited":
++      return (
++        <>
++          <AgentRow view={view} now={now} />
++          <PodRow view={view} now={now} />
++          {status && <DiskRow status={status} />}
++          <IdleStopRow view={view} now={now} />
++        </>
++      );
++    case "stopped":
++      return (
++        <>
++          <PodRow view={view} now={now} />
++          {status && <DiskRow status={status} />}
++          <p className="px-2.5 py-1 text-xs leading-5 whitespace-normal text-muted-foreground">
++            Your next message starts it again, in about 30 seconds.
++          </p>
++        </>
++      );
++    case "starting":
++      return <Steps current={view.startStep} />;
++    case "failed": {
++      const reason = view.error ? failureReason(view.error) : null;
++      return (
++        <div className="flex gap-2.5 px-2.5 py-1 text-xs leading-5 whitespace-normal">
++          <TriangleAlertIcon className="mt-0.5 size-3.5 shrink-0 text-destructive" />
++          <span className="min-w-0 break-words">
++            The Pod couldn't start
++            {reason ? (
++              <>: {/^\S+$/.test(reason) ? <span className="font-mono">{reason}</span> : reason}</>
++            ) : null}
++            {reason && /[.!?]$/.test(reason) ? "" : "."}
++            <br />
++            <Muted>Your files are kept.</Muted>
++          </span>
++        </div>
++      );
++    }
++  }
++}
++
++/** Server prefixes that only say which step failed; the menu already says so. */
++const FAILURE_PREFIXES = /^(managed host wake failed|managed sandbox launch failed):\s*/i;
++
++/**
++ * The part of a launch error worth reading in the menu, e.g. `"ImagePullBackOff"`
++ * from `"managed host wake failed: ImagePullBackOff"`. Copy error details
++ * copies the whole error.
++ */
++export function failureReason(error: string): string {
++  const reason = error.trim().replace(FAILURE_PREFIXES, "");
++  // A sentence starts with a capital; a code such as `ImagePullBackOff` stays as it is.
++  return /^\S+$/.test(reason) ? reason : reason.charAt(0).toUpperCase() + reason.slice(1);
++}
++
++const KEEP_RUNNING_OPTIONS: { label: string; choice: KeepRunningChoice }[] = [
++  { label: "Usual idle timeout", choice: {} },
++  { label: "For 2 hours", choice: { hours: 2 } },
++  { label: "For 8 hours", choice: { hours: 8 } },
++  { label: "Until I stop it", choice: { forever: true } },
++];
++
++/** Which option is in force, by its label. */
++function keepRunningLabel(status: SessionEnvironment | null | undefined, now: number): string {
++  const kept = keptRunning(status, now);
++  if (kept === "forever") return "Until I stop it";
++  if (kept === null) return "Usual idle timeout";
++  return (
++    KEEP_RUNNING_OPTIONS.find(
++      ({ choice }) => "hours" in choice && choice.hours === status?.keep_running_hours,
++    )?.label ?? ""
++  );
++}
++
++/**
++ * "Keep running": don't stop the Pod when it's idle, for a while or until
++ * Stop sandbox, so dev servers in the agent's terminal keep running. The
++ * runner learns it with its next report and holds off its idle exit.
++ */
++function KeepRunningMenu({
++  sessionId,
++  status,
++  allowed,
++}: {
++  sessionId: string;
++  status: SessionEnvironment | null | undefined;
++  allowed: boolean;
++}) {
++  const setKeepRunning = useSetKeepRunning(sessionId);
++  const now = Date.now() / 1000;
++  const kept = keptRunning(status, now);
++  const current = keepRunningLabel(status, now);
++  const trigger = (
++    <DropdownMenuSubTrigger
++      className="gap-2"
++      disabled={!allowed}
++      data-testid="environment-keep-running"
++    >
++      <CoffeeIcon className="size-4" />
++      <span data-cap>Keep running</span>
++      {kept !== null && <Hint>until {kept === "forever" ? "you stop it" : formatClock(kept)}</Hint>}
++    </DropdownMenuSubTrigger>
++  );
++  if (!allowed) {
++    return (
++      <Tooltip>
++        <TooltipTrigger asChild>
++          <div>
++            <DropdownMenuSub>{trigger}</DropdownMenuSub>
++          </div>
++        </TooltipTrigger>
++        <TooltipContent side="right">Only the session owner can do this</TooltipContent>
++      </Tooltip>
++    );
++  }
++  return (
++    <DropdownMenuSub>
++      {trigger}
++      <DropdownMenuSubContent
++        className="composer-host-menu environment-menu min-w-[220px]"
++        sideOffset={6}
++        data-testid="environment-keep-running-menu"
++      >
++        <div className="px-2.5 pt-2.5 pb-1.5 text-[11px] leading-4 whitespace-normal text-muted-foreground">
++          Don't stop this Pod when it's idle,
++          <br />
++          so dev servers keep running.
++        </div>
++        <DropdownMenuGroup>
++          {KEEP_RUNNING_OPTIONS.map(({ label, choice }) => (
++            <DropdownMenuItem
++              key={label}
++              className="gap-2"
++              data-checked={label === current || undefined}
++              onSelect={() =>
++                setKeepRunning.mutate(choice, {
++                  onError: (error) =>
++                    toast.error(
++                      `Couldn't change Keep running${error instanceof Error && error.message ? `: ${error.message}` : ""}.`,
++                    ),
++                })
++              }
++            >
++              <span className="flex size-4 items-center justify-center">
++                {label === current && <CheckIcon className="size-3.5" />}
++              </span>
++              <span data-cap>{label}</span>
++            </DropdownMenuItem>
++          ))}
++        </DropdownMenuGroup>
++      </DropdownMenuSubContent>
++    </DropdownMenuSub>
++  );
++}
++
++/** How long a copy's check mark shows. */
++const COPIED_MS = 2000;
++
++/** A menu item that copies `text` and shows a check, keeping the menu open. */
++function CopyItem({
++  icon,
++  label,
++  text,
++  testId,
++  trailingIcon = false,
++}: {
++  icon: ReactNode;
++  label: string;
++  text: string;
++  testId: string;
++  /** Show the copy icon at the end, as a hint, rather than leading. */
++  trailingIcon?: boolean;
++}) {
++  const [copied, setCopied] = useState(false);
++  const timer = useRef<number | undefined>(undefined);
++  useEffect(() => () => window.clearTimeout(timer.current), []);
++  return (
++    <DropdownMenuItem
++      className="gap-2"
++      data-testid={testId}
++      onSelect={(event) => {
++        event.preventDefault();
++        copyText(text).then(
++          () => {
++            setCopied(true);
++            window.clearTimeout(timer.current);
++            timer.current = window.setTimeout(() => setCopied(false), COPIED_MS);
++          },
++          () => toast.error("Couldn't copy to the clipboard."),
++        );
++      }}
++    >
++      {copied && !trailingIcon ? <CheckIcon className="size-4 text-success" /> : icon}
++      <span data-cap>{copied && !trailingIcon ? "Copied" : label}</span>
++      {trailingIcon && (
++        <Hint>
++          {copied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
++        </Hint>
++      )}
++    </DropdownMenuItem>
++  );
++}
++
++/** An owner-only item: disabled with a tooltip for everyone else. */
++function ControlItem({
++  allowed,
++  children,
++  ...props
++}: Omit<ComponentProps<typeof DropdownMenuItem>, "disabled"> & { allowed: boolean }) {
++  if (allowed) return <DropdownMenuItem {...props}>{children}</DropdownMenuItem>;
++  return (
++    <Tooltip>
++      <TooltipTrigger asChild>
++        <div>
++          <DropdownMenuItem {...props} disabled>
++            {children}
++          </DropdownMenuItem>
++        </div>
++      </TooltipTrigger>
++      <TooltipContent side="right">Only the session owner can do this</TooltipContent>
++    </Tooltip>
++  );
++}
++
++/**
++ * The composer's environment menu for a sandbox session: the sandbox's state,
++ * what's running in it, and its controls. Opened from the monitor icon left
++ * of the permission picker. Spacing lives in `index.css` (`.environment-menu`).
++ */
++export function EnvironmentMenu({
++  sessionId,
++  view,
++  defaultOpen = false,
++  onOpenChange,
++}: {
++  sessionId: string;
++  view: EnvironmentView;
++  /** Open on mount (stories and screenshots). */
++  defaultOpen?: boolean;
++  /** Told when the menu opens and closes, to fetch its status only while open. */
++  onOpenChange?: (open: boolean) => void;
++}) {
++  const stop = useStopSession();
++  const [stopOpen, setStopOpen] = useState(false);
++  const [optimistic, setOptimistic] = useOptimisticState(view.state);
++  const shown: EnvironmentView = optimistic
++    ? {
++        ...view,
++        state: optimistic,
++        // Starting the agent on a Pod that's up skips "Starting the Pod".
++        startStep: optimistic === "starting" && view.state === "agent_exited" ? 1 : view.startStep,
++      }
++    : view;
++  const { state } = shown;
++  const up = state === "running" || state === "idle" || state === "agent_exited";
++  const sshCommand = view.tailscaleHost ? `ssh root@${view.tailscaleHost}` : null;
++
++  const restartAgent = () =>
++    stop.mutate(sessionId, {
++      onSuccess: () => {
++        setOptimistic("agent_exited");
++        toast.success("The agent stopped. Your next message starts it again.");
++      },
++      onError: (error) =>
++        toast.error(
++          `Couldn't restart the agent${error instanceof Error && error.message ? `: ${error.message}` : ""}.`,
++        ),
++    });
++  // Start now, Try again and Start agent: relaunch without a message.
++  const start = useMutation({ mutationFn: () => retrySession(sessionId) });
++  const startNow = () => {
++    const what = state === "agent_exited" ? "the agent" : "the sandbox";
++    setOptimistic("starting");
++    start.mutate(undefined, {
++      onError: (error) =>
++        toast.error(
++          `Couldn't start ${what}${error instanceof Error && error.message ? `: ${error.message}` : ""}.`,
++        ),
++    });
++  };
++  const cancelStart = () =>
++    stop.mutate(
++      { id: sessionId, suspendSandbox: true },
++      {
++        onSuccess: () => setOptimistic("stopped"),
++        onError: (error) =>
++          toast.error(
++            `Couldn't cancel the start${error instanceof Error && error.message ? `: ${error.message}` : ""}.`,
++          ),
++      },
++    );
++
++  const actions: { key: string; node: ReactNode }[] = [];
++  if (up) {
++    // Keep running needs the agent up: its runner holds the Pod.
++    const keepRunning = state !== "agent_exited";
++    if (sshCommand || keepRunning) {
++      actions.push({
++        key: "connect",
++        node: (
++          <DropdownMenuGroup>
++            {sshCommand && (
++              <CopyItem
++                icon={<TerminalIcon className="size-4" />}
++                label="Copy SSH command"
++                text={sshCommand}
++                testId="environment-copy-ssh"
++                trailingIcon
++              />
++            )}
++            {keepRunning && (
++              <KeepRunningMenu
++                sessionId={sessionId}
++                status={view.status}
++                allowed={view.canControl}
++              />
++            )}
++          </DropdownMenuGroup>
++        ),
++      });
++    }
++    actions.push({
++      key: "lifecycle",
++      node: (
++        <DropdownMenuGroup>
++          {state === "agent_exited" ? (
++            <ControlItem
++              allowed={view.canControl}
++              className="gap-2"
++              data-testid="environment-start-agent"
++              onSelect={startNow}
++            >
++              <PlayIcon className="size-4" />
++              <span data-cap>Start agent</span>
++              <Hint>without a message</Hint>
++            </ControlItem>
++          ) : (
++            <ControlItem
++              allowed={view.canControl}
++              className="gap-2"
++              data-testid="environment-restart-agent"
++              onSelect={restartAgent}
++            >
++              <RotateCcwIcon className="size-4" />
++              <span data-cap>Restart agent</span>
++              <Hint>keeps the Pod</Hint>
++            </ControlItem>
++          )}
++          <ControlItem
++            allowed={view.canControl}
++            variant="destructive"
++            className="gap-2"
++            data-testid="environment-stop-sandbox"
++            onSelect={() => setStopOpen(true)}
++          >
++            <CircleStopIcon className="size-4" />
++            <span data-cap>Stop sandbox</span>
++            <Hint>keeps files</Hint>
++          </ControlItem>
++        </DropdownMenuGroup>
++      ),
++    });
++  } else if (state === "stopped" && view.canStart) {
++    actions.push({
++      key: "start",
++      node: (
++        <DropdownMenuGroup>
++          <ControlItem
++            allowed={view.canControl}
++            className="gap-2"
++            data-testid="environment-start-now"
++            onSelect={startNow}
++          >
++            <PlayIcon className="size-4" />
++            <span data-cap>Start now</span>
++            <Hint>without a message</Hint>
++          </ControlItem>
++        </DropdownMenuGroup>
++      ),
++    });
++  } else if (state === "starting" && view.canCancelStart) {
++    actions.push({
++      key: "cancel",
++      node: (
++        <DropdownMenuGroup>
++          <ControlItem
++            allowed={view.canControl}
++            variant="destructive"
++            className="gap-2"
++            data-testid="environment-cancel-start"
++            onSelect={cancelStart}
++          >
++            <CircleStopIcon className="size-4" />
++            <span data-cap>Cancel start</span>
++          </ControlItem>
++        </DropdownMenuGroup>
++      ),
++    });
++  } else if (state === "failed" && (view.error || view.canStart)) {
++    actions.push({
++      key: "failed",
++      node: (
++        <DropdownMenuGroup>
++          {view.canStart && (
++            <ControlItem
++              allowed={view.canControl}
++              className="gap-2"
++              data-testid="environment-try-again"
++              onSelect={startNow}
++            >
++              <RotateCcwIcon className="size-4" />
++              <span data-cap>Try again</span>
++            </ControlItem>
++          )}
++          {view.error && (
++            <CopyItem
++              icon={<CopyIcon className="size-4" />}
++              label="Copy error details"
++              text={view.error}
++              testId="environment-copy-error"
++            />
++          )}
++        </DropdownMenuGroup>
++      ),
++    });
++  }
++
++  return (
++    <>
++      <DropdownMenu defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
++        <DropdownMenuTrigger asChild>
++          <ComposerHostTrigger
++            label={`${view.providerLabel}, ${STATE_WORD[state].toLowerCase()}`}
++            status={state === "stopped" ? "offline" : "online"}
++            dot={<EnvironmentDot state={state} />}
++            cloud
++            data-testid="composer-host-select"
++          />
++        </DropdownMenuTrigger>
++        <DropdownMenuContent
++          align="start"
++          side="top"
++          sideOffset={8}
++          className="composer-host-menu environment-menu w-[320px] max-w-[calc(100vw-16px)]"
++          data-testid="composer-host-menu"
++          data-state-name={state}
++        >
++          <Header view={shown} />
++          <DropdownMenuSeparator />
++          <div className="py-1.5">
++            <Body view={shown} />
++          </div>
++          {actions.map(({ key, node }) => (
++            <Fragment key={key}>
++              <DropdownMenuSeparator />
++              {node}
++            </Fragment>
++          ))}
++        </DropdownMenuContent>
++      </DropdownMenu>
++      <StopSandboxDialog
++        sessionId={sessionId}
++        open={stopOpen}
++        onOpenChange={setStopOpen}
++        onStopped={() => setOptimistic("stopped")}
++      />
++    </>
++  );
++}
++
++/** How long an optimistic state waits for the polled one to catch up. */
++const OPTIMISTIC_MS = 90_000;
++
++/**
++ * Show the state a just-accepted action leads to (Stop sandbox, Restart
++ * agent, Start now, Start agent) until the polled state reaches it. Liveness comes from a ~10s poll
++ * and a Pod takes up to 30s to stop, so without this the menu would say
++ * Running for a while after Stop. Gives up after {@link OPTIMISTIC_MS}, or
++ * when something else happens: a turn or a start begins, or a start fails.
++ */
++export function useOptimisticState(
++  actual: EnvironmentState,
++): [EnvironmentState | null, (state: EnvironmentState) => void] {
++  const [pending, setPending] = useState<{
++    target: EnvironmentState;
++    from: EnvironmentState;
++  } | null>(null);
++  useEffect(() => {
++    if (pending === null) return;
++    const { target, from } = pending;
++    const settled =
++      actual === target ||
++      // Stopping the sandbox stops the agent too.
++      (target === "agent_exited" && actual === "stopped") ||
++      (actual !== from &&
++        (actual === "running" ||
++          actual === "starting" ||
++          actual === "failed" ||
++          // An agent started on a live Pod can come up before a poll sees it start.
++          (target === "starting" && actual === "idle")));
++    if (settled) {
++      setPending(null);
++      return;
++    }
++    const timer = window.setTimeout(() => setPending(null), OPTIMISTIC_MS);
++    return () => window.clearTimeout(timer);
++  }, [actual, pending]);
++  return [pending?.target ?? null, (target) => setPending({ target, from: actual })];
++}
+diff --git a/web/src/hooks/useConversations.ts b/web/src/hooks/useConversations.ts
+index eee87e5..d238cb8 100644
+--- a/web/src/hooks/useConversations.ts
++++ b/web/src/hooks/useConversations.ts
+@@ -1258,8 +1258,13 @@ export function useLeaveSession() {
+ export function useStopSession() {
+   const queryClient = useQueryClient();
+   return useMutation({
+-    mutationFn: (id: string) => stopSession(id),
+-    onSuccess: (_data, id) => {
++    // A session id, or `{ id, suspendSandbox: true }` to stop its sandbox too.
++    mutationFn: (vars: string | { id: string; suspendSandbox?: boolean }) =>
++      typeof vars === "string"
++        ? stopSession(vars)
++        : stopSession(vars.id, { suspendSandbox: vars.suspendSandbox }),
++    onSuccess: (_data, vars) => {
++      const id = typeof vars === "string" ? vars : vars.id;
+       void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+       void queryClient.invalidateQueries({ queryKey: ["session", id] });
+     },
+diff --git a/web/src/hooks/useSessionEnvironment.ts b/web/src/hooks/useSessionEnvironment.ts
+new file mode 100644
+index 0000000..8247c9c
+--- /dev/null
++++ b/web/src/hooks/useSessionEnvironment.ts
+@@ -0,0 +1,101 @@
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++
++import { authenticatedFetch } from "@/lib/identity";
++
++/**
++ * What a sandbox session's Pod is doing, from
++ * `GET /v1/sessions/{id}/environment`. Times are Unix seconds; a field is
++ * absent when it's unknown (no Pod, no runner report yet, not a sandbox).
++ */
++export interface SessionEnvironment {
++  /** When the running Pod started. */
++  pod_started_at?: number;
++  /** The Sandbox's deadline: when it stops, or when it stopped. */
++  shutdown_at?: number;
++  /** How long the Pod outlives its agent when idle, in seconds. */
++  idle_stop_window_s?: number;
++  disk_used_bytes?: number;
++  disk_total_bytes?: number;
++  /** Free disk as the kubelet counts it for eviction. */
++  disk_available_fraction?: number;
++  /** CPUs the Pod is using, e.g. `1.5`. */
++  cpu_cores?: number;
++  /** Memory the Pod is using, in bytes. */
++  memory_bytes?: number;
++  agent_active?: boolean;
++  agent_idle_since?: number;
++  /** When the agent exits for being idle; absent while it's working. */
++  agent_exits_at?: number;
++  /** "Keep running": until when, and how many hours were chosen. */
++  keep_running_until?: number;
++  keep_running_hours?: number;
++  /** "Keep running": until the user stops it. */
++  keep_running_forever?: boolean;
++}
++
++/** The "Keep running" choice: for some hours, for good, or the usual idle timeout (`{}`). */
++export type KeepRunningChoice = { hours: number } | { forever: true } | Record<string, never>;
++
++interface KeepRunningState {
++  keep_running_until: number | null;
++  keep_running_hours: number | null;
++  keep_running_forever: boolean;
++}
++
++export async function fetchSessionEnvironment(sessionId: string): Promise<SessionEnvironment> {
++  const res = await authenticatedFetch(`/v1/sessions/${encodeURIComponent(sessionId)}/environment`);
++  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
++  return (await res.json()) as SessionEnvironment;
++}
++
++/** How often the open menu refreshes. */
++const POLL_MS = 5_000;
++
++/**
++ * The session's environment, fetched only while the environment menu is open
++ * and refreshed every {@link POLL_MS} until it closes. Reopening shows the last
++ * answer straight away while it refreshes.
++ */
++export function useSessionEnvironment(sessionId: string, open: boolean) {
++  return useQuery({
++    queryKey: ["session-environment", sessionId],
++    queryFn: () => fetchSessionEnvironment(sessionId),
++    enabled: open,
++    staleTime: 0,
++    refetchInterval: open ? POLL_MS : false,
++    refetchOnWindowFocus: false,
++    retry: false,
++  });
++}
++
++export async function setKeepRunning(
++  sessionId: string,
++  choice: KeepRunningChoice,
++): Promise<KeepRunningState> {
++  const res = await authenticatedFetch(
++    `/v1/sessions/${encodeURIComponent(sessionId)}/environment/keep-running`,
++    {
++      method: "PUT",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify(choice),
++    },
++  );
++  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
++  return (await res.json()) as KeepRunningState;
++}
++
++/** Set "Keep running", and show it in the open menu straight away. */
++export function useSetKeepRunning(sessionId: string) {
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: (choice: KeepRunningChoice) => setKeepRunning(sessionId, choice),
++    onSuccess: (state) => {
++      queryClient.setQueryData<SessionEnvironment>(["session-environment", sessionId], (old) => ({
++        ...old,
++        keep_running_until: state.keep_running_until ?? undefined,
++        keep_running_hours: state.keep_running_hours ?? undefined,
++        keep_running_forever: state.keep_running_forever || undefined,
++      }));
++    },
++  });
++}
+diff --git a/web/src/index.css b/web/src/index.css
+index e30e86a..bdc352e 100644
+--- a/web/src/index.css
++++ b/web/src/index.css
+@@ -373,6 +373,37 @@
+   padding-right: 8px;
+ }
+ 
++/* The composer's environment menu for a sandbox session (EnvironmentMenu.tsx).
++ * One rule: every block of content sits 16px from the menu edge or the nearest
++ * divider. Item text is 6px (menu) + 10px (item) in; a group's first and last
++ * item text lands 6px (divider) + 3px (group) + 7px (item) from the divider;
++ * dividers and hover highlights are inset 6px like the content. */
++.environment-menu.composer-host-menu {
++  padding: 6px;
++}
++
++.environment-menu.composer-host-menu [role="menuitem"] {
++  min-height: 34px;
++  gap: 10px;
++  padding: 7px 10px;
++}
++
++.environment-menu.composer-host-menu [role="separator"] {
++  margin: 6px 0;
++}
++
++.environment-menu.composer-host-menu [role="group"] {
++  padding: 3px 0;
++}
++
++/* Trim labels to their capitals, so flex centring lines an icon up with the
++ * capital letters in any font. Firefox ignores text-box and keeps the ~1px
++ * offset it had. Rows that use it set a height, since trimming removes the
++ * line height. */
++.environment-menu [data-cap] {
++  text-box: trim-both cap alphabetic;
++}
++
+ .composer-host-menu [role="separator"] {
+   margin: 4px 0;
+ }
+diff --git a/web/src/lib/capabilities.ts b/web/src/lib/capabilities.ts
+index 568a30f..53b2b9c 100644
+--- a/web/src/lib/capabilities.ts
++++ b/web/src/lib/capabilities.ts
+@@ -404,6 +404,7 @@ const SANDBOX_PROVIDER_NAMES: Record<string, string> = {
+   lakebox: "Databricks",
+   daytona: "Daytona",
+   e2b: "E2B",
++  agent_sandbox: "Agent",
+ };
+ 
+ /**
+diff --git a/web/src/lib/sessionsApi.ts b/web/src/lib/sessionsApi.ts
+index b00c753..76a2a8b 100644
+--- a/web/src/lib/sessionsApi.ts
++++ b/web/src/lib/sessionsApi.ts
+@@ -1446,9 +1446,19 @@ export function interrupt(sessionId: string): Promise<PostEventResponse> {
+  * Owner-only server-side. For claude-native sessions the bound runner
+  * hard-kills the tmux pane the `claude` binary runs in — the analog
+  * of exiting from inside tmux, but driven from the web UI.
++ *
++ * `suspendSandbox` also stops a sandbox session's Pod, as an idle stop would
++ * ("Stop sandbox"); without it only the agent stops ("Restart agent"). Either
++ * way the next message starts it again.
+  */
+-export function stopSession(sessionId: string): Promise<PostEventResponse> {
+-  return postEvent(sessionId, { type: "stop_session", data: {} });
++export function stopSession(
++  sessionId: string,
++  opts: { suspendSandbox?: boolean } = {},
++): Promise<PostEventResponse> {
++  return postEvent(sessionId, {
++    type: "stop_session",
++    data: opts.suspendSandbox ? { suspend_sandbox: true } : {},
++  });
+ }
+ 
+ /** Reconnect or relaunch the existing runner without replaying user input. */
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index 6e2c337..ef87f01 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -4099,6 +4099,7 @@ function ComposerImpl(
+                   sessionId={composerSessionId}
+                   appearance="composer"
+                   readOnly={isReadOnly}
++                  agentWorking={isWorking}
+                   onReconnect={onShowReconnectHelp}
+                 />
+               )}
+diff --git a/web/src/shell/Sidebar.stop.test.tsx b/web/src/shell/Sidebar.stop.test.tsx
+index e52d883..c3a8e25 100644
+--- a/web/src/shell/Sidebar.stop.test.tsx
++++ b/web/src/shell/Sidebar.stop.test.tsx
+@@ -10,6 +10,7 @@ import { SidebarDataProvider } from "@/hooks/useSidebarData";
+ // ConversationRow in Sidebar.tsx.
+ 
+ import type * as RunnerHealthProviderModule from "@/hooks/RunnerHealthProvider";
++import type { Host } from "@/hooks/useHosts";
+ 
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+@@ -23,6 +24,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
+ const mocks = vi.hoisted(() => ({
+   stop: { mutate: vi.fn(), reset: vi.fn(), isPending: false, isError: false },
+   runnerOnline: vi.fn<(id: string | undefined) => boolean | undefined>(() => undefined),
++  hostOnline: vi.fn<(id: string | undefined) => boolean | null | undefined>(() => undefined),
++  hosts: [] as Host[],
+ }));
+ 
+ vi.mock("@/hooks/useConversations", () => ({
+@@ -63,6 +66,7 @@ vi.mock("@/hooks/useConversations", () => ({
+ vi.mock("@/hooks/RunnerHealthProvider", async (importOriginal) => ({
+   ...(await importOriginal<typeof RunnerHealthProviderModule>()),
+   useSessionRunnerOnline: (id: string | undefined) => mocks.runnerOnline(id),
++  useSessionHostOnline: (id: string | undefined) => mocks.hostOnline(id),
+ }));
+ 
+ vi.mock("@/components/PermissionsModal", () => ({ PermissionsModal: () => null }));
+@@ -115,6 +119,8 @@ function mockConversations(conversations: Conversation[]) {
+ 
+ function renderSidebar() {
+   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  // The hosts list the row reads to tell a sandbox session from another one.
++  qc.setQueryData(["hosts", { includeSandbox: true }], mocks.hosts);
+   return render(
+     <QueryClientProvider client={qc}>
+       <SidebarDataProvider>
+@@ -139,6 +145,11 @@ beforeEach(() => {
+   mocks.stop.isPending = false;
+   mocks.runnerOnline.mockReset();
+   mocks.runnerOnline.mockReturnValue(undefined);
++  mocks.hostOnline.mockReset();
++  mocks.hostOnline.mockReturnValue(undefined);
++  mocks.hosts = [];
++  // The non-owner test switches to "Shared with me", which persists.
++  localStorage.clear();
+ });
+ 
+ afterEach(() => {
+@@ -239,3 +250,70 @@ describe("sidebar Stop session item", () => {
+     expect(item).toHaveAttribute("data-disabled");
+   });
+ });
++
++describe("sidebar Stop sandbox item", () => {
++  const SANDBOX_HOST: Host = {
++    host_id: "host_a1b2",
++    name: "omnigent-d8ee7424",
++    owner: "me@example.com",
++    status: "online",
++    sandbox_provider: "agent_sandbox",
++  };
++
++  it("stops the sandbox, not just the agent, after the dialog confirms", () => {
++    mocks.hosts = [SANDBOX_HOST];
++    mockConversations([HOST_SPAWNED]);
++    renderSidebar();
++    openKebab();
++    fireEvent.click(screen.getByTestId("stop-conversation"));
++
++    expect(screen.getByText("Stop the sandbox?")).toBeInTheDocument();
++    expect(screen.getByText(/everything running in its Pod stop now/)).toBeInTheDocument();
++    expect(mocks.stop.mutate).not.toHaveBeenCalled();
++
++    fireEvent.click(screen.getByRole("button", { name: "Stop sandbox" }));
++    expect(mocks.stop.mutate).toHaveBeenCalledTimes(1);
++    // Failure: the sidebar sent a plain stop, which only restarts the agent
++    // and leaves the Pod running (the bug this item fixes).
++    expect(mocks.stop.mutate.mock.calls[0][0]).toEqual({ id: "conv_1", suspendSandbox: true });
++  });
++
++  it("is labelled Stop sandbox", () => {
++    mocks.hosts = [SANDBOX_HOST];
++    mockConversations([HOST_SPAWNED]);
++    renderSidebar();
++    openKebab();
++    expect(screen.getByTestId("stop-conversation")).toHaveTextContent("Stop sandbox");
++  });
++
++  it("stays available after the agent exits while the Pod is up", () => {
++    mocks.hosts = [SANDBOX_HOST];
++    mocks.runnerOnline.mockReturnValue(false);
++    mocks.hostOnline.mockReturnValue(true);
++    mockConversations([HOST_SPAWNED]);
++    renderSidebar();
++    openKebab();
++    expect(screen.getByTestId("stop-conversation")).toBeInTheDocument();
++  });
++
++  it("is hidden once the Pod has stopped too", () => {
++    mocks.hosts = [SANDBOX_HOST];
++    mocks.runnerOnline.mockReturnValue(false);
++    mocks.hostOnline.mockReturnValue(false);
++    mockConversations([HOST_SPAWNED]);
++    renderSidebar();
++    openKebab();
++    expect(screen.queryByTestId("stop-conversation")).toBeNull();
++  });
++
++  it("keeps Stop session for a host that isn't a sandbox", () => {
++    mocks.hosts = [{ ...SANDBOX_HOST, sandbox_provider: null }];
++    mocks.runnerOnline.mockReturnValue(false);
++    mocks.hostOnline.mockReturnValue(true);
++    mockConversations([HOST_SPAWNED]);
++    renderSidebar();
++    openKebab();
++    // A laptop host's runner is already gone; there's no Pod to stop.
++    expect(screen.queryByTestId("stop-conversation")).toBeNull();
++  });
++});
+diff --git a/web/src/shell/Sidebar.tsx b/web/src/shell/Sidebar.tsx
+index 84a7c46..a360971 100644
+--- a/web/src/shell/Sidebar.tsx
++++ b/web/src/shell/Sidebar.tsx
+@@ -164,7 +164,8 @@ import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
+ import { ProjectRowIcon } from "./ProjectPicker";
+ import { EmojiPicker } from "@/components/ProjectIconPicker";
+ import { SessionStateBadge } from "@/components/SessionStateBadge";
+-import { useSessionRunnerOnline } from "@/hooks/RunnerHealthProvider";
++import { useSessionHostOnline, useSessionRunnerOnline } from "@/hooks/RunnerHealthProvider";
++import { StopSandboxDialog } from "@/components/StopSandboxDialog";
+ import { useActiveRootSessionId } from "@/hooks/useSession";
+ import { isSessionStoppable } from "@/lib/sessionStop";
+ import { isImeCompositionKeyEvent } from "@/lib/ime";
+@@ -3297,6 +3298,7 @@ function ConversationMenuItems({
+   isOwner,
+   isSingleUser,
+   canStop,
++  stopsSandbox,
+   canMarkUnread,
+   currentProject,
+   onTogglePinned,
+@@ -3321,6 +3323,8 @@ function ConversationMenuItems({
+   // Single-user mode: owners and viewers are the same user, so Delete stays.
+   isSingleUser: boolean;
+   canStop: boolean;
++  // A sandbox session: Stop stops its Pod too ("Stop sandbox").
++  stopsSandbox: boolean;
+   // Whether "Mark as unread" applies: any row not already showing the
+   // unread dot (the active thread and running sessions included).
+   canMarkUnread: boolean;
+@@ -3529,7 +3533,7 @@ function ConversationMenuItems({
+             }}
+           >
+             <CircleStopIcon className="size-3.5" />
+-            Stop session
++            {stopsSandbox ? "Stop sandbox" : "Stop session"}
+           </C.Item>
+         ) : (
+           <Tooltip>
+@@ -3537,12 +3541,14 @@ function ConversationMenuItems({
+               <div>
+                 <C.Item data-testid="stop-conversation" disabled>
+                   <CircleStopIcon className="size-3.5" />
+-                  Stop session
++                  {stopsSandbox ? "Stop sandbox" : "Stop session"}
+                 </C.Item>
+               </div>
+             </TooltipTrigger>
+             <TooltipContent side="left">
+-              Only the session owner can stop this session
++              {stopsSandbox
++                ? "Only the session owner can stop this sandbox"
++                : "Only the session owner can stop this session"}
+             </TooltipContent>
+           </Tooltip>
+         ))}
+@@ -3768,12 +3774,19 @@ function ConversationRowImpl({
+   // observed, don't block. Non-sticky Stop: no "Resume" affordance — the
+   // next message relaunches the runner on a live host.
+   const runnerOnline = useSessionRunnerOnline(conversation.id);
++  const hostOnline = useSessionHostOnline(conversation.id);
++  // A sandbox session's Stop stops its Pod, which can still be up after the
++  // agent exits, so it's offered while either the agent or the Pod is up.
++  const stopsSandbox = Boolean(
++    conversation.host_id && hostsById.get(conversation.host_id)?.sandbox_provider,
++  );
+   const canStop =
+     isSessionStoppable({
+       labels: conversation.labels,
+       hostId: conversation.host_id,
+       runnerId: conversation.runner_id,
+-    }) && runnerOnline !== false;
++    }) &&
++    (runnerOnline !== false || (stopsSandbox && hostOnline === true));
+ 
+   // The session's current project NAME, or null when unfiled — drives the
+   // kebab submenu label ("Add to project" vs "Move session") and the pinned
+@@ -4018,6 +4031,7 @@ function ConversationRowImpl({
+     isOwner,
+     isSingleUser,
+     canStop,
++    stopsSandbox,
+     canMarkUnread,
+     currentProject,
+     onTogglePinned,
+@@ -4468,54 +4482,65 @@ function ConversationRowImpl({
+       </Dialog>
+       {/* The stale-error reset lives on the kebab item's onSelect (the only
+           open path) — onOpenChange only fires for Radix-initiated closes. */}
+-      <Dialog open={stopOpen} onOpenChange={setStopOpen}>
+-        {stopOpen && (
+-          <DialogContent
+-            // Keep dialog clicks off the surrounding Link (same defensive
+-            // handling as the delete dialog above).
+-            onClick={(e) => e.stopPropagation()}
+-          >
+-            <DialogHeader>
+-              <DialogTitle>Stop session?</DialogTitle>
+-              <DialogDescription>
+-                This terminates the running session for <span className="font-medium">{label}</span>{" "}
+-                and stops its runner. The conversation and its history are kept.
+-              </DialogDescription>
+-            </DialogHeader>
+-            {stopSession.isError && (
+-              <p className="text-ui text-destructive" role="alert">
+-                Couldn't stop the session
+-                {stopSession.error instanceof Error && stopSession.error.message
+-                  ? `: ${stopSession.error.message}`
+-                  : " — it may still be running"}
+-                . Try again in a moment.
+-              </p>
+-            )}
+-            <DialogFooter>
+-              <Button
+-                type="button"
+-                variant="ghost"
+-                onClick={() => setStopOpen(false)}
+-                disabled={stopSession.isPending}
+-              >
+-                Cancel
+-              </Button>
+-              <Button
+-                type="button"
+-                variant="destructive"
+-                data-testid="stop-session-confirm"
+-                onClick={() =>
+-                  stopSession.mutate(conversation.id, { onSuccess: () => setStopOpen(false) })
+-                }
+-                loading={stopSession.isPending}
+-                componentId="sidebar.conversation.stop"
+-              >
+-                Stop session
+-              </Button>
+-            </DialogFooter>
+-          </DialogContent>
+-        )}
+-      </Dialog>
++      {stopsSandbox ? (
++        <StopSandboxDialog
++          sessionId={conversation.id}
++          open={stopOpen}
++          onOpenChange={setStopOpen}
++          // Keep dialog clicks off the surrounding Link.
++          onContentClick={(e) => e.stopPropagation()}
++        />
++      ) : (
++        <Dialog open={stopOpen} onOpenChange={setStopOpen}>
++          {stopOpen && (
++            <DialogContent
++              // Keep dialog clicks off the surrounding Link (same defensive
++              // handling as the delete dialog above).
++              onClick={(e) => e.stopPropagation()}
++            >
++              <DialogHeader>
++                <DialogTitle>Stop session?</DialogTitle>
++                <DialogDescription>
++                  This terminates the running session for{" "}
++                  <span className="font-medium">{label}</span> and stops its runner. The
++                  conversation and its history are kept.
++                </DialogDescription>
++              </DialogHeader>
++              {stopSession.isError && (
++                <p className="text-ui text-destructive" role="alert">
++                  Couldn't stop the session
++                  {stopSession.error instanceof Error && stopSession.error.message
++                    ? `: ${stopSession.error.message}`
++                    : " — it may still be running"}
++                  . Try again in a moment.
++                </p>
++              )}
++              <DialogFooter>
++                <Button
++                  type="button"
++                  variant="ghost"
++                  onClick={() => setStopOpen(false)}
++                  disabled={stopSession.isPending}
++                >
++                  Cancel
++                </Button>
++                <Button
++                  type="button"
++                  variant="destructive"
++                  data-testid="stop-session-confirm"
++                  onClick={() =>
++                    stopSession.mutate(conversation.id, { onSuccess: () => setStopOpen(false) })
++                  }
++                  loading={stopSession.isPending}
++                  componentId="sidebar.conversation.stop"
++                >
++                  Stop session
++                </Button>
++              </DialogFooter>
++            </DialogContent>
++          )}
++        </Dialog>
++      )}
+     </li>
+   );
+ }

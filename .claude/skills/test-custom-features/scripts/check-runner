@@ -162,6 +162,12 @@ else
   fail "home directory is its own volume" "/home/omnigent is on the container root filesystem"
 fi
 
+echo "== Environment menu: runner patch is installed"
+check "runner reports its Pod's use and idle deadline" grep -q 'EnvironmentReporter' "$site/omnigent/runner/_entry.py"
+check "runner can read its Pod's CPU and memory (cgroup v2)" test -r /sys/fs/cgroup/cpu.stat -a -r /sys/fs/cgroup/memory.current
+check "Keep running holds off the runner's idle exit" grep -q '_busy_or_kept_running' "$site/omnigent/runner/_entry.py"
+check "Keep running holds off native pane reaping" grep -q 'def hold_while' "$site/omnigent/terminals/pane_reaper.py"
+
 echo "== Runners on your tailnet"
 ts() { timeout 10 tailscale --socket=/run/tailscale/tailscaled.sock "$@"; }
 if ! pgrep -x tailscaled >/dev/null; then

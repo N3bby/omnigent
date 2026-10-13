@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, and subscriptions in Settings. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, and the environment menu with Stop sandbox. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -74,6 +74,7 @@ PASS  images/runner/patches/0007-native-turn-idle-watchdog.patch
 PASS  images/runner/patches/0008-subscription-readiness.patch
 PASS  images/runner/patches/0009-stop-codex-process.patch
 PASS  images/runner/patches/0010-subscription-in-use.patch
+PASS  images/runner/patches/0011-environment-menu.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -89,6 +90,7 @@ PASS  images/server/patches/0011-mention-file-index.patch
 PASS  images/server/patches/0012-repo-checkouts.patch
 PASS  images/server/patches/0013-subscriptions.patch
 PASS  images/server/patches/0014-session-subscription.patch
+PASS  images/server/patches/0015-environment-menu.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -109,6 +111,7 @@ PASS  images/server/web-patches/0016-highlighted-textarea-caret.patch
 PASS  images/server/web-patches/0017-subscriptions.patch
 PASS  images/server/web-patches/0018-composer-subscription.patch
 PASS  images/server/web-patches/0019-project-repositories.patch
+PASS  images/server/web-patches/0020-environment-menu.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -161,8 +164,9 @@ Image builds apply the patches, build the frontend, and check Python
 compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
-`@` file search or a project's repositories, or changing their native message,
-composer, file-index or project settings paths:
+`@` file search, a project's repositories or the environment menu, or changing
+their native message, composer, file-index, project settings, Stop, sandbox
+lifecycle or runner idle paths:
 
 ```bash
 .claude/skills/test-custom-features/scripts/check-patched-tests
@@ -173,12 +177,18 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx` | 799 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py` | 20 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx` | 896 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py` | 69 passed |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
-cases; a project's repositories adds 8 frontend cases. These are selected suites, not the entire upstream test suite. The
+cases; a project's repositories adds 8 frontend cases; the environment menu
+and Stop sandbox add the four frontend files after it (93 cases, most of
+`HostBadge.test.tsx` and `ComposerSubscription.test.tsx` being earlier ones)
+and the seven backend files after the file index (44 cases). These are
+selected suites, not the entire upstream test suite. The environment menu's
+backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
+stop, cancel, report and keep-running logic, not a live cluster. The
 fast-mode backend uses mocked CLI transports: a pass verifies command routing
 and lifecycle handling, not live Claude/Codex availability or billing. The
 file-index backend lists real temporary folders and Git repositories.
@@ -261,6 +271,11 @@ PASS  compose: depends_on service_healthy, service names resolve
 PASS  compose: published port reachable on localhost
 == Idle sessions keep their files
 PASS  home directory is its own volume
+== Environment menu: runner patch is installed
+PASS  runner reports its Pod's use and idle deadline
+PASS  runner can read its Pod's CPU and memory (cgroup v2)
+PASS  Keep running holds off the runner's idle exit
+PASS  Keep running holds off native pane reaping
 == Runners on your tailnet
 PASS  tailnet backend Running
 PASS  joined as omnigent-<8 hex>.<tailnet>
@@ -332,6 +347,9 @@ What a failure usually means:
 | a version line | the image wasn't rebuilt or locked (`mise run lock-images`), or this session predates the deploy |
 | `… posts rate limits` | the runner patch was dropped or upstream moved the code; see step 2 |
 | `runner serves the workspace file index`, `runner lists every workspace file` | `images/runner/patches/0006-mention-file-index.patch` was dropped or upstream moved the code (see step 2), or this session predates the deploy |
+| `runner reports its Pod's use and idle deadline` | `images/runner/patches/0011-environment-menu.patch` was dropped or upstream moved the runner's idle monitor (see step 2), or this session predates the deploy; the environment menu then shows no CPU, memory or agent countdown |
+| `Keep running holds off …` | `images/runner/patches/0011-environment-menu.patch` was dropped or upstream moved the idle monitor or the pane reaper (see step 2), or this session predates the deploy |
+| `runner can read its Pod's CPU and memory (cgroup v2)` | the node isn't on cgroup v2 any more; the menu's Pod row then shows only the uptime |
 | `Claude statusLine reports …` | the Claude Code statusLine payload changed shape, or it's not a Pro/Max login |
 | managed settings / wrappers | `images/runner/Dockerfile` no longer installs the wrappers over the real CLIs, or `claude_bypass_permissions` is off |
 | `… switch Claude back to bypass`, `running Claude has --allow-dangerously-skip-permissions` | `images/runner/patches/0003-claude-bypass-switch.patch` was dropped, or this session's Pod started before the deploy |
@@ -435,6 +453,7 @@ settings.
 | Subscriptions page | If you're an admin, Settings has **Subscriptions** under Admin. Opening it directly (`https://<hostname>/settings/subscriptions`, not through the nav) shows the page rather than a permission message. Claude and Codex each list their accounts with the active one selected and marked **Active**, or say **No accounts yet**. Nothing on the page shows a token. Don't switch, add, edit or remove anything. Not an admin: record SKIP. |
 | Subscription in the composer | If Settings has a Claude account, this session's composer shows a key and the name of the account Claude Code started with, left of the model picker (on a phone, the name without the key). It's the account the `selection.json` from step 4 names for `claude`, unless Settings switched since this session started; then a dot is on the key. Tapping it opens **Claude account** with the name and what it means. Close it with Escape. Without a Claude account in Settings there's no tag. |
 | A project's repositories | Open a project's ⋯ menu in the sidebar and choose **Project settings**. With **Host** on the Kubernetes sandbox or no default, the dialog has a **Repositories** field, with a **Choose a repository…** picker when GitHub is connected and a field to paste a URL; with the sandbox there's no **Working directory**. Close it with **Cancel**, without saving. No project: record SKIP. |
+| Environment menu | In this session's composer, the monitor icon left of the permission picker has a solid green dot while you work. Its menu is headed **Agent Sandbox** with `omnigent-<8 hex>` (the `joined as` short name from step 4) and a green **Running** badge, then `Agent  Working · Claude Code` (or `· Codex`), `Pod  Up <time> · <n> CPU, <n> GB` (within a few seconds of opening; compare `cat /sys/fs/cgroup/memory.current`), `VM disk  <used> of <total> GB` with a bar (`df -h /` in this Pod shows the same disk), `Idle stop  Not while the agent is working`, **Copy SSH command**, **Keep running** with a `›`, **Restart agent** (`keeps the Pod`) and **Stop sandbox** (`keeps files`) in red. Choose **Copy SSH command**: a check replaces the copy icon. Hover **Keep running**: its submenu says `Don't stop this Pod when it's idle, so dev servers keep running.` and lists **Usual idle timeout** (ticked, unless someone chose otherwise), **For 2 hours**, **For 8 hours** and **Until I stop it**. Close the menus with Escape; don't choose anything in them, or Restart agent or Stop sandbox. Without Tailscale there's no Copy SSH command, and the header shows the host's name. |
 | GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository picker lists repositories. If it isn't connected, record SKIP (optional setup). |
 
 Also check that `feature-check claude` from 5a now shows usage numbers in its
@@ -563,6 +582,49 @@ after the next message it names `feature-check`. Switch back, then remove
     the sidebar opens a new session with that repository picked, not the last
     one you launched with. A project without repositories still picks the last
     one. Then delete the project.
+
+15. **Stop sandbox and the environment menu:** they stop Pods, so they're left
+    to you. In a session of your own on the sandbox, have the agent start
+    `python3 -m http.server 3000` and write `/home/omnigent/feature-check-stop`.
+    - **Restart agent:** in the composer's environment menu, choose **Restart
+      agent**. A message says the agent stopped. The menu's badge says **Idle**
+      and the agent row `Not running · starts with your next message`; the web
+      server still answers on port 3000.
+    - **Start agent:** choose **Start agent** in the menu without sending
+      anything. The menu says **Starting** with **Starting the Pod** already
+      ticked, then **Idle** with the agent row `Idle …`. Send a message: the
+      agent answers.
+    - **Stop sandbox:** in the sidebar, the session's **⋯** menu says **Stop
+      sandbox**. Choose it; the dialog reads **Stop the sandbox?**. Confirm.
+      The composer's dot turns into a hollow ring straight away, and the menu
+      says **Stopped**. Within about 30 seconds (the Pod's grace period)
+      `mise run status` no longer lists the session's Pod, and its Sandbox
+      shows `Ready=False`, `SandboxExpired`. A minute later it's still gone
+      (nothing woke it). There's no reconnect banner.
+    - **Waking:** send a message. The menu says **Starting** and ticks off
+      **Starting the Pod**, **Starting the agent** and **Connecting**; then
+      the agent answers. `/home/omnigent/feature-check-stop` is still there,
+      and the web server isn't running.
+    - **Cancel start:** stop the sandbox again from the environment menu, send
+      a message, and while the menu says **Starting**, choose **Cancel start**.
+      The menu says **Stopped** straight away, the message isn't sent, and
+      within a minute `mise run status` shows no Pod for the session. The next
+      message starts it normally. On a new session, Stop sandbox while its
+      sandbox is still being created says **The sandbox is still being
+      created. Stop it once it has started.** and leaves it starting.
+    - **Start now:** stop the sandbox again, then choose **Start now** in the
+      menu without sending anything. The menu says **Starting**, then
+      **Idle**, and `mise run status` lists the Pod again.
+    - **Keep running:** choose **Keep running → For 2 hours** and ask the
+      agent to start `python3 -m http.server 3000` in its terminal. The item
+      and the Idle stop row say `until <in two hours>`. Leave the session
+      alone for over an hour: the agent hasn't exited (no `Not running`), and
+      the web server still answers on port 3000 from your laptop. Choose
+      **Usual idle timeout**: the Idle stop row counts down again. Then choose
+      **Until I stop it** and **Stop sandbox**: after the next message the
+      submenu ticks **Usual idle timeout** again.
+
+    Then delete the file.
 
 ## 7. Clean up
 

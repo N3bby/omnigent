@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Run the fast-mode and fuzzy "@" file search backend regressions and related
-# frontend suites, and the project repositories frontend suites, against a
-# fresh, fully patched upstream checkout. Keep logs and JUnit reports.
+# frontend suites, the project repositories frontend suites, and the
+# environment menu's backend and frontend suites, against a fresh, fully
+# patched upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -78,13 +79,18 @@ PY
     --editable "$source_dir" --editable "$source_dir/sdks/python-client" \
     --editable "$source_dir/sdks/ui" \
     pytest pytest-asyncio pytest-mock pytest-timeout pytest-rerunfailures \
-    pytest-playwright-visual-snapshot
+    pytest-playwright-visual-snapshot asgiref
 
   (
     cd "$source_dir"
     PYTHONPATH="$source_dir:$root/images/server" "$source_dir/.venv/bin/python" -m pytest \
       tests/runner/test_fast_mode_command.py tests/server/test_fast_mode_command.py \
       tests/runner/test_file_index.py tests/server/integration/test_file_index_route.py \
+      tests/server/test_stop_sandbox.py tests/server/integration/test_stop_sandbox.py \
+      tests/server/test_cancel_start.py tests/server/integration/test_session_environment.py \
+      tests/onboarding/sandboxes/test_agent_sandbox_suspend.py \
+      tests/onboarding/sandboxes/test_agent_sandbox_environment.py \
+      tests/runner/test_environment_report.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \
@@ -94,6 +100,8 @@ PY
       src/lib/fastMode.test.ts src/store/chatStore.test.ts src/pages/ChatPage.test.ts \
       src/lib/fuzzyPathMatch.test.ts src/pages/ChatPage.mention.test.tsx \
       src/shell/ProjectSettingsDialog.test.tsx src/shell/NewChatDialog.projectPrefill.test.tsx \
+      src/components/composer/EnvironmentMenu.test.tsx src/components/HostBadge.test.tsx \
+      src/shell/Sidebar.stop.test.tsx src/components/composer/ComposerSubscription.test.tsx \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

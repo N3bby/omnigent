@@ -1,0 +1,668 @@
+The environment menu, runner side: report the Pod's use, and Keep running.
+
+The composer's environment menu shows how much a sandbox's Pod is using and
+when its agent exits for being idle, and only the runner knows either.
+omnigent/runner/environment_report.py posts them to
+/v1/sessions/{id}/environment/report every 5 seconds, as often as the open
+menu refreshes, and straight away when the agent starts or stops working:
+CPUs in use from cgroup v2 cpu.stat usage_usec deltas, memory as
+memory.current less inactive_file (the kubelet's working set), and the idle
+monitor's last activity and deadline. Pushed over HTTP rather than fetched
+through the tunnel, because every tunnel request counts as activity and would
+keep an idle agent from exiting. Only runners in a Kubernetes Pod report, and
+a report that fails never ends the loop.
+
+The server answers each report with the menu's Keep running choice ("For 2
+hours", "For 8 hours", "Until I stop it"). While it holds, the runner's idle
+monitor counts the session as busy and NativePaneReaper reaps no panes (its
+new hold_while), so the agent's terminal and the dev servers in it keep
+running, and the server keeps extending the Pod's deadline for as long as the
+runner is connected. The reported exit time accounts for it. It holds only
+while the server keeps confirming it: not confirmed for 90 seconds (long
+enough to ride out a server restart), or answered with a 4xx (the runner was
+replaced, or the session is gone), it lapses, so a runner cut off from the
+server still exits when idle.
+Pairs with the server patch 0015-environment-menu.patch.
+Applies after 0010-subscription-in-use.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+
+diff --git a/omnigent/runner/_entry.py b/omnigent/runner/_entry.py
+index 6b29195..cf39a30 100644
+--- a/omnigent/runner/_entry.py
++++ b/omnigent/runner/_entry.py
+@@ -28,6 +28,7 @@ from fastapi import FastAPI
+ from omnigent._platform import IS_WINDOWS, normalize_interactive_shells
+ from omnigent.debug_logging import runner_primary_session_id
+ from omnigent.inner import _proc
++from omnigent.runner.environment_report import EnvironmentReporter, reporting_enabled
+ from omnigent.runner.transports.ws_tunnel.serve import RUNNER_TUNNEL_REJECTION_PREFIX
+ from omnigent.util.threaded_auth import ThreadedAuth
+ from omnigent.version import VERSION
+@@ -1547,6 +1548,8 @@ def create_app(
+         auth_token=runner_auth_token,
+         auth_token_factory=auth_token_factory,
+     )
++    # For the environment reporter, which posts to the server as the runner.
++    app.state.environment_report_client = server_client
+ 
+     async def _start_pm() -> None:
+         """Start harness process manager; register MCP prewarm metadata if requested."""
+@@ -1824,6 +1827,32 @@ async def _run_tunnel_from_env() -> None:
+                 extra={"session_id": runner_primary_session_id()},
+             )
+             direct_attach_listener = None
++    # Resource use and the idle deadline, for the composer's environment menu.
++    # Its "Keep running" choice also holds off the idle exit and pane reaping.
++    reporter: EnvironmentReporter | None = None
++    report_client = getattr(app.state, "environment_report_client", None)
++    report_session_id = runner_primary_session_id()
++    if report_client is not None and report_session_id and reporting_enabled():
++        reporter = EnvironmentReporter(
++            client=report_client,
++            session_id=report_session_id,
++            idle_timeout_s=idle_timeout_s,
++            last_activity=_last_activity,
++            has_active_work=_has_active_work,
++        )
++        pane_reaper = getattr(app.state, "native_pane_reaper", None)
++        if pane_reaper is not None:
++            pane_reaper.hold_while(reporter.keeps_running)
++    report_task: asyncio.Task[None] | None = (
++        asyncio.create_task(reporter.run(), name=f"runner-environment-report:{runner_id}")
++        if reporter is not None
++        else None
++    )
++
++    def _busy_or_kept_running() -> bool:
++        """Agent work, or the user keeping the Pod running, holds off the idle exit."""
++        return _has_active_work() or (reporter is not None and reporter.keeps_running())
++
+     tunnel_task = asyncio.create_task(
+         serve_tunnel(
+             cast("_ASGIApp", app),  # FastAPI is ASGI-compatible; cast narrows for mypy
+@@ -1868,7 +1897,7 @@ async def _run_tunnel_from_env() -> None:
+             _run_inactivity_monitor(
+                 idle_timeout_s=idle_timeout_s,
+                 get_last_activity=_last_activity,
+-                has_active_work=_has_active_work,
++                has_active_work=_busy_or_kept_running,
+                 request_shutdown=_request_idle_shutdown,
+             ),
+             name=f"runner-idle-monitor:{runner_id}",
+@@ -1939,6 +1968,10 @@ async def _run_tunnel_from_env() -> None:
+         if idle_task is not None:
+             with contextlib.suppress(asyncio.CancelledError):
+                 await idle_task
++        if report_task is not None:
++            report_task.cancel()
++            with contextlib.suppress(asyncio.CancelledError):
++                await report_task
+         if direct_attach_listener is not None:
+             with contextlib.suppress(Exception):
+                 await direct_attach_listener.stop()
+diff --git a/omnigent/runner/environment_report.py b/omnigent/runner/environment_report.py
+new file mode 100644
+index 0000000..c7bf47d
+--- /dev/null
++++ b/omnigent/runner/environment_report.py
+@@ -0,0 +1,248 @@
++"""
++Report the runner Pod's resource use and the agent's idle deadline.
++
++The composer's environment menu shows how much CPU and memory a sandbox's Pod
++is using and when its agent exits for being idle. Only the runner knows either:
++the server can read the Pod's settings but not its usage, and the runner's
++idle monitor keeps the last activity time. So the runner posts them to
++``POST /v1/sessions/{id}/environment/report`` every :data:`REPORT_INTERVAL_S`,
++and straight away when the agent starts or stops working.
++
++Pushed rather than fetched through the runner tunnel on purpose: every request
++the tunnel delivers counts as activity, so polling the runner would keep an
++idle agent from ever exiting.
++
++Usage comes from cgroup v2, which in a Pod is the runner container's own:
++``cpu.stat`` ``usage_usec`` deltas for CPU, and ``memory.current`` minus
++``inactive_file`` for memory, the working set the kubelet reports.
++
++The server answers each report with the menu's "Keep running" choice. While
++it holds, the runner counts as busy: its idle monitor doesn't exit and its
++native panes aren't reaped, so dev servers in the agent's terminal keep
++running, and the server keeps the Pod alive for as long as the runner is
++connected. Reporting every few seconds means a choice made just before the
++idle deadline still reaches the runner in time.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import logging
++import os
++import time
++from collections.abc import Callable
++from dataclasses import dataclass
++from pathlib import Path
++
++import httpx
++
++_logger = logging.getLogger(__name__)
++
++REPORT_INTERVAL_S = 5.0
++"""How often the runner reports while nothing changes: as often as the open menu polls."""
++
++_CHECK_INTERVAL_S = 2.0
++"""How often the reporter looks for a change to report straight away."""
++
++_KEEP_RUNNING_MAX_AGE_S = 90.0
++"""A "Keep running" the server hasn't confirmed for this long no longer holds,
++so a runner that can't reach the server, or was replaced, still exits when idle.
++Long enough to ride out a server restart."""
++
++CGROUP_ROOT = Path("/sys/fs/cgroup")
++
++
++def reporting_enabled() -> bool:
++    """Whether this runner is in a Kubernetes Pod, the only place it reports from."""
++    return bool(os.environ.get("KUBERNETES_SERVICE_HOST"))
++
++
++def _read_stat(path: Path, key: str) -> int | None:
++    """Read one ``key value`` line of a cgroup stat file, or ``None``."""
++    try:
++        for line in path.read_text(encoding="utf-8").splitlines():
++            name, _, value = line.partition(" ")
++            if name == key:
++                return int(value)
++    except (OSError, ValueError):
++        return None
++    return None
++
++
++def read_cpu_usage_usec(root: Path = CGROUP_ROOT) -> int | None:
++    """CPU time the cgroup has used, in microseconds, or ``None`` without cgroup v2."""
++    return _read_stat(root / "cpu.stat", "usage_usec")
++
++
++def read_memory_working_set(root: Path = CGROUP_ROOT) -> int | None:
++    """
++    Memory the cgroup uses, in bytes, as the kubelet counts it.
++
++    ``memory.current`` less the page cache the kernel can drop at once
++    (``inactive_file``), so a big file read doesn't read as memory in use.
++
++    :returns: Bytes, or ``None`` without cgroup v2.
++    """
++    try:
++        current = int((root / "memory.current").read_text(encoding="utf-8").strip())
++    except (OSError, ValueError):
++        return None
++    inactive = _read_stat(root / "memory.stat", "inactive_file") or 0
++    return max(0, current - inactive)
++
++
++@dataclass
++class _CpuSample:
++    usage_usec: int
++    at: float
++
++
++class EnvironmentReporter:
++    """
++    Builds and sends the runner's reports.
++
++    :param client: The runner's HTTP client for the server, authenticated as
++        the session's owner and carrying the runner's tunnel token.
++    :param session_id: The session the runner was started for.
++    :param idle_timeout_s: The runner's idle timeout (``runner.idle_timeout_s``),
++        ``0`` when it never exits for being idle.
++    :param last_activity: Monotonic time of the runner's last activity, on the
++        event loop's clock, as the idle monitor reads it.
++    :param has_active_work: Whether the agent is working on something.
++    :param cgroup_root: Where cgroup v2 is mounted.
++    """
++
++    def __init__(
++        self,
++        *,
++        client: httpx.AsyncClient,
++        session_id: str,
++        idle_timeout_s: float,
++        last_activity: Callable[[], float],
++        has_active_work: Callable[[], bool],
++        cgroup_root: Path = CGROUP_ROOT,
++    ) -> None:
++        self._client = client
++        self._session_id = session_id
++        self._idle_timeout_s = idle_timeout_s
++        self._last_activity = last_activity
++        self._has_active_work = has_active_work
++        self._cgroup_root = cgroup_root
++        self._cpu: _CpuSample | None = None
++        # "Keep running" from the server: until when (Unix seconds), or for good.
++        self._keep_running_until: float | None = None
++        self._keep_running_forever = False
++        self._keep_running_at = 0.0
++
++    def keeps_running(self) -> bool:
++        """Whether the user asked to keep the Pod running, and it still holds."""
++        if time.monotonic() - self._keep_running_at > _KEEP_RUNNING_MAX_AGE_S:
++            return False
++        if self._keep_running_forever:
++            return True
++        until = self._keep_running_until
++        return until is not None and time.time() < until
++
++    def _idle_exit_at(self) -> float | None:
++        """When the idle monitor would exit, ignoring "Keep running"; ``None`` while working."""
++        if self._has_active_work() or self._idle_timeout_s <= 0:
++            return None
++        idle_for = max(0.0, asyncio.get_running_loop().time() - self._last_activity())
++        return time.time() + max(0.0, self._idle_timeout_s - idle_for)
++
++    def _cpu_cores(self) -> float | None:
++        """CPUs in use since the previous report, e.g. ``1.5``; ``None`` the first time."""
++        usage = read_cpu_usage_usec(self._cgroup_root)
++        if usage is None:
++            return None
++        now = time.monotonic()
++        previous, self._cpu = self._cpu, _CpuSample(usage, now)
++        if previous is None or now <= previous.at:
++            return None
++        return max(0.0, (usage - previous.usage_usec) / 1e6 / (now - previous.at))
++
++    def snapshot(self) -> dict[str, object]:
++        """The report: resource use, and whether and since when the agent is idle."""
++        loop_now = asyncio.get_running_loop().time()
++        idle_for = max(0.0, loop_now - self._last_activity())
++        active = self._has_active_work()
++        # The idle monitor only exits once the work is done, and not while kept running.
++        exits_at = self._idle_exit_at()
++        if exits_at is not None and self.keeps_running():
++            exits_at = (
++                None
++                if self._keep_running_forever
++                else max(exits_at, self._keep_running_until or exits_at)
++            )
++        return {
++            "cpu_cores": self._cpu_cores(),
++            "memory_bytes": read_memory_working_set(self._cgroup_root),
++            "agent_active": active,
++            "agent_idle_since": time.time() - idle_for,
++            "agent_exits_at": exits_at,
++        }
++
++    def _keep_running_from(self, response: httpx.Response) -> None:
++        """Take the "Keep running" choice from the server's answer to a report."""
++        try:
++            body = response.json()
++        except ValueError:
++            return
++        if not isinstance(body, dict):
++            return
++        until = body.get("keep_running_until")
++        self._keep_running_until = float(until) if isinstance(until, int | float) else None
++        self._keep_running_forever = body.get("keep_running_forever") is True
++        self._keep_running_at = time.monotonic()
++
++    def _forget_keep_running(self) -> None:
++        """The server refused the report: this runner no longer answers for the session."""
++        self._keep_running_until = None
++        self._keep_running_forever = False
++
++    async def send(self) -> None:
++        """Post one report. Best-effort: a failed post waits for the next."""
++        try:
++            response = await self._client.post(
++                f"/v1/sessions/{self._session_id}/environment/report",
++                json=self.snapshot(),
++                timeout=5.0,
++            )
++            if 400 <= response.status_code < 500:
++                self._forget_keep_running()
++            if response.status_code >= 400:
++                _logger.debug(
++                    "environment report rejected: %s",
++                    response.status_code,
++                    extra={"session_id": self._session_id},
++                )
++            elif response.status_code == 200:
++                self._keep_running_from(response)
++        except (httpx.HTTPError, ConnectionError):
++            _logger.debug(
++                "environment report failed", exc_info=True, extra={"session_id": self._session_id}
++            )
++
++    async def run(self) -> None:
++        """Report every :data:`REPORT_INTERVAL_S`, and when the agent starts or stops working."""
++        loop = asyncio.get_running_loop()
++        last_sent = -REPORT_INTERVAL_S
++        last_active: bool | None = None
++        last_activity = self._last_activity()
++        while True:
++            active = self._has_active_work()
++            activity = self._last_activity()
++            changed = active != last_active or (not active and activity != last_activity)
++            if changed or loop.time() - last_sent >= REPORT_INTERVAL_S:
++                try:
++                    await self.send()
++                except Exception:  # noqa: BLE001 — a report must never end the loop
++                    _logger.warning(
++                        "environment report failed",
++                        exc_info=True,
++                        extra={"session_id": self._session_id},
++                    )
++                last_sent = loop.time()
++                last_active = active
++                last_activity = activity
++            await asyncio.sleep(_CHECK_INTERVAL_S)
+diff --git a/omnigent/terminals/pane_reaper.py b/omnigent/terminals/pane_reaper.py
+index 2dfd21b..9835e76 100644
+--- a/omnigent/terminals/pane_reaper.py
++++ b/omnigent/terminals/pane_reaper.py
+@@ -164,6 +164,14 @@ class NativePaneReaper:
+         self._last_busy_at: dict[str, float] = {}
+         self._task: asyncio.Task[None] | None = None
+         self._started = False
++        self._hold: Callable[[], bool] | None = None
++
++    def hold_while(self, held: Callable[[], bool]) -> None:
++        """Reap nothing while *held* returns ``True``, e.g. while the user keeps the Pod running.
++
++        :param held: Checked at each scan.
++        """
++        self._hold = held
+ 
+     async def start(self) -> None:
+         """Spawn the reaper loop (idempotent)."""
+@@ -230,6 +238,12 @@ class NativePaneReaper:
+                 _logger.exception("native pane reaper: scan failed")
+ 
+     async def _scan_once(self) -> None:
++        if self._hold is not None and self._hold():
++            # Held: every pane counts as busy, so none is reaped right after.
++            now = time.monotonic()
++            for pane in self._list_native_panes():
++                self._last_busy_at[pane.conversation_id] = now
++            return
+         panes = self._list_native_panes()
+         now = time.monotonic()
+         busy_convs = {p.conversation_id for p in panes if await self._is_busy(p)}
+diff --git a/tests/runner/test_environment_report.py b/tests/runner/test_environment_report.py
+new file mode 100644
+index 0000000..f059b11
+--- /dev/null
++++ b/tests/runner/test_environment_report.py
+@@ -0,0 +1,275 @@
++"""The runner's environment reports: Pod resource use and the agent's idle deadline."""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import time
++from pathlib import Path
++
++import httpx
++import pytest
++
++from omnigent.runner import environment_report
++from omnigent.runner.environment_report import (
++    EnvironmentReporter,
++    read_cpu_usage_usec,
++    read_memory_working_set,
++)
++
++
++def _cgroup(root: Path, *, usage_usec: int, current: int, inactive_file: int) -> Path:
++    (root / "cpu.stat").write_text(f"usage_usec {usage_usec}\nuser_usec 1\nsystem_usec 2\n")
++    (root / "memory.current").write_text(f"{current}\n")
++    (root / "memory.stat").write_text(f"anon 5\ninactive_file {inactive_file}\nactive_file 7\n")
++    return root
++
++
++def test_reads_cgroup_v2_usage(tmp_path: Path) -> None:
++    root = _cgroup(tmp_path, usage_usec=1_500_000, current=8_000, inactive_file=3_000)
++    assert read_cpu_usage_usec(root) == 1_500_000
++    # The page cache the kernel can drop isn't memory in use.
++    assert read_memory_working_set(root) == 5_000
++
++
++def test_without_cgroup_v2_there_is_nothing_to_report(tmp_path: Path) -> None:
++    assert read_cpu_usage_usec(tmp_path) is None
++    assert read_memory_working_set(tmp_path) is None
++
++
++def _reporter(
++    tmp_path: Path,
++    *,
++    client: httpx.AsyncClient | None = None,
++    active: list[bool] | None = None,
++    idle_for: float = 0.0,
++    idle_timeout_s: float = 1800.0,
++) -> EnvironmentReporter:
++    state = {"active": active if active is not None else [False]}
++    loop = asyncio.get_running_loop()
++    since = loop.time() - idle_for
++    return EnvironmentReporter(
++        client=client or httpx.AsyncClient(base_url="http://server"),
++        session_id="conv_1",
++        idle_timeout_s=idle_timeout_s,
++        last_activity=lambda: since,
++        has_active_work=lambda: state["active"][0],
++        cgroup_root=tmp_path,
++    )
++
++
++@pytest.mark.asyncio
++async def test_an_idle_agent_reports_when_it_exits(tmp_path: Path) -> None:
++    _cgroup(tmp_path, usage_usec=0, current=8_000, inactive_file=0)
++    snapshot = _reporter(tmp_path, idle_for=600.0).snapshot()
++    assert snapshot["agent_active"] is False
++    assert snapshot["memory_bytes"] == 8_000
++    # The first report has no earlier sample to measure CPU against.
++    assert snapshot["cpu_cores"] is None
++    now = time.time()
++    assert abs(snapshot["agent_idle_since"] - (now - 600.0)) < 2  # type: ignore[operator]
++    assert abs(snapshot["agent_exits_at"] - (now + 1200.0)) < 2  # type: ignore[operator]
++
++
++@pytest.mark.asyncio
++async def test_a_working_agent_doesnt_exit(tmp_path: Path) -> None:
++    snapshot = _reporter(tmp_path, active=[True], idle_for=4000.0).snapshot()
++    assert snapshot["agent_active"] is True
++    assert snapshot["agent_exits_at"] is None
++
++
++@pytest.mark.asyncio
++async def test_cpu_is_measured_between_reports(tmp_path: Path) -> None:
++    reporter = _reporter(tmp_path)
++    _cgroup(tmp_path, usage_usec=1_000_000, current=1, inactive_file=0)
++    reporter.snapshot()
++    # Two seconds ago, as the previous report would have left it.
++    assert reporter._cpu is not None
++    reporter._cpu.at -= 2.0
++    # 3 CPU-seconds over 2 seconds.
++    _cgroup(tmp_path, usage_usec=4_000_000, current=1, inactive_file=0)
++    assert reporter.snapshot()["cpu_cores"] == pytest.approx(1.5, rel=0.01)
++
++
++@pytest.mark.asyncio
++async def test_reports_at_once_when_the_agent_starts_working(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    monkeypatch.setattr(environment_report, "_CHECK_INTERVAL_S", 0.01)
++    posted: list[dict[str, object]] = []
++
++    def _handler(request: httpx.Request) -> httpx.Response:
++        assert request.url.path == "/v1/sessions/conv_1/environment/report"
++        posted.append(json.loads(request.content))
++        return httpx.Response(204)
++
++    client = httpx.AsyncClient(base_url="http://server", transport=httpx.MockTransport(_handler))
++    active = [False]
++    task = asyncio.create_task(_reporter(tmp_path, client=client, active=active).run())
++    try:
++        while not posted:
++            await asyncio.sleep(0.01)
++        active[0] = True
++        while len(posted) < 2:
++            await asyncio.sleep(0.01)
++    finally:
++        task.cancel()
++        await client.aclose()
++    assert [report["agent_active"] for report in posted[:2]] == [False, True]
++
++
++@pytest.mark.asyncio
++async def test_keeps_reporting_while_nothing_changes(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """The open menu polls every 5 seconds, so the runner reports as often."""
++    assert environment_report.REPORT_INTERVAL_S == 5.0
++    monkeypatch.setattr(environment_report, "_CHECK_INTERVAL_S", 0.01)
++    monkeypatch.setattr(environment_report, "REPORT_INTERVAL_S", 0.05)
++    posted: list[object] = []
++
++    def _handler(request: httpx.Request) -> httpx.Response:
++        posted.append(request.url.path)
++        return httpx.Response(204)
++
++    client = httpx.AsyncClient(base_url="http://server", transport=httpx.MockTransport(_handler))
++    task = asyncio.create_task(_reporter(tmp_path, client=client).run())
++    try:
++        while len(posted) < 3:
++            await asyncio.sleep(0.01)
++    finally:
++        task.cancel()
++        await client.aclose()
++
++
++@pytest.mark.asyncio
++async def test_a_failed_report_is_not_an_error(tmp_path: Path) -> None:
++    def _handler(request: httpx.Request) -> httpx.Response:
++        raise httpx.ConnectError("server unreachable")
++
++    client = httpx.AsyncClient(base_url="http://server", transport=httpx.MockTransport(_handler))
++    try:
++        await _reporter(tmp_path, client=client).send()
++    finally:
++        await client.aclose()
++
++
++def _answering(body: object) -> httpx.AsyncClient:
++    return httpx.AsyncClient(
++        base_url="http://server",
++        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=body)),
++    )
++
++
++@pytest.mark.asyncio
++async def test_keep_running_comes_back_with_the_report(tmp_path: Path) -> None:
++    until = time.time() + 2 * 3600
++    client = _answering({"keep_running_until": until, "keep_running_forever": False})
++    reporter = _reporter(tmp_path, client=client, idle_for=600.0)
++    try:
++        assert not reporter.keeps_running()
++        await reporter.send()
++    finally:
++        await client.aclose()
++    assert reporter.keeps_running()
++    # The agent stays until the user's time is up, not its usual 20 minutes.
++    assert reporter.snapshot()["agent_exits_at"] == pytest.approx(until)
++
++
++@pytest.mark.asyncio
++async def test_kept_running_for_good_never_exits(tmp_path: Path) -> None:
++    client = _answering({"keep_running_forever": True})
++    reporter = _reporter(tmp_path, client=client, idle_for=600.0)
++    try:
++        await reporter.send()
++    finally:
++        await client.aclose()
++    assert reporter.keeps_running()
++    assert reporter.snapshot()["agent_exits_at"] is None
++
++
++@pytest.mark.asyncio
++async def test_keep_running_ends_on_time_and_when_cleared(tmp_path: Path) -> None:
++    reporter = _reporter(tmp_path)
++    client = _answering({"keep_running_until": time.time() - 1})
++    try:
++        await reporter.send()
++        assert not reporter.keeps_running()
++        reporter._keep_running_forever = True
++        await reporter.send()
++    finally:
++        await client.aclose()
++    # Stop sandbox, or "Usual idle timeout", clears it on the server.
++    reporter._client = _answering({})
++    try:
++        await reporter.send()
++    finally:
++        await reporter._client.aclose()
++    assert not reporter.keeps_running()
++
++
++@pytest.mark.asyncio
++async def test_a_held_pane_reaper_reaps_nothing() -> None:
++    from omnigent.terminals.pane_reaper import NativePaneReaper, PaneRef
++
++    reaped: list[str] = []
++    pane = PaneRef(
++        conversation_id="conv_1",
++        terminal_id="t1",
++        terminal_name="claude",
++        socket_path=Path("/tmp/none"),
++    )
++
++    async def _never_busy(_pane: PaneRef) -> bool:
++        return False
++
++    async def _reap(target: PaneRef) -> None:
++        reaped.append(target.conversation_id)
++
++    held = [True]
++    reaper = NativePaneReaper(
++        list_native_panes=lambda: [pane],
++        is_busy=_never_busy,
++        reap=_reap,
++        idle_timeout_s=0.001,
++    )
++    reaper.hold_while(lambda: held[0])
++    reaper._last_busy_at["conv_1"] = time.monotonic() - 3600
++    await reaper._scan_once()
++    assert reaped == []
++    # Once released, a pane gets a full window again, then goes.
++    held[0] = False
++    await asyncio.sleep(0.01)
++    await reaper._scan_once()
++    assert reaped == ["conv_1"]
++
++
++@pytest.mark.asyncio
++async def test_a_refused_or_unconfirmed_keep_running_lets_the_runner_exit(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    client = _answering({"keep_running_forever": True})
++    reporter = _reporter(tmp_path, client=client)
++    try:
++        await reporter.send()
++    finally:
++        await client.aclose()
++    assert reporter.keeps_running()
++    # The session moved to another runner: this one's reports are refused.
++    reporter._client = httpx.AsyncClient(
++        base_url="http://server",
++        transport=httpx.MockTransport(lambda _request: httpx.Response(403)),
++    )
++    try:
++        await reporter.send()
++    finally:
++        await reporter._client.aclose()
++    assert not reporter.keeps_running()
++    # Unconfirmed for too long (the server unreachable): it lapses too.
++    reporter._keep_running_forever = True
++    monkeypatch.setattr(
++        reporter,
++        "_keep_running_at",
++        time.monotonic() - environment_report._KEEP_RUNNING_MAX_AGE_S - 1,
++    )
++    assert not reporter.keeps_running()
