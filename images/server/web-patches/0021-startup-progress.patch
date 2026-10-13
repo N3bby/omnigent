@@ -12,6 +12,7 @@ for a clone problem, and Copy error details. "Log" opens the startup log,
 polled from GET /v1/sessions/{id}/startup-log while the start is going, with
 a filter per source. A finished start folds to "Sandbox ready in 30s" and
 stays until the agent answers; a failed setup script stays until dismissed.
+It sits above Working… and pending questions, since the start comes first.
 
 The record arrives in the session snapshot (`startup`) and in session.startup
 events (lib/sandboxStartup.ts, sse.ts, chatStore's sandboxStartup). The card
@@ -377,10 +378,10 @@ index 000000000..56bd3f9fb
 +});
 diff --git a/web/src/components/chat/SandboxStartupCard.tsx b/web/src/components/chat/SandboxStartupCard.tsx
 new file mode 100644
-index 000000000..961486d79
+index 000000000..2943a0edd
 --- /dev/null
 +++ b/web/src/components/chat/SandboxStartupCard.tsx
-@@ -0,0 +1,756 @@
+@@ -0,0 +1,761 @@
 +import { useEffect, useMemo, useRef, useState } from "react";
 +import {
 +  CheckIcon,
@@ -533,42 +534,45 @@ index 000000000..961486d79
 +            : `Starting ${agentLabel}`;
 +  }
 +  return (
-+    <li className="flex items-start gap-2.5 py-1" data-step={step.id} data-state={step.state}>
-+      <span className="mt-0.5">
-+        <StateIcon state={step.state} tone={step.tone} />
-+      </span>
-+      <div className="min-w-0 flex-1">
-+        <div
-+          className={cn(
-+            "text-ui leading-5",
-+            step.state === "pending" ? "text-muted-foreground" : "text-foreground",
-+          )}
-+        >
-+          {label}
-+        </div>
-+        {step.detail && (
++    <li className="flex flex-col py-1" data-step={step.id} data-state={step.state}>
++      <div className="flex items-start gap-2.5">
++        <span className="mt-0.5">
++          <StateIcon state={step.state} tone={step.tone} />
++        </span>
++        <div className="min-w-0 flex-1">
 +          <div
 +            className={cn(
-+              "text-xs leading-5 break-words",
-+              step.tone === "warning" && step.state === "running"
-+                ? "text-warning"
-+                : step.state === "failed"
-+                  ? "text-destructive"
-+                  : "text-muted-foreground",
++              "text-ui leading-5",
++              step.state === "pending" ? "text-muted-foreground" : "text-foreground",
 +            )}
 +          >
-+            {step.detail}
++            {label}
 +          </div>
-+        )}
-+        {step.children.length > 0 && (
-+          <ul className="mt-1 flex flex-col gap-0.5">
-+            {step.children.map((child) => (
-+              <ChildRow key={child.name} child={child} now={now} />
-+            ))}
-+          </ul>
-+        )}
++          {step.detail && (
++            <div
++              className={cn(
++                "text-xs leading-5 break-words",
++                step.tone === "warning" && step.state === "running"
++                  ? "text-warning"
++                  : step.state === "failed"
++                    ? "text-destructive"
++                    : "text-muted-foreground",
++              )}
++            >
++              {step.detail}
++            </div>
++          )}
++        </div>
++        <Duration seconds={elapsed(step, now)} />
 +      </div>
-+      <Duration seconds={elapsed(step, now)} />
++      {/* Below the row, not in its label column, so the times line up. */}
++      {step.children.length > 0 && (
++        <ul className="mt-1 flex flex-col gap-0.5 pl-6.5">
++          {step.children.map((child) => (
++            <ChildRow key={child.name} child={child} now={now} />
++          ))}
++        </ul>
++      )}
 +    </li>
 +  );
 +}
@@ -780,9 +784,11 @@ index 000000000..961486d79
 +        ) : (
 +          <StateIcon state={head.state} />
 +        )}
++        {/* The chevron is the keyboard's way in; this is the bigger target. */}
 +        <button
 +          type="button"
-+          className="min-w-0 flex-1 cursor-pointer truncate text-left text-ui font-medium"
++          tabIndex={-1}
++          className="min-w-0 flex-1 cursor-pointer truncate text-left text-ui font-medium outline-none"
 +          onClick={() => setOpen((value) => !value)}
 +          aria-expanded={open}
 +        >
@@ -1138,7 +1144,7 @@ index 000000000..961486d79
 +  });
 +}
 diff --git a/web/src/components/chat/Transcript.tsx b/web/src/components/chat/Transcript.tsx
-index ff179bcff..82efef71a 100644
+index ff179bcff..a38468907 100644
 --- a/web/src/components/chat/Transcript.tsx
 +++ b/web/src/components/chat/Transcript.tsx
 @@ -31,6 +31,7 @@ import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
@@ -1182,7 +1188,17 @@ index ff179bcff..82efef71a 100644
                ) : (
                  <ConversationEmptyState>
                    <div className="space-y-1.5">
-@@ -389,9 +405,11 @@ function TranscriptImpl({
+@@ -373,6 +389,9 @@ function TranscriptImpl({
+                   messageId={messageId}
+                   onGeometryChange={onGeometryChange}
+                 />
++                {/* How the sandbox start is going, step by step (this deployment).
++                The start comes before the reply, so it's above Working…. */}
++                <SessionStartupCard awaitingReply={awaitingReply} />
+                 {/* Pending elicitation cards, floated to the bottom of the chat
+                 so an outstanding question stays in view. Newest renders last,
+                 nearest the composer. Above the Working… indicator. */}
+@@ -389,7 +408,7 @@ function TranscriptImpl({
                    </Message>
                  ))}
                  {/* Working… shimmer, lit for the whole busy turn. */}
@@ -1190,11 +1206,7 @@ index ff179bcff..82efef71a 100644
 +                {showWorkingIndicator && !startupRunning && <WorkingIndicator />}
                  {/* Managed-sandbox stage cue; only when Working is absent. */}
                  {!showWorkingIndicator && <RunnerStartingIndicator variant="row" />}
-+                {/* How the sandbox start is going, step by step (this deployment). */}
-+                <SessionStartupCard awaitingReply={awaitingReply} />
                  {/* MCP-server startup band (codex-native); clears once the
-                 round settles (failures stay in host logs, not the chat). */}
-                 <McpStartupIndicator />
 diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
 index 5df5ae0d2..b6d87692a 100644
 --- a/web/src/lib/events.ts

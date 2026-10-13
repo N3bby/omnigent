@@ -267,6 +267,9 @@ def _move(item: _Step | _Child, state: str, detail: str | None, now: float) -> b
             item.started_at = now
         item.ended_at = now
     item.state = state
+    if detail is None and changed and state in ("done", "skipped"):
+        # "Connecting to Omnigent" says what a running step does, not how it ended.
+        item.detail = None
     if detail is not None:
         detail = _clip(detail)
         changed = changed or item.detail != detail

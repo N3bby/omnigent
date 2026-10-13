@@ -143,6 +143,21 @@ class StagesTests(Fixture):
         self.assertEqual(self.step("image")["state"], "done")
         self.assertEqual(self.step("image")["detail"], "Already on the VM")
 
+    def test_a_finished_step_drops_what_it_said_while_running(self) -> None:
+        startup.on_stage(SESSION, "provisioning")
+        startup.step(SESSION, "image", "running", "Downloading the runner image")
+        startup.on_stage(SESSION, "connecting")
+        startup.on_stage(SESSION, "ready")
+        self.assertIsNone(self.step("image")["detail"])
+        self.assertIsNone(self.step("host")["detail"])
+        self.assertIsNone(self.step("agent")["detail"])
+        # One it finishes with stays, also when the start's end marks it done again.
+        startup.on_stage(SESSION, "provisioning")
+        startup.step(SESSION, "image", "running", "Downloading the runner image")
+        startup.step(SESSION, "image", "done", "Downloaded in 48s")
+        startup.on_stage(SESSION, "ready")
+        self.assertEqual(self.step("image")["detail"], "Downloaded in 48s")
+
     def test_steps_keep_their_order(self) -> None:
         startup.on_stage(SESSION, "provisioning")
         startup.step(SESSION, "setup", "running", child="roadpass")
