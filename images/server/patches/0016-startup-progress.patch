@@ -25,6 +25,10 @@ Where the steps come from:
 - _wait_for_host_online reads the host container's log into the startup log
   while it waits.
 - The host container gets OMNIGENT_STARTUP_REPORT_URL for the Pod's reports.
+- Pod logs are read through _read_pod_log, which decodes the raw body:
+  kubernetes 36 hands a plain-text log back as the repr of its bytes
+  ('b"line\\n..."'), one line in which no marker matched. Upstream's
+  failure log tails read the same way now.
 
 Errors that used to look generic:
 
@@ -44,11 +48,15 @@ Cancel start marks the record cancelled before it publishes "ready".
 Base: omnigent v0.15.0 (c8b9b85f822f), after 0015-environment-menu.patch.
 
 diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
-index 0f2960e3b..447489f14 100644
+index 0f2960e3b..eec675d2b 100644
 --- a/omnigent/onboarding/sandboxes/kubernetes.py
 +++ b/omnigent/onboarding/sandboxes/kubernetes.py
-@@ -58,6 +58,7 @@ from collections.abc import Mapping, Sequence
- from typing import TYPE_CHECKING, ClassVar, Literal, cast
+@@ -55,9 +55,10 @@ import shlex
+ import time
+ import uuid
+ from collections.abc import Mapping, Sequence
+-from typing import TYPE_CHECKING, ClassVar, Literal, cast
++from typing import TYPE_CHECKING, ClassVar, Literal
  
  import click
 +import omnigent_startup as _startup
@@ -69,20 +77,21 @@ index 0f2960e3b..447489f14 100644
              # A repository with its own GIT_TOKEN variable clones with it.
              clone = _repo_env_clone_command(
                  repo.url, f"{branch}-- {shlex.quote(repo.url)} {staged_clone}", staged_clone
-@@ -639,9 +647,11 @@ def _render_workspace_prep_command(
+@@ -639,9 +647,12 @@ def _render_workspace_prep_command(
                  f"  ({clone} "
                  f"&& replace_empty_dir {staged_clone} {target} "
                  f"&& rm -f -- {marker} && rmdir -- {temporary} "
 -                f"|| {{ rmdir -- {target} 2>/dev/null || true; exit 1; }}) "
 +                f"&& echo {progress['cloned']} "
-+                f"|| {{ echo {progress['failed']}; rmdir -- {target} 2>/dev/null || true; exit 1; }}) "
++                f"|| {{ echo {progress['failed']}; "
++                f"rmdir -- {target} 2>/dev/null || true; exit 1; }}) "
                  f'& pids="$pids $!"\n'
              )
 +            script += f"else\n  echo {progress['kept']}\n"
              script += "fi\n"
          script += 'rc=0\nfor p in $pids; do wait "$p" || rc=1; done\n'
          script += '[ "$rc" -eq 0 ]\n'
-@@ -989,6 +999,14 @@ def build_job_manifest(
+@@ -989,6 +1000,14 @@ def build_job_manifest(
      )
      if repo_checkouts is not None:
          host_env.append(repo_checkouts)
@@ -97,7 +106,50 @@ index 0f2960e3b..447489f14 100644
  
      host_container: dict[str, object] = {
          "name": _CONTAINER_NAME,
-@@ -1156,6 +1174,8 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
+@@ -1074,6 +1093,42 @@ def build_job_manifest(
+     }
+ 
+ 
++def _read_pod_log(
++    core: object, pod_name: str, namespace: str, container: str, tail_lines: int
++) -> str:
++    """
++    Read the last *tail_lines* lines of a container's log as text.
++
++    The client's own decoding turns a plain-text log into the ``repr`` of its
++    bytes (``'b"line\\n..."'``, kubernetes 36), so the raw body is decoded here.
++
++    :param core: A ``CoreV1Api``.
++    :param pod_name: The Pod.
++    :param namespace: Namespace the Pod lives in.
++    :param container: The container whose log to read.
++    :param tail_lines: How many lines from the end.
++    :returns: The log.
++    :raises kubernetes.client.rest.ApiException: When it can't be read.
++    """
++    response = core.read_namespaced_pod_log(  # type: ignore[attr-defined]
++        pod_name,
++        namespace,
++        container=container,
++        tail_lines=tail_lines,
++        _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
++        _preload_content=False,
++    )
++    if isinstance(response, str):
++        return response
++    try:
++        data = response.data
++    finally:
++        release = getattr(response, "release_conn", None)
++        if callable(release):
++            release()
++    return data.decode("utf-8", "replace") if isinstance(data, bytes) else str(data or "")
++
++
+ def _api_reason(exc: Exception) -> str:
+     """
+     Short human reason for an ``ApiException`` / urllib3 ``HTTPError``.
+@@ -1156,6 +1211,8 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
      - The host container is in ``CrashLoopBackOff`` (the kubelet is still
        retrying, but the container is crash-looping and unlikely to self-heal
        during the launch window).
@@ -106,7 +158,7 @@ index 0f2960e3b..447489f14 100644
  
      :param pod: A ``V1Pod`` read from the API.
      :returns: The failed container name + summary, or ``None``.
-@@ -1185,6 +1205,23 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
+@@ -1185,6 +1242,23 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
                  )
          return _CONTAINER_NAME, "entered terminal phase 'Failed'"
  
@@ -130,7 +182,7 @@ index 0f2960e3b..447489f14 100644
      # Host container in CrashLoopBackOff while the Pod is still Running —
      # the kubelet is retrying but the host is crash-looping.
      for cs in getattr(status, "container_statuses", None) or []:
-@@ -1593,6 +1630,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+@@ -1593,6 +1667,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
          workspace = f"{_HOME_DIR}/workspace"
          if on_stage is not None:
              on_stage("starting")
@@ -139,7 +191,7 @@ index 0f2960e3b..447489f14 100644
          core = self._load_core()
          click.echo(
              f"▸ Creating Kubernetes {self.workload_kind} '{sandbox_id}' in "
-@@ -1735,18 +1774,28 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+@@ -1735,18 +1811,28 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
  
          core = self._load_core()
          timeout_s = _resolve_pod_ready_timeout_s(self._pod_ready_timeout_s)
@@ -168,7 +220,7 @@ index 0f2960e3b..447489f14 100644
                          )
                      time.sleep(_POD_READY_POLL_S)
                      continue
-@@ -1800,6 +1849,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+@@ -1800,6 +1886,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                  time.sleep(_POD_READY_POLL_S)
                  continue
  
@@ -177,7 +229,7 @@ index 0f2960e3b..447489f14 100644
              # Check for terminal failure BEFORE accepting Running — a
              # crash-looping host container stays in phase Running under
              # OnFailure, so phase alone is not proof of liveness.
-@@ -1834,6 +1885,116 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+@@ -1834,6 +1922,107 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                  )
              time.sleep(_POD_READY_POLL_S)
  
@@ -213,7 +265,7 @@ index 0f2960e3b..447489f14 100644
 +                        _INIT_CONTAINER_NAME,
 +                        self._container_log_text(namespace, pod_name, _INIT_CONTAINER_NAME),
 +                    )
-+        except Exception:  # noqa: BLE001 - progress is best-effort
++        except Exception:  # progress is best-effort
 +            _logger.debug("startup progress for %s failed", pod_name, exc_info=True)
 +
 +    def _event_items(self, namespace: str, name: str) -> list[object]:
@@ -254,16 +306,7 @@ index 0f2960e3b..447489f14 100644
 +        from urllib3.exceptions import HTTPError
 +
 +        try:
-+            return cast(
-+                str,
-+                self._load_core().read_namespaced_pod_log(
-+                    pod_name,
-+                    namespace,
-+                    container=container,
-+                    tail_lines=tail_lines,
-+                    _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
-+                ),
-+            )
++            return _read_pod_log(self._load_core(), pod_name, namespace, container, tail_lines)
 +        except (ApiException, HTTPError):
 +            return ""
 +
@@ -286,7 +329,7 @@ index 0f2960e3b..447489f14 100644
 +            if pod_name is None:
 +                return ""
 +            return self._container_log_text(namespace, pod_name, container, tail_lines)
-+        except Exception:  # noqa: BLE001 - best-effort
++        except Exception:  # best-effort
 +            return ""
 +        finally:
 +            self._close_clients()
@@ -294,6 +337,28 @@ index 0f2960e3b..447489f14 100644
      def _pod_failure_message(
          self,
          namespace: str,
+@@ -1910,19 +2099,11 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+         from urllib3.exceptions import HTTPError
+ 
+         try:
+-            log = cast(
+-                str,
+-                self._load_core().read_namespaced_pod_log(
+-                    pod_name,
+-                    namespace,
+-                    container=container,
+-                    tail_lines=_LOG_TAIL_LINES,
+-                    _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
+-                ),
++            return _read_pod_log(
++                self._load_core(), pod_name, namespace, container, _LOG_TAIL_LINES
+             )
+         except (ApiException, HTTPError):
+             return ""
+-        return log
+ 
+     def _best_effort_delete(self, namespace: str, job_name: str, secret_name: str) -> None:
+         """
 diff --git a/omnigent/server/app.py b/omnigent/server/app.py
 index fefbdda98..23ae95882 100644
 --- a/omnigent/server/app.py
@@ -682,12 +747,38 @@ index 5b2c5873b..2628c652c 100644
      | SessionTailscaleEvent
      | SessionMcpStartupEvent
      | SessionModelOptionsEvent
+diff --git a/tests/onboarding/sandboxes/test_kubernetes.py b/tests/onboarding/sandboxes/test_kubernetes.py
+index c75a21165..977e3bab7 100644
+--- a/tests/onboarding/sandboxes/test_kubernetes.py
++++ b/tests/onboarding/sandboxes/test_kubernetes.py
+@@ -1360,9 +1360,19 @@ class _FakeCore:
+         return SimpleNamespace(items=self.events)
+ 
+     def read_namespaced_pod_log(
+-        self, name, namespace, container=None, tail_lines=None, _request_timeout=None
++        self,
++        name,
++        namespace,
++        container=None,
++        tail_lines=None,
++        _request_timeout=None,
++        _preload_content=True,
+     ):
+-        return self.logs.get(container, "")
++        text = self.logs.get(container, "")
++        if _preload_content:
++            return text
++        # The raw response: bytes the caller decodes (see _read_pod_log).
++        return SimpleNamespace(data=text.encode(), release_conn=lambda: None)
+ 
+ 
+ class _FakeBatch:
 diff --git a/tests/onboarding/sandboxes/test_startup_progress_k8s.py b/tests/onboarding/sandboxes/test_startup_progress_k8s.py
 new file mode 100644
-index 000000000..abfb94aad
+index 000000000..a9731db84
 --- /dev/null
 +++ b/tests/onboarding/sandboxes/test_startup_progress_k8s.py
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,252 @@
 +"""How the Kubernetes launcher reports a sandbox's start (this deployment).
 +
 +The launcher feeds ``omnigent_startup``: each repository's clone, the Pod's
@@ -905,6 +996,41 @@ index 000000000..abfb94aad
 +        launcher._wait_for_pod_running("omnigent-sandboxes", "omnigent-job-1")
 +    assert "did not create a child pod" in raised.value.message
 +    assert "FailedCreate: exceeded quota: runner-quota" in raised.value.message
++
++
++def test_a_log_reads_as_its_text_with_the_real_client() -> None:
++    """kubernetes 36 decodes a plain-text log to ``'b"..."'``; read it as text."""
++    client = pytest.importorskip("kubernetes.client")
++    import threading
++    from http.server import BaseHTTPRequestHandler, HTTPServer
++
++    body = b"omnigent-prep: cloning repo\nCloning into 'repo'...\nomnigent-prep: cloned repo\n"
++
++    class _Log(BaseHTTPRequestHandler):
++        def do_GET(self) -> None:
++            self.send_response(200)
++            self.send_header("Content-Type", "text/plain")
++            self.send_header("Content-Length", str(len(body)))
++            self.end_headers()
++            self.wfile.write(body)
++
++        def log_message(self, *_args: object) -> None:
++            pass
++
++    server = HTTPServer(("127.0.0.1", 0), _Log)
++    threading.Thread(target=server.serve_forever, daemon=True).start()
++    try:
++        core = client.CoreV1Api(
++            client.ApiClient(client.Configuration(host=f"http://127.0.0.1:{server.server_port}"))
++        )
++        text = k8s._read_pod_log(core, "omnigent-job-1", "ns", "workspace-prep", 500)
++    finally:
++        server.shutdown()
++    assert text.splitlines() == [
++        "omnigent-prep: cloning repo",
++        "Cloning into 'repo'...",
++        "omnigent-prep: cloned repo",
++    ]
 diff --git a/tests/server/test_startup_progress.py b/tests/server/test_startup_progress.py
 new file mode 100644
 index 000000000..752f82eed
