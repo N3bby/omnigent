@@ -12,6 +12,9 @@ Sandbox**, or a connected machine's name with its status dot.
   **Connect new host**.
 - **When the bar runs out of room**, it shows only its icon, as the
   repository chip does.
+- **On a phone the repository popover slides left** to keep its full width,
+  since the chip now starts further right. It ends 8px from the screen's
+  right edge.
 - **In the Codex theme** the bar is under the composer. In the other themes
   it's the tray above it, so the picker is there.
 - **Inside a session nothing moves.** The
@@ -29,3 +32,8 @@ host menu from the composer's controls to the start of the workspace bar.
 Its trigger becomes the same chip as the repository's and the working
 directory's, so it gets their size and collapsing. It keeps the old chip's
 accessible name, such as `Host: Agent Sandbox, Offline`.
+
+The repository popover is lined up with the chip's start and, since
+`0006-mobile-repo-picker.patch`, doesn't flip or slide on its own, so it
+would be squeezed into the room right of the chip. When it opens, it moves
+left just far enough to fit.
