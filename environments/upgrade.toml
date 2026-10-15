@@ -32,8 +32,8 @@ server_image = "omnigent-server"
 # Custom image digests are intentionally mandatory. `mise run lock-images`
 # resolves the images CI published for the checked-out commit. Upstream build inputs
 # and the PostgreSQL/Vault digests live in versions.yaml.
-runner_digest = "sha256:203009cdd9f6a27467f86a76dcb53679118722aebcf95d51e69212b691cb0988"
-server_digest = "sha256:7822a4a6459ea6d323501c354aa61c04bcdb265dfa2ceec8b044298b5d16b93f"
+runner_digest = "sha256:cb5950ab19168adfeecaf26955fa81b4b2e4072687d5614cedbf544d2d5805f8"
+server_digest = "sha256:c084c90339aeb998c6f7a0d93ef21f1fe9f7c65e559b768873cd0927ba4fd504"
 
 server_cpu_request = "500m"
 # Memory reserved for the server. The server, PostgreSQL and Vault have no
