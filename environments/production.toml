@@ -74,6 +74,13 @@ runner_max_concurrency = 10
 runner_agent_idle_seconds = 1800
 runner_idle_shutdown_seconds = 3600
 
+# How long a sign-in lasts, in hours, counted from signing in; using Omnigent
+# doesn't extend it. Signing out only clears that device's cookie, so a copied
+# cookie works this long. Only deleting the account or changing
+# OMNIGENT_ACCOUNTS_COOKIE_SECRET in omnigent-secrets ends sign-ins early. The
+# site is only reachable from the tailnet. Defaults to 8.
+session_ttl_hours = 168
+
 # Deliberate policy choices.
 codex_bypass_approvals = true
 claude_bypass_permissions = true

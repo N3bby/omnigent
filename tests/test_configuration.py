@@ -141,6 +141,20 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 validate("ci")
 
+    def test_session_ttl_reaches_the_server(self) -> None:
+        values, _ = validate("ci")
+        self.assertEqual(values["session_ttl_hours"], 8)
+        subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
+        env = (ROOT / ".generated" / "ci" / "omnigent-config.env").read_text()
+        self.assertIn("OMNIGENT_ACCOUNTS_SESSION_TTL_HOURS=8\n", env)
+        self.assertEqual(validate("production", require_digests=False)[0]["session_ttl_hours"], 168)
+        for invalid in (0, -1, True, "168"):
+            with self.subTest(session_ttl_hours=invalid):
+                bad = dict(load_environment("ci"), session_ttl_hours=invalid)
+                with mock.patch("config.load_environment", return_value=bad):
+                    with self.assertRaises(ConfigError):
+                        validate("ci")
+
     def test_acme_challenge_selects_the_issuer_solver(self) -> None:
         values, _ = validate("ci")
         self.assertEqual(values["acme_challenge"], "http-01")

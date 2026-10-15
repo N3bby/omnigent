@@ -94,6 +94,7 @@ def main() -> None:
             "OMNIGENT_AUTH_PROVIDER=accounts",
             "OMNIGENT_ACCOUNTS_AUTO_OPEN=0",
             f"OMNIGENT_ACCOUNTS_BASE_URL=https://{cfg['hostname']}",
+            f"OMNIGENT_ACCOUNTS_SESSION_TTL_HOURS={cfg['session_ttl_hours']}",
             "CODEX_HOME=/opt/codex-home",
             f"OMNIGENT_SUBSCRIPTION_LOGIN_IMAGE={runner_ref}",
             f"OMNIGENT_CODEX_BYPASS_APPROVALS={bypass}",

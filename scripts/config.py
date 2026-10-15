@@ -123,6 +123,10 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
             "runner_idle_shutdown_seconds must be at least "
             f"{MIN_RUNNER_SUSPEND_WINDOW_SECONDS} more than runner_agent_idle_seconds"
         )
+    data.setdefault("session_ttl_hours", 8)
+    value = data["session_ttl_hours"]
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ConfigError("session_ttl_hours must be a positive integer")
     for key in ("codex_bypass_approvals", "claude_bypass_permissions", "backups_enabled"):
         if not isinstance(data.get(key), bool):
             raise ConfigError(f"{key} must be true or false")
