@@ -88,9 +88,11 @@ applies to the pinned `omnigent_commit`, both the image build and
 `mise run test` fail.
 
 - **When upstream ships the same behaviour**, delete the patch.
-- **Backported upstream fixes** come out when you upgrade past the release
-  that has them. There are none at the moment; list each one here, with the
-  upstream fix and the release to delete it from, when you add one.
+- **Upstream bugs this deployment fixes** come out once upstream ships a fix:
+
+  | Patch | Upstream bug | Delete when |
+  | --- | --- | --- |
+  | `images/server/web-patches/0024-admin-settings-nav.patch` | Since [#8634](https://github.com/omnigent-ai/omnigent/pull/8634) (`v0.17.0`), Settings has no Admin group (Members, Policies, Sharing, Subscriptions, Repository variables) after a page load | upstream's `web/src/hooks/useIsAdmin.ts` no longer seeds `initialData` |
 - **When no web patches are left**, the server image can stop rebuilding the
   web UI.
 

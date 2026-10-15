@@ -68,7 +68,7 @@ else
 fi
 
 echo "== Fuzzy @ file search: runner patch is installed"
-check "runner serves the workspace file index" grep -q '/file-index"' "$site/omnigent/runner/app.py"
+check "runner serves the workspace file index" grep -qs '/file-index"' "$site/omnigent/runner/resource_routes.py" "$site/omnigent/runner/app.py"
 check "runner lists every workspace file" grep -q 'def list_file_paths' "$site/omnigent/runner/environment_filesystem.py"
 echo "== Agents don't stop to ask"
 want='{"permissions":{"defaultMode":"bypassPermissions"},"skipDangerousModePermissionPrompt":true}'
