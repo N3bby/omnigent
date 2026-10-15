@@ -62,7 +62,8 @@ Set these in `environments/production.toml` and deploy:
   - The runner exits once it has been idle for `runner_agent_idle_seconds`
     (Omnigent's `keep_warm_s`). A turn that's still running isn't idle,
     however long it takes, including a Claude or Codex turn in its terminal
-    (`images/runner/patches/0007-native-turn-idle-watchdog.patch`).
+    (upstream since `v0.16.0`,
+    [#8058](https://github.com/omnigent-ai/omnigent/pull/8058)).
   - When the session has been idle for `runner_idle_shutdown_seconds`, the
     deadline passes and the controller deletes the Pod. The Sandbox and its
     volume stay.

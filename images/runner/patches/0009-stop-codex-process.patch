@@ -1,9 +1,10 @@
 Close Codex terminals and app-server on Stop so a resumed session reloads credentials.
 
 diff --git a/omnigent/runner/app.py b/omnigent/runner/app.py
+index 5d0e9c5..4c0dd46 100644
 --- a/omnigent/runner/app.py
 +++ b/omnigent/runner/app.py
-@@ -10079,6 +10079,11 @@
+@@ -6663,6 +6663,11 @@ def create_runner_app(
              _cancel_claude_prompt_waiter(conversation_id)
              _harness = _session_harness_name(conversation_id)
              _stop_resp = await _native_interrupt_runner.stop(_harness, conversation_id)
@@ -15,9 +16,9 @@ diff --git a/omnigent/runner/app.py b/omnigent/runner/app.py
              if _stop_resp is not None:
                  return _stop_resp
              await _cancel_inprocess_turn(conversation_id)
-
 diff --git a/tests/runner/test_subscription_codex_stop.py b/tests/runner/test_subscription_codex_stop.py
 new file mode 100644
+index 0000000..218ed11
 --- /dev/null
 +++ b/tests/runner/test_subscription_codex_stop.py
 @@ -0,0 +1,44 @@

@@ -5,13 +5,13 @@ which left out bypass. This deployment's runner launches Claude so that bypass
 is always reachable (images/runner/patches/0003), so the server accepts it and
 pins it in the session's launch args like any other confirmed switch, which
 keeps it across idle restarts.
-Base: omnigent v0.15.0 (c8b9b85f822f).
+Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/server/routes/_sessions/common.py b/omnigent/server/routes/_sessions/common.py
-index 2ca0be8..04ddbbf 100644
+index 523c433..a45f36a 100644
 --- a/omnigent/server/routes/_sessions/common.py
 +++ b/omnigent/server/routes/_sessions/common.py
-@@ -236,14 +236,14 @@ _CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY = "omnigent.claude_native.permission_mo
+@@ -244,14 +244,14 @@ _CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY = "omnigent.claude_native.permission_mo
  
  # Permission modes switchable on a running session — the ones Claude
  # Code's shift+tab cycle can reach. Mirrors

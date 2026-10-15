@@ -25,21 +25,21 @@ enough to ride out a server restart), or answered with a 4xx (the runner was
 replaced, or the session is gone), it lapses, so a runner cut off from the
 server still exits when idle.
 Pairs with the server patch 0015-environment-menu.patch.
-Applies after 0010-subscription-in-use.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+Applies after 0010-subscription-in-use.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/runner/_entry.py b/omnigent/runner/_entry.py
-index 6b29195..cf39a30 100644
+index 1fbb9d2..478e3a3 100644
 --- a/omnigent/runner/_entry.py
 +++ b/omnigent/runner/_entry.py
-@@ -28,6 +28,7 @@ from fastapi import FastAPI
+@@ -30,6 +30,7 @@ from fastapi import FastAPI
  from omnigent._platform import IS_WINDOWS, normalize_interactive_shells
- from omnigent.debug_logging import runner_primary_session_id
+ from omnigent.debug_logging import debug_event, runner_primary_session_id
  from omnigent.inner import _proc
 +from omnigent.runner.environment_report import EnvironmentReporter, reporting_enabled
  from omnigent.runner.transports.ws_tunnel.serve import RUNNER_TUNNEL_REJECTION_PREFIX
  from omnigent.util.threaded_auth import ThreadedAuth
  from omnigent.version import VERSION
-@@ -1547,6 +1548,8 @@ def create_app(
+@@ -1536,6 +1537,8 @@ def create_app(
          auth_token=runner_auth_token,
          auth_token_factory=auth_token_factory,
      )
@@ -48,7 +48,7 @@ index 6b29195..cf39a30 100644
  
      async def _start_pm() -> None:
          """Start harness process manager; register MCP prewarm metadata if requested."""
-@@ -1824,6 +1827,32 @@ async def _run_tunnel_from_env() -> None:
+@@ -1844,6 +1847,32 @@ async def _run_tunnel_from_env() -> None:
                  extra={"session_id": runner_primary_session_id()},
              )
              direct_attach_listener = None
@@ -81,7 +81,7 @@ index 6b29195..cf39a30 100644
      tunnel_task = asyncio.create_task(
          serve_tunnel(
              cast("_ASGIApp", app),  # FastAPI is ASGI-compatible; cast narrows for mypy
-@@ -1868,7 +1897,7 @@ async def _run_tunnel_from_env() -> None:
+@@ -1889,7 +1918,7 @@ async def _run_tunnel_from_env() -> None:
              _run_inactivity_monitor(
                  idle_timeout_s=idle_timeout_s,
                  get_last_activity=_last_activity,
@@ -90,7 +90,7 @@ index 6b29195..cf39a30 100644
                  request_shutdown=_request_idle_shutdown,
              ),
              name=f"runner-idle-monitor:{runner_id}",
-@@ -1939,6 +1968,10 @@ async def _run_tunnel_from_env() -> None:
+@@ -1960,6 +1989,10 @@ async def _run_tunnel_from_env() -> None:
          if idle_task is not None:
              with contextlib.suppress(asyncio.CancelledError):
                  await idle_task
@@ -364,10 +364,10 @@ index 0000000..fb5e125
 +                last_activity = activity
 +            await asyncio.sleep(_CHECK_INTERVAL_S)
 diff --git a/omnigent/terminals/pane_reaper.py b/omnigent/terminals/pane_reaper.py
-index 2dfd21b..9835e76 100644
+index 2f2cdee..d646c11 100644
 --- a/omnigent/terminals/pane_reaper.py
 +++ b/omnigent/terminals/pane_reaper.py
-@@ -164,6 +164,14 @@ class NativePaneReaper:
+@@ -167,6 +167,14 @@ class NativePaneReaper:
          self._last_busy_at: dict[str, float] = {}
          self._task: asyncio.Task[None] | None = None
          self._started = False
@@ -382,7 +382,7 @@ index 2dfd21b..9835e76 100644
  
      async def start(self) -> None:
          """Spawn the reaper loop (idempotent)."""
-@@ -230,6 +238,12 @@ class NativePaneReaper:
+@@ -233,6 +241,12 @@ class NativePaneReaper:
                  _logger.exception("native pane reaper: scan failed")
  
      async def _scan_once(self) -> None:

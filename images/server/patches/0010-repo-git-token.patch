@@ -8,10 +8,10 @@ variables Secrets too, and omnigent_repo_env.clone_command writes a
 repository-local credential helper that reads the mounted token file. The
 GitHub picker routes add those repositories to the App's list and list their
 branches with the token (omnigent_repo_env_api).
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0009.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0009.
 
 diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
-index f241029..4ac17b5 100644
+index 908e2b8..a3293ef 100644
 --- a/omnigent/onboarding/sandboxes/kubernetes.py
 +++ b/omnigent/onboarding/sandboxes/kubernetes.py
 @@ -58,6 +58,7 @@ from collections.abc import Mapping, Sequence
@@ -22,21 +22,27 @@ index f241029..4ac17b5 100644
  from omnigent_repo_env import pod_volumes as _repo_env_volumes
  
  from omnigent.host.identity import (
-@@ -628,8 +629,12 @@ def _render_workspace_prep_command(
+@@ -633,6 +634,19 @@ def _render_workspace_prep_command(
              script += "      exit 1\n    fi\n  fi\n"
              script += f"  mkdir -- {target}\n  mkdir -- {temporary}\n  touch -- {marker}\n"
              script += '  if [ -z "$wired" ]; then wire_credentials; wired=1; fi\n'
 +            # A repository with its own GIT_TOKEN variable clones with it.
 +            clone = _repo_env_clone_command(
-+                repo.url, f"{branch}-- {shlex.quote(repo.url)} {staged_clone}", staged_clone
++                repo.url,
++                shlex.join(
++                    [
++                        *repo.git_clone.clone_args(repo.branch),
++                        "--",
++                        repo.url,
++                        f"{staging_dir}/clone",
++                    ]
++                ),
++                staged_clone,
 +            )
              script += (
--                f"  (git clone {branch}-- {shlex.quote(repo.url)} {staged_clone} "
-+                f"  ({clone} "
+                 f"  ({clone} "
                  f"&& replace_empty_dir {staged_clone} {target} "
-                 f"&& rm -f -- {marker} && rmdir -- {temporary} "
-                 f"|| {{ rmdir -- {target} 2>/dev/null || true; exit 1; }}) "
-@@ -900,8 +905,8 @@ def build_job_manifest(
+@@ -905,8 +919,8 @@ def build_job_manifest(
              {"name": f"secret-{i}", "mountPath": mount["mount_path"], "readOnly": True}
          )
  
@@ -47,7 +53,7 @@ index f241029..4ac17b5 100644
      repo_env_volumes, repo_env_mounts = _repo_env_volumes(repo.url for repo in repos)
  
      init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
-@@ -956,7 +961,7 @@ def build_job_manifest(
+@@ -961,7 +975,7 @@ def build_job_manifest(
          "env": init_env,
          "resources": pod_resources,
          "securityContext": container_security,

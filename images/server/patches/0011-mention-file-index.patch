@@ -6,13 +6,13 @@ route from images/runner/patches/0006-mention-file-index.patch. There is no
 host fallback: with the runner offline, the web UI goes back to browsing
 one folder at a time. Hidden from the public API reference. Pairs with the
 web patch 0014-composer-fuzzy-mentions.patch.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0010.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0010.
 
 diff --git a/omnigent/server/routes/sessions/routes_resources.py b/omnigent/server/routes/sessions/routes_resources.py
-index e91bccf..2b8ecd9 100644
+index aa3e91d..ff3ff0c 100644
 --- a/omnigent/server/routes/sessions/routes_resources.py
 +++ b/omnigent/server/routes/sessions/routes_resources.py
-@@ -2396,6 +2396,37 @@ def register_resources_routes(
+@@ -2472,6 +2472,37 @@ def register_resources_routes(
              limit=limit,
          )
  

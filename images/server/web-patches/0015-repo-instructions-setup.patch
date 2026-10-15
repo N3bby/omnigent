@@ -15,7 +15,7 @@ load lazily (HighlightedTextarea): the instructions as Markdown, the script as
 shell or as the language its #! line names. The field stays a native
 textarea with transparent text over a highlighted copy, so typing, selection
 and phone keyboards work as before.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0014.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0014.
 
 diff --git a/web/src/components/HighlightedTextarea.test.tsx b/web/src/components/HighlightedTextarea.test.tsx
 new file mode 100644

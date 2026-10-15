@@ -8,7 +8,7 @@ description: Test that this deployment's custom features on top of upstream Omni
 `docs/features/` describes each feature, one page each. This skill tests them in
 layers, from cheap and offline to live, and ends with a report and a short
 checklist for the human. **Expected** values below are the results on Omnigent
-`v0.15.0` (2026-10-07). After an upgrade the same assertions should hold; when
+`v0.18.0` (2026-10-15). After an upgrade the same assertions should hold; when
 one doesn't, report it as a regression rather than editing the expectation.
 
 ## Before you start
@@ -19,7 +19,7 @@ one doesn't, report it as a regression rather than editing the expectation.
 - The session must have **started after the upgrade was deployed**. A session
   started earlier runs the old runner image, so its runner checks prove nothing.
   `omnigent --version` prints the `omnigent` version from `versions.yaml`
-  without its `v`, for example `omnigent 0.15.0 (built …)` for `v0.15.0`.
+  without its `v`, for example `omnigent 0.18.0 (built …)` for `v0.18.0`.
 - Know which environment you are testing (`environments/*.toml`; you need its
   `hostname`). Nothing in the Pod tells them apart: several environments share
   a tailnet, and the runner reaches the server by an in-cluster name. Use what
@@ -70,7 +70,6 @@ PASS  images/runner/patches/0003-claude-bypass-switch.patch
 PASS  images/runner/patches/0004-fast-mode.patch
 PASS  images/runner/patches/0005-fast-mode-command-lifecycle.patch
 PASS  images/runner/patches/0006-mention-file-index.patch
-PASS  images/runner/patches/0007-native-turn-idle-watchdog.patch
 PASS  images/runner/patches/0008-subscription-readiness.patch
 PASS  images/runner/patches/0009-stop-codex-process.patch
 PASS  images/runner/patches/0010-subscription-in-use.patch
@@ -127,10 +126,9 @@ whether upstream now ships the behaviour itself (then the patch can go, see
 "Keeping the patches up to date" in `docs/features/README.md`) or needs
 rebasing. Name the feature it belongs to in the report.
 
-For reference, on 2026-10-07 upstream `v0.18.0.dev20261007` failed
-`server/0003-tailscale-host` and all four web patches, while the runner patch
-and server patches 0001 and 0002 applied. Web `0004-remove-share-button` also
-fails on its own.
+For reference, the `v0.15.0` patches failed on upstream `v0.18.0` in runner
+0004, server 0001 and web 0001, with most of each set's later patches failing
+after them; they were rebased onto `v0.18.0` on 2026-10-15.
 
 ## 3. Repository validation
 
@@ -153,7 +151,7 @@ python -m unittest discover -s tests
 ```
 
 **Expected:** `configuration and manifests for <env> are valid` for both, and
-the unit tests end in `OK` (144 tests, 12 skipped, on 2026-10-13). Warnings that
+the unit tests end in `OK` (146 tests, 12 skipped, on 2026-10-15). Warnings that
 `ansible-playbook` or `shellcheck` isn't installed are fine. The tests cover
 the rendered settings behind several features, such as idle-session timing and
 the per-session home volume. They are the local part of the `Validate`
@@ -181,20 +179,20 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx` | 1547 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx` | 1797 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py` | 87 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
 cases; a project's repositories adds 8 frontend cases; the environment menu
-and Stop sandbox add the four frontend files after it (93 cases, most of
+and Stop sandbox add the four frontend files after it (114 cases, most of
 `HostBadge.test.tsx` and `ComposerSubscription.test.tsx` being earlier ones)
 and the seven backend files after the file index (52 cases); the startup
 card adds the last three frontend files (33 cases) and the last two backend
 files (16 cases; the one that reads a log through the real Kubernetes client
 is skipped, because these suites don't install it); the New session screen's
 two files cover starting without a message and the sandbox picker under the
-composer (617 cases, most of them earlier ones). These are
+composer (691 cases, most of them earlier ones). These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -210,6 +208,13 @@ and installs frontend dependencies with `pnpm --frozen-lockfile`. Network access
 and package downloads are needed; first-run setup can take several minutes.
 uv and pnpm's home-directory caches speed up later runs. It uses no CLI login
 and does not change a live session's fast-mode setting.
+
+With the patches applied, upstream's **whole** web suite passes as well
+(11098 passed, 3 expected fail, 1 skipped on `v0.18.0`): patches that change
+upstream behaviour, such as removing Share, update upstream's tests for it.
+To run it, keep the checkout of a failed run, or apply the patches to one
+yourself, and run `pnpm --dir <checkout>/web exec vitest run`. A failure there
+that the selected suites don't show is still a regression to report.
 
 **Expected:** exit 0, both suite summaries above, and a final `PASS` line.
 A dependency/setup failure is not a test pass; missing or skipped suites must
@@ -243,7 +248,7 @@ Tailscale set up). The names and numbers in angle brackets differ per session:
 
 ```
 == Pinned versions
-PASS  omnigent v0.15.0
+PASS  omnigent v0.18.0
 PASS  claude_code 2.1.285
 PASS  codex_cli 0.159.1
 PASS  tailscale 1.102.5

@@ -9,13 +9,13 @@ has an account for the provider.
 The composer's right action group shrinks when it holds a control marked
 data-composer-shrinkable, so a long account name truncates instead of pushing
 the send button out of the composer; the new-chat composer is unchanged.
-Applies after 0017-subscriptions.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+Applies after 0017-subscriptions.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/web/src/components/composer/ChatComposer.tsx b/web/src/components/composer/ChatComposer.tsx
-index eca8101..4320188 100644
+index 1b4ab4e..7f0211c 100644
 --- a/web/src/components/composer/ChatComposer.tsx
 +++ b/web/src/components/composer/ChatComposer.tsx
-@@ -302,7 +302,11 @@ export const ComposerActionGroup = forwardRef<
+@@ -450,7 +450,11 @@ export const ComposerActionGroup = forwardRef<
        ref={ref}
        className={cn(
          "flex min-w-0 items-center gap-1",
@@ -275,7 +275,7 @@ index 0000000..7e67b97
 +  });
 +}
 diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
-index 7fb0470..5df5ae0 100644
+index 27637f9..9fee6ca 100644
 --- a/web/src/lib/events.ts
 +++ b/web/src/lib/events.ts
 @@ -560,6 +560,8 @@ export interface SessionStatusEvent {
@@ -296,10 +296,10 @@ index 7fb0470..5df5ae0 100644
  
  /**
 diff --git a/web/src/lib/sse.ts b/web/src/lib/sse.ts
-index 0553407..b241629 100644
+index 03611f3..7f707a7 100644
 --- a/web/src/lib/sse.ts
 +++ b/web/src/lib/sse.ts
-@@ -74,6 +74,7 @@ import type {
+@@ -75,6 +75,7 @@ import type {
  import { NATIVE_TOOL_TYPES } from "./events";
  import { parseRateLimits } from "./rateLimits";
  import { parseFastMode } from "./fastMode";
@@ -307,7 +307,7 @@ index 0553407..b241629 100644
  import { parseTailscaleHost } from "./tailscale";
  import { routingExtrasFromWire } from "./routingDecision";
  import type {
-@@ -644,13 +645,18 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+@@ -645,13 +646,18 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
      if (fastMode === null) {
        return null;
      }
@@ -327,7 +327,7 @@ index 0553407..b241629 100644
      ) {
        return null;
      }
-@@ -663,6 +669,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+@@ -664,6 +670,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
        ...(usageByModel !== undefined ? { usageByModel } : {}),
        ...(rateLimits !== undefined ? { rateLimits } : {}),
        ...(fastMode !== undefined ? { fastMode } : {}),
@@ -489,10 +489,10 @@ index e7bd6ff..13a1a85 100644
 +  return { kind: "account", name: account.name, active: account.active, activeName };
 +}
 diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
-index 6d1aeb5..6e2c337 100644
+index 11e0ac0..c857a68 100644
 --- a/web/src/pages/ChatPage.tsx
 +++ b/web/src/pages/ChatPage.tsx
-@@ -232,6 +232,8 @@ import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
+@@ -234,6 +234,8 @@ import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
  import { fastCommandText, isFastModeCommand } from "@/lib/fastMode";
  import { ComposerTailscaleHost } from "@/components/composer/ComposerTailscaleHost";
  import { ComposerGatewayLink } from "@/components/composer/ComposerGatewayLink";
@@ -501,7 +501,7 @@ index 6d1aeb5..6e2c337 100644
  import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
  import { composerContextFromLabels } from "@/lib/composerContextAdapters";
  import {
-@@ -2808,6 +2810,9 @@ function ComposerImpl(
+@@ -2676,6 +2678,9 @@ function ComposerImpl(
    // /fast is a Claude Code and Codex CLI built-in; the runner applies it.
    const showFast = sessionHarness === "claude-native" || sessionHarness === "codex-native";
    const composerFastMode = useChatStore((s) => s.fastMode);
@@ -511,7 +511,7 @@ index 6d1aeb5..6e2c337 100644
    const slashCommands = useMemo(
      () =>
        buildSlashCommandMap(
-@@ -4114,6 +4119,12 @@ function ComposerImpl(
+@@ -3951,6 +3956,12 @@ function ComposerImpl(
            ),
            trailing: (
              <>
@@ -525,18 +525,18 @@ index 6d1aeb5..6e2c337 100644
                  <TooltipProvider>
                    <Tooltip>
 diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
-index b89daf4..3c38193 100644
+index 36f852a..8bc8e31 100644
 --- a/web/src/store/chatStore.ts
 +++ b/web/src/store/chatStore.ts
-@@ -150,6 +150,7 @@ import type { StoredReplyDraft } from "@/lib/replyDraft";
+@@ -157,6 +157,7 @@ import { toast } from "sonner";
  import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
  import { fastModeFromLabels, isFastModeCommand } from "@/lib/fastMode";
  import { tailscaleHostFromLabels } from "@/lib/tailscale";
 +import { subscriptionFromLabels } from "@/lib/subscriptions";
  
  export interface SendOptions {
-   /** Client-only quote provenance, retained if the composer needs to retry. */
-@@ -871,6 +872,13 @@ export interface ConversationState {
+   /** Compact is a control event, not a user-message turn. */
+@@ -954,6 +955,13 @@ export interface ConversationState {
     * until reported.
     */
    fastMode: boolean | null;
@@ -550,7 +550,7 @@ index b89daf4..3c38193 100644
    /**
     * Tailnet name of the session's managed runner Pod, e.g.
     * ``omnigent-e1dcab9b.tail1234.ts.net``. Seeded from the session's
-@@ -1758,6 +1766,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+@@ -1940,6 +1948,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
    sessionUsageByModel: null,
    rateLimits: null,
    fastMode: null,
@@ -558,7 +558,7 @@ index b89daf4..3c38193 100644
    tailscaleHost: null,
    gitBranch: null,
    todos: [],
-@@ -4100,6 +4109,7 @@ async function bindStream(
+@@ -4580,6 +4589,7 @@ async function bindStream(
          tokensUsed: session.lastTotalTokens ?? null,
          rateLimits: rateLimitsFromLabels(session.labels),
          fastMode: fastModeFromLabels(session.labels),
@@ -566,7 +566,7 @@ index b89daf4..3c38193 100644
          tailscaleHost: tailscaleHostFromLabels(session.labels),
          sessionCostUsd:
            state.sessionCostUsd !== stateBeforeFetch.sessionCostUsd
-@@ -4305,6 +4315,8 @@ function reconnectStatusPatch(
+@@ -4821,6 +4831,8 @@ function reconnectStatusPatch(
    if (rateLimits !== null) patch.rateLimits = rateLimits;
    const fastMode = fastModeFromLabels(session.labels);
    if (fastMode !== null) patch.fastMode = fastMode;
@@ -575,7 +575,7 @@ index b89daf4..3c38193 100644
    const tailscaleHost = tailscaleHostFromLabels(session.labels);
    if (tailscaleHost !== null) patch.tailscaleHost = tailscaleHost;
    // `waiting` is a TURN-END snapshot (the turn finished; only background work
-@@ -6236,6 +6248,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+@@ -7221,6 +7233,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
          sessionUsageByModel?: Record<string, ModelUsage>;
          rateLimits?: RateLimits;
          fastMode?: boolean;
@@ -583,7 +583,7 @@ index b89daf4..3c38193 100644
        } = {};
        if (event.contextTokens !== undefined) {
          patch.tokensUsed = event.contextTokens;
-@@ -6255,6 +6268,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+@@ -7240,6 +7253,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
        if (event.fastMode !== undefined) {
          patch.fastMode = event.fastMode;
        }
@@ -594,10 +594,10 @@ index b89daf4..3c38193 100644
          const entry =
            sourceConversationId === null
 diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
-index 26a5066..ebe7527 100644
+index 1fd62cb..fbecfe7 100644
 --- a/web/src/store/conversationState.ts
 +++ b/web/src/store/conversationState.ts
-@@ -50,6 +50,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
+@@ -51,6 +51,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
    sessionUsageByModel: true,
    rateLimits: true,
    fastMode: true,
@@ -605,7 +605,7 @@ index 26a5066..ebe7527 100644
    tailscaleHost: true,
    gitBranch: true,
    todos: true,
-@@ -119,6 +120,7 @@ export function createInitialConversationState(): ConversationState {
+@@ -122,6 +123,7 @@ export function createInitialConversationState(): ConversationState {
      sessionUsageByModel: null,
      rateLimits: null,
      fastMode: null,

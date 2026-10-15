@@ -4,14 +4,14 @@ external_session_usage accepts data.rate_limits ({"windows": [{"window_minutes",
 "used_percent", "resets_at"}]}, at most two windows), stores it in the
 omnigent.rate_limits session label for page loads, and adds it to the
 session.usage SSE event. A rate-limits-only post skips the cost roll-up.
-Applies after 0001-sandbox-model-catalog-fallback.patch. Base: omnigent v0.15.0
-(c8b9b85f822f).
+Applies after 0001-sandbox-model-catalog-fallback.patch. Base: omnigent v0.18.0
+(a8676d23e88d).
 
 diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
-index 863e95f..9379916 100644
+index 5612700..f56924b 100644
 --- a/omnigent/server/routes/_sessions/orchestration.py
 +++ b/omnigent/server/routes/_sessions/orchestration.py
-@@ -1670,6 +1670,68 @@ def _persist_native_cumulative_usage(
+@@ -1953,6 +1953,68 @@ def _persist_native_cumulative_usage(
      return _priced_cost_for_display(current)
  
  
@@ -80,7 +80,7 @@ index 863e95f..9379916 100644
  async def _persist_external_session_usage(
      session_id: str,
      body: SessionEventInput,
-@@ -1726,12 +1788,29 @@ async def _persist_external_session_usage(
+@@ -2009,12 +2071,29 @@ async def _persist_external_session_usage(
          "cumulative_output_tokens",
      )
      has_cumulative = any(body.data.get(k) is not None for k in _CUMULATIVE_USAGE_KEYS)
@@ -114,7 +114,7 @@ index 863e95f..9379916 100644
  
      # Native harnesses report cumulative cost / tokens (SET semantics) — distinct
      # from the Omnigent relay's per-response accumulation. Persist this session's
-@@ -1769,6 +1848,8 @@ async def _persist_external_session_usage(
+@@ -2052,6 +2131,8 @@ async def _persist_external_session_usage(
          label_updates[_LAST_CONTEXT_TOKENS_LABEL_KEY] = str(raw_tokens)
      if raw_window is not None:
          label_updates[_LAST_CONTEXT_WINDOW_LABEL_KEY] = str(raw_window)
@@ -123,7 +123,7 @@ index 863e95f..9379916 100644
      await asyncio.to_thread(
          conversation_store.set_labels,
          session_id,
-@@ -1807,6 +1888,8 @@ async def _persist_external_session_usage(
+@@ -2090,6 +2171,8 @@ async def _persist_external_session_usage(
          event_payload["total_cost_usd"] = subtree_cost
      if usage_by_model is not None:
          event_payload["usage_by_model"] = usage_by_model
@@ -133,10 +133,10 @@ index 863e95f..9379916 100644
      session_stream.publish(session_id, event.model_dump(exclude_none=True))
      # This session's usage also moves its ANCESTORS' subtree cost (its spend
 diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
-index fca259e..f0513ec 100644
+index f4d9a2b..9de884a 100644
 --- a/omnigent/server/schemas.py
 +++ b/omnigent/server/schemas.py
-@@ -3173,6 +3173,9 @@ class SessionUsageEvent(_SSEEventBase):
+@@ -3182,6 +3182,9 @@ class SessionUsageEvent(_SSEEventBase):
      context_window: int | None = None
      total_cost_usd: float | None = None
      usage_by_model: dict[str, ModelUsage] | None = None

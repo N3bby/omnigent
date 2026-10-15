@@ -29,11 +29,10 @@ another wake. It shows the startup card instead, and a stale terminal's
 overlay hides its Resume too.
 
 The environment menu is unchanged.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0020-environment-menu.patch.
-
+Base: omnigent v0.18.0 (a8676d23e88d), after 0020-environment-menu.patch.
 diff --git a/web/src/components/chat/SandboxStartupCard.test.tsx b/web/src/components/chat/SandboxStartupCard.test.tsx
 new file mode 100644
-index 000000000..133937d80
+index 0000000..133937d
 --- /dev/null
 +++ b/web/src/components/chat/SandboxStartupCard.test.tsx
 @@ -0,0 +1,365 @@
@@ -404,7 +403,7 @@ index 000000000..133937d80
 +});
 diff --git a/web/src/components/chat/SandboxStartupCard.tsx b/web/src/components/chat/SandboxStartupCard.tsx
 new file mode 100644
-index 000000000..867e74a7b
+index 0000000..867e74a
 --- /dev/null
 +++ b/web/src/components/chat/SandboxStartupCard.tsx
 @@ -0,0 +1,783 @@
@@ -1192,10 +1191,10 @@ index 000000000..867e74a7b
 +  });
 +}
 diff --git a/web/src/components/chat/Transcript.tsx b/web/src/components/chat/Transcript.tsx
-index ff179bcff..833b64aec 100644
+index ebbb2bc..3c98ea4 100644
 --- a/web/src/components/chat/Transcript.tsx
 +++ b/web/src/components/chat/Transcript.tsx
-@@ -31,6 +31,7 @@ import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
+@@ -34,6 +34,7 @@ import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
  import { useUserMessageNav } from "@/hooks/useUserMessageNav";
  import { ChatPlanAccordion } from "@/shell/ChatPlanAccordion";
  import { RunnerStartingIndicator, McpStartupIndicator } from "@/pages/ChatIndicators";
@@ -1203,10 +1202,10 @@ index ff179bcff..833b64aec 100644
  import { CHAT_COLUMN_WIDTH } from "@/pages/chatLayout";
  import {
    type ConversationScroller,
-@@ -309,6 +310,22 @@ function TranscriptImpl({
-   }, [nav]);
- 
-   const showWorkingIndicator = shouldShowWorkingIndicator(display.showsWorking, display.bubbles);
+@@ -316,6 +317,22 @@ function TranscriptImpl({
+   const arcaWarning = useArcaShutdownBanner();
+   const showArcaBanner = arcaWarning.showForHost(hostId);
+   const hasPinnedBanner = display.hasTasks || showArcaBanner;
 +  // The sandbox startup card (this deployment) replaces "Working…" while the
 +  // sandbox starts, and stays until the agent answers.
 +  const startupRunning = useChatStore((s) => s.sandboxStartup?.outcome === "running");
@@ -1226,7 +1225,7 @@ index ff179bcff..833b64aec 100644
    return (
      <>
        {/* Task tracker pinned above the thread. Sibling of the viewport (not an
-@@ -341,8 +358,11 @@ function TranscriptImpl({
+@@ -353,8 +370,11 @@ function TranscriptImpl({
                rowCount={display.streamBubbles.length}
              />
              {display.bubbles.length === 0 && !showWorkingIndicator && !display.mcpStartupActive ? (
@@ -1240,7 +1239,7 @@ index ff179bcff..833b64aec 100644
                ) : (
                  <ConversationEmptyState>
                    <div className="space-y-1.5">
-@@ -373,6 +393,9 @@ function TranscriptImpl({
+@@ -385,6 +405,9 @@ function TranscriptImpl({
                    messageId={messageId}
                    onGeometryChange={onGeometryChange}
                  />
@@ -1250,7 +1249,7 @@ index ff179bcff..833b64aec 100644
                  {/* Pending elicitation cards, floated to the bottom of the chat
                  so an outstanding question stays in view. Newest renders last,
                  nearest the composer. Above the Working… indicator. */}
-@@ -389,7 +412,7 @@ function TranscriptImpl({
+@@ -401,7 +424,7 @@ function TranscriptImpl({
                    </Message>
                  ))}
                  {/* Working… shimmer, lit for the whole busy turn. */}
@@ -1260,7 +1259,7 @@ index ff179bcff..833b64aec 100644
                  {!showWorkingIndicator && <RunnerStartingIndicator variant="row" />}
                  {/* MCP-server startup band (codex-native); clears once the
 diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
-index 5df5ae0d2..b6d87692a 100644
+index 9fee6ca..d46dd45 100644
 --- a/web/src/lib/events.ts
 +++ b/web/src/lib/events.ts
 @@ -9,6 +9,7 @@
@@ -1298,7 +1297,7 @@ index 5df5ae0d2..b6d87692a 100644
    | SessionInputConsumedEvent
 diff --git a/web/src/lib/sandboxStartup.test.ts b/web/src/lib/sandboxStartup.test.ts
 new file mode 100644
-index 000000000..632f73b74
+index 0000000..632f73b
 --- /dev/null
 +++ b/web/src/lib/sandboxStartup.test.ts
 @@ -0,0 +1,178 @@
@@ -1482,7 +1481,7 @@ index 000000000..632f73b74
 +});
 diff --git a/web/src/lib/sandboxStartup.ts b/web/src/lib/sandboxStartup.ts
 new file mode 100644
-index 000000000..500cb31f1
+index 0000000..500cb31
 --- /dev/null
 +++ b/web/src/lib/sandboxStartup.ts
 @@ -0,0 +1,325 @@
@@ -1811,19 +1810,31 @@ index 000000000..500cb31f1
 +    (step) => step.id === "setup" && (step.state === "running" || step.state === "pending"),
 +  );
 +}
+diff --git a/web/src/lib/sessionsApi.test.ts b/web/src/lib/sessionsApi.test.ts
+index 7b628ac..4978d94 100644
+--- a/web/src/lib/sessionsApi.test.ts
++++ b/web/src/lib/sessionsApi.test.ts
+@@ -175,6 +175,7 @@ describe("createSession", () => {
+       codexModelOptions: [],
+       terminalPending: false,
+       sandboxStatus: null,
++      sandboxStartup: null,
+       mcpStartup: null,
+       activeResponseId: null,
+       workspace: null,
 diff --git a/web/src/lib/sessionsApi.ts b/web/src/lib/sessionsApi.ts
-index 76a2a8b15..a662baea5 100644
+index e2fea86..55a46a6 100644
 --- a/web/src/lib/sessionsApi.ts
 +++ b/web/src/lib/sessionsApi.ts
 @@ -18,6 +18,7 @@ import { isAndroidShell, isElectronShell, isIOSShell } from "@/lib/nativeBridge"
- import { setSessionHost } from "./sessionHost";
+ import { setSessionHost, setSessionParent } from "./sessionHost";
  import { backgroundSessionTitlesRequestHeaders } from "./backgroundSessionTitlesPreferences";
  import { parseBackgroundTasks } from "./sse";
 +import { parseSandboxStartup } from "./sandboxStartup";
  import type {
    BackgroundTaskInfo,
    ModelUsage,
-@@ -256,6 +257,8 @@ interface SessionResponseWire {
+@@ -260,6 +261,8 @@ interface SessionResponseWire {
     * `omnigent.server.schemas.SandboxStatus`.
     */
    sandbox_status?: SandboxStatus | null;
@@ -1832,7 +1843,7 @@ index 76a2a8b15..a662baea5 100644
    mcp_startup?: Record<string, McpServerStartup> | null;
    /**
     * Response id of the turn currently in flight, or absent/null when
-@@ -364,6 +367,7 @@ function sessionFromWire(wire: SessionResponseWire): Session {
+@@ -372,6 +375,7 @@ function sessionFromWire(wire: SessionResponseWire): Session {
        : {}),
      terminalPending: wire.terminal_pending ?? false,
      sandboxStatus: wire.sandbox_status ?? null,
@@ -1841,10 +1852,10 @@ index 76a2a8b15..a662baea5 100644
      activeResponseId: wire.active_response_id ?? null,
    };
 diff --git a/web/src/lib/sse.ts b/web/src/lib/sse.ts
-index b24162927..614d10493 100644
+index 7f707a7..246bc3c 100644
 --- a/web/src/lib/sse.ts
 +++ b/web/src/lib/sse.ts
-@@ -58,6 +58,7 @@ import type {
+@@ -59,6 +59,7 @@ import type {
    SessionTodosEvent,
    SessionSandboxStatusEvent,
    SessionTailscaleEvent,
@@ -1852,7 +1863,7 @@ index b24162927..614d10493 100644
    McpServerStartup,
    SessionMcpStartupEvent,
    SessionTerminalPendingEvent,
-@@ -76,6 +77,7 @@ import { parseRateLimits } from "./rateLimits";
+@@ -77,6 +78,7 @@ import { parseRateLimits } from "./rateLimits";
  import { parseFastMode } from "./fastMode";
  import { parseSubscription } from "./subscriptions";
  import { parseTailscaleHost } from "./tailscale";
@@ -1860,7 +1871,7 @@ index b24162927..614d10493 100644
  import { routingExtrasFromWire } from "./routingDecision";
  import type {
    BackgroundTaskInfo,
-@@ -783,6 +785,17 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+@@ -784,6 +786,17 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
        pending,
      } satisfies SessionTerminalPendingEvent;
    }
@@ -1879,7 +1890,7 @@ index b24162927..614d10493 100644
      const conversationId = data.conversation_id;
      if (typeof conversationId !== "string" || !conversationId) return null;
 diff --git a/web/src/lib/types.ts b/web/src/lib/types.ts
-index 8541e55ad..dcca8a509 100644
+index a5adbb0..a00800d 100644
 --- a/web/src/lib/types.ts
 +++ b/web/src/lib/types.ts
 @@ -12,6 +12,7 @@
@@ -1890,7 +1901,7 @@ index 8541e55ad..dcca8a509 100644
  import type { MessageContentBlock } from "./blocks";
  
  /** Reference to a conversation, as returned on response objects. */
-@@ -503,6 +504,12 @@ export interface Session {
+@@ -509,6 +510,12 @@ export interface Session {
     * sees the current stage.
     */
    sandboxStatus?: SandboxStatus | null;
@@ -1904,7 +1915,7 @@ index 8541e55ad..dcca8a509 100644
     * Per-MCP-server startup state for native harness sessions
     * (codex-native). Present while the harness boots its MCP servers or
 diff --git a/web/src/pages/ChatIndicators.tsx b/web/src/pages/ChatIndicators.tsx
-index afff73114..00d841bc1 100644
+index afff731..00d841b 100644
 --- a/web/src/pages/ChatIndicators.tsx
 +++ b/web/src/pages/ChatIndicators.tsx
 @@ -55,6 +55,8 @@ export function ConnectionIndicator({
@@ -1945,7 +1956,7 @@ index afff73114..00d841bc1 100644
    // the spinner glyph itself is decorative (aria-hidden).
 diff --git a/web/src/shell/MainTerminalView.startup.test.tsx b/web/src/shell/MainTerminalView.startup.test.tsx
 new file mode 100644
-index 000000000..1c0fdb2ed
+index 0000000..1c0fdb2
 --- /dev/null
 +++ b/web/src/shell/MainTerminalView.startup.test.tsx
 @@ -0,0 +1,161 @@
@@ -2111,7 +2122,7 @@ index 000000000..1c0fdb2ed
 +  });
 +});
 diff --git a/web/src/shell/MainTerminalView.tsx b/web/src/shell/MainTerminalView.tsx
-index 875da960c..d4007a8d9 100644
+index 20a564a..246d660 100644
 --- a/web/src/shell/MainTerminalView.tsx
 +++ b/web/src/shell/MainTerminalView.tsx
 @@ -22,6 +22,8 @@ import {
@@ -2151,7 +2162,7 @@ index 875da960c..d4007a8d9 100644
    // Resource cleanup can beat the health poll when a session is stopped. An
    // empty, non-starting inventory is therefore resumable even before liveness
    // has caught up and explicitly reported the runner offline.
-@@ -203,19 +221,32 @@ export function MainTerminalView({
+@@ -196,19 +214,32 @@ export function MainTerminalView({
              // Passive startup state: same centered geometry as the stopped
              // state so the swap doesn't jump, and nothing actionable — the
              // terminal connects on its own. role=status announces the wait.
@@ -2196,7 +2207,7 @@ index 875da960c..d4007a8d9 100644
              </div>
            ) : resumeAvailable ? (
              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-@@ -283,7 +314,9 @@ export function MainTerminalView({
+@@ -276,7 +307,9 @@ export function MainTerminalView({
                        readOnly={readOnly}
                        active={visible}
                        directAttachUrl={activeTerminal.directAttachUrl}
@@ -2208,10 +2219,10 @@ index 875da960c..d4007a8d9 100644
                        onStateChange={(state) => {
                          setTerminalConnectionState(activeTerminal.id, state);
 diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
-index 3c38193b9..f4ad82433 100644
+index 8bc8e31..3ebc282 100644
 --- a/web/src/store/chatStore.ts
 +++ b/web/src/store/chatStore.ts
-@@ -150,6 +150,7 @@ import type { StoredReplyDraft } from "@/lib/replyDraft";
+@@ -157,6 +157,7 @@ import { toast } from "sonner";
  import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
  import { fastModeFromLabels, isFastModeCommand } from "@/lib/fastMode";
  import { tailscaleHostFromLabels } from "@/lib/tailscale";
@@ -2219,7 +2230,7 @@ index 3c38193b9..f4ad82433 100644
  import { subscriptionFromLabels } from "@/lib/subscriptions";
  
  export interface SendOptions {
-@@ -945,6 +946,12 @@ export interface ConversationState {
+@@ -1028,6 +1029,12 @@ export interface ConversationState {
     * launch.
     */
    sandboxStatus: SandboxStatus | null;
@@ -2232,7 +2243,7 @@ index 3c38193b9..f4ad82433 100644
    /**
     * Native MCP startup progress, cleared when startup settles or live
     * assistant text arrives. Failures/cancellations stay in host diagnostics,
-@@ -1775,6 +1782,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+@@ -1957,6 +1964,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
    runnerLaunchedAt: null,
    viewers: [],
    sandboxStatus: null,
@@ -2240,7 +2251,7 @@ index 3c38193b9..f4ad82433 100644
    mcpStartup: null,
    mcpStartupLaunch: { pending: false, dismissed: false },
    abortController: null,
-@@ -3738,6 +3746,7 @@ function sessionBindingPatch(
+@@ -4217,6 +4225,7 @@ function sessionBindingPatch(
    | "codexModelOptions"
    | "terminalPending"
    | "sandboxStatus"
@@ -2248,7 +2259,7 @@ index 3c38193b9..f4ad82433 100644
    | "mcpStartup"
    | "mcpStartupLaunch"
  > {
-@@ -3773,6 +3782,7 @@ function sessionBindingPatch(
+@@ -4252,6 +4261,7 @@ function sessionBindingPatch(
      codexModelOptions: session.codexModelOptions ?? [],
      terminalPending: session.terminalPending ?? false,
      sandboxStatus: session.sandboxStatus ?? null,
@@ -2256,7 +2267,7 @@ index 3c38193b9..f4ad82433 100644
      ...mcpStartupSnapshotPatch(session, state, launchBeforeFetch),
    };
  }
-@@ -4317,6 +4327,7 @@ function reconnectStatusPatch(
+@@ -4833,6 +4843,7 @@ function reconnectStatusPatch(
    if (fastMode !== null) patch.fastMode = fastMode;
    const subscription = subscriptionFromLabels(session.labels);
    if (subscription !== null) patch.subscription = subscription;
@@ -2264,7 +2275,7 @@ index 3c38193b9..f4ad82433 100644
    const tailscaleHost = tailscaleHostFromLabels(session.labels);
    if (tailscaleHost !== null) patch.tailscaleHost = tailscaleHost;
    // `waiting` is a TURN-END snapshot (the turn finished; only background work
-@@ -6216,6 +6227,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+@@ -7201,6 +7212,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
      case "session_tailscale":
        applyToConversation({ tailscaleHost: event.host });
        return;
@@ -2275,10 +2286,10 @@ index 3c38193b9..f4ad82433 100644
        // Advance the managed-sandbox provisioning indicator. `ready`
        // clears it — from then on the session looks like any
 diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
-index ebe75278e..6740ef3c9 100644
+index fbecfe7..157b7a2 100644
 --- a/web/src/store/conversationState.ts
 +++ b/web/src/store/conversationState.ts
-@@ -58,6 +58,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
+@@ -59,6 +59,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
    terminalPending: true,
    viewers: true,
    sandboxStatus: true,
@@ -2286,7 +2297,7 @@ index ebe75278e..6740ef3c9 100644
    mcpStartup: true,
    mcpStartupLaunch: true,
    btwSidechat: true,
-@@ -128,6 +129,7 @@ export function createInitialConversationState(): ConversationState {
+@@ -131,6 +132,7 @@ export function createInitialConversationState(): ConversationState {
      terminalPending: false,
      viewers: [],
      sandboxStatus: null,

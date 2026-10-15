@@ -8,13 +8,13 @@ python3 was mise's interpreter, which lacks yaml, so the config writer failed,
 the init container failed, and the session could never start or wake again:
 the pin lives on its home volume. These commands now run RUNNER_PYTHON,
 /opt/venv/bin/python3, which the runner image checks at build time.
-Base: omnigent v0.15.0 (c8b9b85f822f).
+Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/onboarding/sandboxes/base.py b/omnigent/onboarding/sandboxes/base.py
-index 33623af..605e38c 100644
+index a0798f7..0324899 100644
 --- a/omnigent/onboarding/sandboxes/base.py
 +++ b/omnigent/onboarding/sandboxes/base.py
-@@ -263,6 +263,12 @@ def foreground_kill_command(pidfile: str) -> str:
+@@ -264,6 +264,12 @@ def foreground_kill_command(pidfile: str) -> str:
  # ``default`` scope. User-created entries under OTHER names are never in the
  # marker and so are never touched. A missing or corrupt marker skips removal
  # entirely — never delete without evidence of what was injected.
@@ -27,7 +27,7 @@ index 33623af..605e38c 100644
  _HOST_CONFIG_WRITE_SCRIPT: str = """\
  import base64, json, os, tempfile, yaml
  
-@@ -376,7 +382,7 @@ def render_host_config_write_command(host_config: dict[str, object]) -> str:
+@@ -377,7 +383,7 @@ def render_host_config_write_command(host_config: dict[str, object]) -> str:
      """
      payload = base64.b64encode(json.dumps(host_config).encode()).decode()
      script = _HOST_CONFIG_WRITE_SCRIPT.replace("__PAYLOAD__", repr(payload))
@@ -37,10 +37,10 @@ index 33623af..605e38c 100644
  
  class SandboxCapabilityError(click.ClickException, _sandbox_types.SandboxError):
 diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
-index 2b3b3f4..7b1336e 100644
+index f6e1975..908e2b8 100644
 --- a/omnigent/onboarding/sandboxes/kubernetes.py
 +++ b/omnigent/onboarding/sandboxes/kubernetes.py
-@@ -66,6 +66,7 @@ from omnigent.host.identity import (
+@@ -67,6 +67,7 @@ from omnigent.host.identity import (
  )
  from omnigent.onboarding.sandboxes.base import (
      DEFAULT_HOST_IMAGE,
@@ -48,7 +48,7 @@ index 2b3b3f4..7b1336e 100644
      SandboxHostLauncher,
      render_host_config_write_command,
  )
-@@ -506,7 +507,7 @@ def _render_workspace_prep_command(
+@@ -507,7 +508,7 @@ def _render_workspace_prep_command(
              f"sys.exit(main(['--server',{server_url!r},'--host-id',{host_id!r},"
              f"'--host-token',os.environ[{HOST_TOKEN_ENV_VAR!r}],*sys.argv[1:]]))"
          )
@@ -57,7 +57,7 @@ index 2b3b3f4..7b1336e 100644
          helper_key = "credential.https://github.com.helper"
          expected_helpers = ["", helper]
          wire = (
-@@ -546,7 +547,7 @@ def _render_workspace_prep_command(
+@@ -547,7 +548,7 @@ def _render_workspace_prep_command(
              "  credential_config=$(mktemp)\n"
              "  wire_rc=0\n"
              f'  GIT_CONFIG_GLOBAL="$credential_config" PYTHONSAFEPATH=1 '
@@ -66,7 +66,7 @@ index 2b3b3f4..7b1336e 100644
              '  if [ "$wire_rc" -eq 0 ]; then\n'
              '    export GIT_CONFIG_GLOBAL="$credential_config"\n'
              '  elif [ "$wire_rc" -eq 10 ]; then\n'
-@@ -561,7 +562,7 @@ def _render_workspace_prep_command(
+@@ -562,7 +563,7 @@ def _render_workspace_prep_command(
          # anything to it makes os.rename fail instead of nesting the clone.
          script += (
              "replace_empty_dir() {\n"
@@ -75,7 +75,7 @@ index 2b3b3f4..7b1336e 100644
              "import os\n"
              "import sys\n"
              "os.rename(sys.argv[1], sys.argv[2])\n"
-@@ -656,7 +657,7 @@ def _render_host_command(server_url: str) -> list[str]:
+@@ -662,7 +663,7 @@ def _render_host_command(server_url: str) -> list[str]:
      :returns: The ``["bash", "-lc", script]`` command.
      """
      script = (

@@ -4,30 +4,33 @@ Subscription CLI logins have no server-side model listing, so the Kubernetes
 sandbox picker shows "Models unavailable" until a session is running. Record the
 catalog each runner reports per harness in OMNIGENT_SANDBOX_CATALOG_FALLBACK_PATH
 and return it from /v1/sandbox-providers/{p}/harnesses/{h}/model-options.
-Inert unless that variable is set. Base: omnigent v0.15.0 (c8b9b85f822f).
-
+Inert unless that variable is set. Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/omnigent/server/managed_hosts.py b/omnigent/server/managed_hosts.py
-index c3f61fe70..fce1e0cd4 100644
+index 6507230..f4c7dd3 100644
 --- a/omnigent/server/managed_hosts.py
 +++ b/omnigent/server/managed_hosts.py
-@@ -798,8 +798,11 @@ class ManagedSandboxDeployment:
+@@ -807,6 +807,7 @@ class ManagedSandboxDeployment:
                  launcher = config.launcher_factory()
                  caps[config.provider] = {"multi_repo": launcher.capabilities.multi_repo}
                  from omnigent.inference_config import parse_inference_config
 +                from omnigent.server import sandbox_catalog_fallback
+                 from omnigent.server.inference_catalog import ambient_gateway_providers
  
--                if parse_inference_config(config.host_config or {}):
-+                if parse_inference_config(config.host_config or {}) or (
-+                    sandbox_catalog_fallback.enabled()
-+                ):
+                 try:
+@@ -814,7 +815,7 @@ class ManagedSandboxDeployment:
+                 except ValueError:
+                     # Startup rejects malformed YAML; a programmatic target advertises no catalog.
+                     bound = False
+-                if bound:
++                if bound or sandbox_catalog_fallback.enabled():
                      caps[config.provider]["inference_models"] = True
-         return caps
- 
+                 elif config.default_model_options is not None or ambient_gateway_providers(
+                     config.host_config, config.model_discovery
 diff --git a/omnigent/server/routes/_sessions/helpers.py b/omnigent/server/routes/_sessions/helpers.py
-index d57affe41..97c400634 100644
+index 857e63f..a42febc 100644
 --- a/omnigent/server/routes/_sessions/helpers.py
 +++ b/omnigent/server/routes/_sessions/helpers.py
-@@ -11011,6 +11011,7 @@ async def _load_model_options(
+@@ -11532,6 +11532,7 @@ async def _load_model_options(
      session_id: str,
      path: str,
      fallback_path: str | None = None,
@@ -35,7 +38,7 @@ index d57affe41..97c400634 100644
  ) -> None:
      """
      Background single-flight fetch of a session's native model catalog.
-@@ -11023,6 +11024,8 @@ async def _load_model_options(
+@@ -11544,6 +11545,8 @@ async def _load_model_options(
          *path* 404s (an older runner without the unified route), e.g.
          ``"/v1/sessions/conv_abc/cursor-model-options"``. ``None`` disables
          the fallback.
@@ -44,7 +47,7 @@ index d57affe41..97c400634 100644
      """
      # Read the retry schedule off the facade so tests patching
      # ``sessions._MODEL_OPTIONS_RETRY_DELAYS_S`` reach this impl.
-@@ -11072,6 +11075,10 @@ async def _load_model_options(
+@@ -11593,6 +11596,10 @@ async def _load_model_options(
          _model_options_cache[session_id] = options
          _model_options_stale.discard(session_id)
          _publish_model_options(session_id)
@@ -56,10 +59,10 @@ index d57affe41..97c400634 100644
  
  
 diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
-index 35185d00d..863e95f58 100644
+index 20a2327..5612700 100644
 --- a/omnigent/server/routes/_sessions/orchestration.py
 +++ b/omnigent/server/routes/_sessions/orchestration.py
-@@ -10401,6 +10401,7 @@ async def _fetch_model_options(
+@@ -12024,6 +12024,7 @@ async def _fetch_model_options(
                  session_id,
                  f"/v1/sessions/{session_id}/model-options",
                  fallback_path=f"/v1/sessions/{session_id}/{endpoint}",
@@ -68,10 +71,10 @@ index 35185d00d..863e95f58 100644
          )
          _model_options_inflight[session_id] = task
 diff --git a/omnigent/server/routes/sandbox_inference.py b/omnigent/server/routes/sandbox_inference.py
-index a4f9b8844..d3bf7ff4f 100644
+index 6ae278f..47acb28 100644
 --- a/omnigent/server/routes/sandbox_inference.py
 +++ b/omnigent/server/routes/sandbox_inference.py
-@@ -203,6 +203,20 @@ def create_sandbox_inference_router(
+@@ -219,6 +219,20 @@ def create_sandbox_inference_router(
                  if isinstance(exc, OmnigentError)
                  else "Invalid inference configuration",
              }
@@ -89,12 +92,12 @@ index a4f9b8844..d3bf7ff4f 100644
 +                "default_model": None,
 +                "status": "ready",
 +            }
-         return {
+         result: dict[str, Any] = {
              "configured": False,
              "models": [],
 diff --git a/omnigent/server/sandbox_catalog_fallback.py b/omnigent/server/sandbox_catalog_fallback.py
 new file mode 100644
-index 000000000..8b25bb1c6
+index 0000000..8b25bb1
 --- /dev/null
 +++ b/omnigent/server/sandbox_catalog_fallback.py
 @@ -0,0 +1,94 @@

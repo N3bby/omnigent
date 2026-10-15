@@ -1,6 +1,6 @@
 # Custom features
 
-This deployment runs upstream Omnigent `v0.15.0`, pinned as
+This deployment runs upstream Omnigent `v0.18.0`, pinned as
 `omnigent_commit` in `versions.yaml`, with a few extras on top. Each page
 explains what the feature does, what you'll notice, and how to turn it off
 where you can.
@@ -89,11 +89,8 @@ applies to the pinned `omnigent_commit`, both the image build and
 
 - **When upstream ships the same behaviour**, delete the patch.
 - **Backported upstream fixes** come out when you upgrade past the release
-  that has them:
-
-  | Patch | Upstream fix | Delete from |
-  | --- | --- | --- |
-  | `images/runner/patches/0007-native-turn-idle-watchdog.patch` | [#8058](https://github.com/omnigent-ai/omnigent/pull/8058): a Claude or Codex turn that runs longer than `runner_agent_idle_seconds` is no longer stopped as idle | `v0.16.0` |
+  that has them. There are none at the moment; list each one here, with the
+  upstream fix and the release to delete it from, when you add one.
 - **When no web patches are left**, the server image can stop rebuilding the
   web UI.
 

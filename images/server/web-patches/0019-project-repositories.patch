@@ -11,8 +11,7 @@ A new session in the project picks them in place of the last repositories
 launched with, once the project's config has loaded, unless the user already
 changed the selection (tracked in the parked draft too). A project without
 repositories keeps the last ones.
-Base: omnigent v0.15.0 (c8b9b85f822f).
-
+Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/web/src/lib/projectsApi.ts b/web/src/lib/projectsApi.ts
 index f680fc1..580b15a 100644
 --- a/web/src/lib/projectsApi.ts
@@ -32,7 +31,7 @@ index f680fc1..580b15a 100644
  
  /** A first-class project. Mirrors the `ProjectObject` response shape. */
 diff --git a/web/src/shell/NewChatDialog.projectPrefill.test.tsx b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
-index b7f93a1..1def59b 100644
+index dbd4dd7..54b63e4 100644
 --- a/web/src/shell/NewChatDialog.projectPrefill.test.tsx
 +++ b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
 @@ -216,7 +216,7 @@ function renderLanding(): { rerender: (ui: ReactNode) => void; unmount: () => vo
@@ -176,7 +175,7 @@ index b7f93a1..1def59b 100644
 +  });
 +});
 diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
-index f88002a..2315788 100644
+index 2fd8d56..d077805 100644
 --- a/web/src/shell/NewChatDialog.tsx
 +++ b/web/src/shell/NewChatDialog.tsx
 @@ -1010,7 +1010,7 @@ export function composeSandboxWorkspaces(repos: LastSandboxRepo[]): string[] {
@@ -246,7 +245,7 @@ index f88002a..2315788 100644
        <PopoverTrigger asChild>
          <button
            ref={triggerRef}
-@@ -2195,6 +2202,9 @@ interface LandingDraft {
+@@ -2219,6 +2226,9 @@ interface LandingDraft {
    // neither turns an untouched seed into an "explicit" value nor the reverse.
    agentFromConfig: boolean;
    workspaceFromConfig: boolean;
@@ -256,7 +255,7 @@ index f88002a..2315788 100644
  }
  
  let landingDraft: LandingDraft | null = null;
-@@ -2283,6 +2293,7 @@ export function NewChatLandingScreen() {
+@@ -2307,6 +2317,7 @@ export function NewChatLandingScreen() {
        agentId: c.agent_id,
        useWorktree: c.use_worktree,
        model: c.model,
@@ -264,7 +263,7 @@ index f88002a..2315788 100644
      };
    }, [
      projectParam,
-@@ -2377,6 +2388,7 @@ export function NewChatLandingScreen() {
+@@ -2403,6 +2414,7 @@ export function NewChatLandingScreen() {
            // they are location state too — keeping them would clone another
            // project's repository into this project's sandbox.
            sandboxRepoSelections: [],
@@ -272,7 +271,7 @@ index f88002a..2315788 100644
            workspace: "",
            branchName: "",
            // The branch may be the worktree-default's auto-seed, generated for
-@@ -2542,6 +2554,13 @@ export function NewChatLandingScreen() {
+@@ -2564,6 +2576,13 @@ export function NewChatLandingScreen() {
    const [sandboxRepoSelections, setSandboxRepoSelections] = useState<LastSandboxRepo[]>(
      () => restoredDraft?.sandboxRepoSelections ?? readLastSandboxRepos(),
    );
@@ -286,7 +285,7 @@ index f88002a..2315788 100644
    // Whether the launch provider clones several repos (server-declared per
    // provider via /v1/info). A single-repo provider caps the picker at one, so
    // it reads as a plain single-repo picker and never offers a multi-repo menu.
-@@ -2561,6 +2580,7 @@ export function NewChatLandingScreen() {
+@@ -2583,6 +2602,7 @@ export function NewChatLandingScreen() {
      (url: string, branch = ""): void => {
        const u = url.trim();
        if (u === "") return;
@@ -294,7 +293,7 @@ index f88002a..2315788 100644
        setSandboxRepoSelections((prev) =>
          // Cap at the provider's limit so a selection can't only fail with a 422
          // at create; a duplicate URL is a no-op.
-@@ -2572,9 +2592,11 @@ export function NewChatLandingScreen() {
+@@ -2594,9 +2614,11 @@ export function NewChatLandingScreen() {
      [maxSandboxRepos],
    );
    const removeSandboxRepo = useCallback((url: string): void => {
@@ -306,7 +305,7 @@ index f88002a..2315788 100644
      setSandboxRepoSelections((prev) => prev.map((r) => (r.url === url ? { ...r, branch } : r)));
    }, []);
    // Free-text URL being typed into the "paste a URL" adder (not yet added).
-@@ -2764,6 +2786,7 @@ export function NewChatLandingScreen() {
+@@ -2786,6 +2808,7 @@ export function NewChatLandingScreen() {
      costControlMode,
      agentFromConfig: agentFromConfigRef.current,
      workspaceFromConfig: workspaceFromConfigRef.current,
@@ -314,7 +313,7 @@ index f88002a..2315788 100644
    };
    useEffect(() => {
      // Re-set on setup so StrictMode's setup→cleanup→setup double-invoke
-@@ -2887,6 +2910,8 @@ export function NewChatLandingScreen() {
+@@ -2912,6 +2935,8 @@ export function NewChatLandingScreen() {
      // would clone the previous project's repo into this project's sandbox.
      setSandboxRepoSelections([]);
      setPendingRepoUrl("");
@@ -323,7 +322,7 @@ index f88002a..2315788 100644
      agentFromConfigRef.current = false;
      workspaceFromConfigRef.current = false;
      seededHostRef.current = null;
-@@ -2896,6 +2921,21 @@ export function NewChatLandingScreen() {
+@@ -2921,6 +2946,21 @@ export function NewChatLandingScreen() {
      setPrefill(initialPrefillState(projectParam));
    }, [projectParam, prefill.project, prefillConfigSig]);
  
@@ -346,7 +345,7 @@ index f88002a..2315788 100644
    // machine is done, so the reseed effect above can spot a later change to it
    // (the reseed on a project switch runs before the config has loaded, leaving
 diff --git a/web/src/shell/ProjectSettingsDialog.test.tsx b/web/src/shell/ProjectSettingsDialog.test.tsx
-index 3fa73ac..3967c7f 100644
+index 94c8db3..a29da85 100644
 --- a/web/src/shell/ProjectSettingsDialog.test.tsx
 +++ b/web/src/shell/ProjectSettingsDialog.test.tsx
 @@ -39,8 +39,10 @@ function pickerAgent(overrides: Record<string, unknown> = {}) {
@@ -359,9 +358,9 @@ index 3fa73ac..3967c7f 100644
 -  useServerInfo: () => ({ managed_sandboxes_enabled: false, sandbox_provider: null }),
 +  useServerInfo: serverInfoMock,
  }));
- // The filesystem browser owns its own data-fetching; stub it to a marker plus
- // a button that reports a navigated path, so we can drive the disclosure and
-@@ -85,6 +87,8 @@ beforeEach(() => {
+ // The filesystem browser owns its own data-fetching; stub its explicit commit
+ // action so this suite can drive the shared dialog without filesystem plumbing.
+@@ -84,6 +86,8 @@ beforeEach(() => {
    hostModelOptionsMock.mockReset();
    hostModelOptionsMock.mockReturnValue({ data: [] });
    updateMock.mockResolvedValue({ id: "p_1", name: "Work", config: {} });
@@ -370,7 +369,7 @@ index 3fa73ac..3967c7f 100644
  });
  
  afterEach(cleanup);
-@@ -424,4 +428,88 @@ describe("ProjectSettingsDialog", () => {
+@@ -420,4 +424,88 @@ describe("ProjectSettingsDialog", () => {
        expect(updateMock).toHaveBeenCalledWith("p_1", { agent_id: "ag_claude", model: "opus" }),
      );
    });
@@ -460,7 +459,7 @@ index 3fa73ac..3967c7f 100644
 +  });
  });
 diff --git a/web/src/shell/ProjectSettingsDialog.tsx b/web/src/shell/ProjectSettingsDialog.tsx
-index f75b1b9..fc7f826 100644
+index e3c5957..a704492 100644
 --- a/web/src/shell/ProjectSettingsDialog.tsx
 +++ b/web/src/shell/ProjectSettingsDialog.tsx
 @@ -11,10 +11,14 @@
@@ -494,7 +493,7 @@ index f75b1b9..fc7f826 100644
 +  SandboxRepoBranchSelect,
 +  SandboxRepoCombobox,
 +} from "./NewChatDialog";
- import { isNavigablePath, WorkspacePicker } from "./WorkspacePicker";
+ import { WorkspacePickerDialog } from "./WorkspacePickerDialog";
  
  /** Select sentinel for "no default" — Radix Select can't hold an empty value. */
 @@ -60,13 +73,16 @@ function Field({
@@ -701,7 +700,7 @@ index f75b1b9..fc7f826 100644
  
    // The agent picker and the host Select portal their dropdowns OUTSIDE
    // DialogContent, so their dismiss (pick an option / click the body while
-@@ -187,6 +369,8 @@ export function ProjectSettingsDialog({
+@@ -191,6 +373,8 @@ export function ProjectSettingsDialog({
      setAgentId(c.agent_id ?? null);
      setModel(c.model ?? NONE);
      setWorkspaceOpen(false);
@@ -710,7 +709,7 @@ index f75b1b9..fc7f826 100644
    }, [open, stored, loadFailed]);
  
    const onSubmit = (e: FormEvent) => {
-@@ -228,6 +412,21 @@ export function ProjectSettingsDialog({
+@@ -232,6 +416,21 @@ export function ProjectSettingsDialog({
      const agentUnresolved = agentId != null && selectedAgent === null;
      if (supportsModelDefault && model !== NONE) config.model = model;
      else if (!agentUnresolved) delete config.model;
@@ -732,7 +731,7 @@ index f75b1b9..fc7f826 100644
  
      updateConfig.mutate(
        { id: projectId, name: projectName, config },
-@@ -249,6 +448,9 @@ export function ProjectSettingsDialog({
+@@ -253,6 +452,9 @@ export function ProjectSettingsDialog({
    // / an offline stored host). Otherwise the field is a plain path input.
    const browsableHostId =
      hostId !== NONE && hostId !== SANDBOX_HOST_CHOICE && !storedHostMissing ? hostId : null;
@@ -742,7 +741,7 @@ index f75b1b9..fc7f826 100644
  
    // Agent picker groups, mirroring the composer's split (native harness CLIs vs
    // SDK / bundle agents). The picker takes both lists and a selection.
-@@ -355,6 +557,9 @@ export function ProjectSettingsDialog({
+@@ -359,6 +561,9 @@ export function ProjectSettingsDialog({
  
            <Field
              label="Working directory"
@@ -752,7 +751,7 @@ index f75b1b9..fc7f826 100644
              hint={
                hostId === NONE
                  ? "Pick a host first"
-@@ -438,6 +643,25 @@ export function ProjectSettingsDialog({
+@@ -424,6 +629,25 @@ export function ProjectSettingsDialog({
              )}
            </Field>
  

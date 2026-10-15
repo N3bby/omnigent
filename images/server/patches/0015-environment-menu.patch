@@ -48,8 +48,7 @@ GET .../environment shows it. A time in the past no longer holds. Stop sandbox
 clears it.
 Pairs with the runner patch 0011-environment-menu.patch and the web patch
 0020-environment-menu.patch.
-Applies after 0014-session-subscription.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
-
+Applies after 0014-session-subscription.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/omnigent/onboarding/sandboxes/agent_sandbox.py b/omnigent/onboarding/sandboxes/agent_sandbox.py
 index ac99143..14f034e 100644
 --- a/omnigent/onboarding/sandboxes/agent_sandbox.py
@@ -180,10 +179,10 @@ index a656148..f8d9c45 100644
          if not sandbox_id.startswith(_HANDLE_PREFIX):
              return super().is_running(sandbox_id)
 diff --git a/omnigent/onboarding/sandboxes/base.py b/omnigent/onboarding/sandboxes/base.py
-index 605e38c..c4272c5 100644
+index 0324899..71b9ebf 100644
 --- a/omnigent/onboarding/sandboxes/base.py
 +++ b/omnigent/onboarding/sandboxes/base.py
-@@ -705,6 +705,19 @@ class SandboxLifecycle(ABC):
+@@ -711,6 +711,19 @@ class SandboxLifecycle(ABC):
          del sandbox_id
          return None
  
@@ -305,15 +304,15 @@ index 279e84a..ecd0f43 100644
              # default when the host's provider is no longer offered, which is safe
              # only for callers that then compare launcher.provider against the row
 diff --git a/omnigent/server/managed_hosts.py b/omnigent/server/managed_hosts.py
-index fce1e0c..8b6ee6d 100644
+index f4c7dd3..225c5fe 100644
 --- a/omnigent/server/managed_hosts.py
 +++ b/omnigent/server/managed_hosts.py
 @@ -173,7 +173,7 @@ import re
  import secrets
  import time
  import uuid
--from collections.abc import Callable, Mapping, Sequence
-+from collections.abc import Callable, Coroutine, Mapping, Sequence
+-from collections.abc import Awaitable, Callable, Mapping, Sequence
++from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
  from dataclasses import dataclass, replace
  from dataclasses import field as dataclass_field
  from functools import partial
@@ -456,7 +455,7 @@ index fce1e0c..8b6ee6d 100644
          entry.settled.set()
  
  
-@@ -3942,6 +4035,48 @@ def host_sandbox_is_running(
+@@ -3992,6 +4085,48 @@ def host_sandbox_is_running(
      return launcher.is_running(host.sandbox_id)
  
  
@@ -506,10 +505,10 @@ index fce1e0c..8b6ee6d 100644
  
  # Per-host resume single-flight: one in-flight resume per host_id on this
 diff --git a/omnigent/server/routes/_sessions/helpers.py b/omnigent/server/routes/_sessions/helpers.py
-index 97c4006..54e06a4 100644
+index a42febc..3550225 100644
 --- a/omnigent/server/routes/_sessions/helpers.py
 +++ b/omnigent/server/routes/_sessions/helpers.py
-@@ -108,6 +108,7 @@ from omnigent.server.managed_hosts import (
+@@ -122,6 +122,7 @@ from omnigent.server.managed_hosts import (
      ManagedLaunchTracker,
      ManagedSandboxDeployment,
      RepoWorkspace,
@@ -517,7 +516,7 @@ index 97c4006..54e06a4 100644
  )
  from omnigent.server.routes._auth_helpers import (
      require_access as _require_access,
-@@ -5042,6 +5043,10 @@ def _publish_sandbox_status_impl(session_id: str, stage: str, error: str | None
+@@ -5282,6 +5283,10 @@ def _publish_sandbox_status_impl(session_id: str, stage: str, error: str | None
          ``"managed sandbox launch failed: spend limit reached"``.
          ``None`` for non-terminal stages.
      """
@@ -529,10 +528,10 @@ index 97c4006..54e06a4 100644
      # host-bound session and the snapshot carries no launch state.
      # Failures stay cached (mirroring ManagedLaunchTracker retention)
 diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
-index e2c747e..a65d17c 100644
+index d14b556..4889616 100644
 --- a/omnigent/server/routes/_sessions/orchestration.py
 +++ b/omnigent/server/routes/_sessions/orchestration.py
-@@ -4165,6 +4165,10 @@ def _kick_managed_wake_impl(
+@@ -5088,6 +5088,10 @@ def _kick_managed_wake_impl(
          extra={"session_id": session_id},
      )
      tracker.begin(session_id)
@@ -544,10 +543,10 @@ index e2c747e..a65d17c 100644
      # session page when the wake fires (the composer let them send into a
      # host_asleep session).
 diff --git a/omnigent/server/routes/sessions/__init__.py b/omnigent/server/routes/sessions/__init__.py
-index f3f7139..c3e74f7 100644
+index 3137771..d8d154d 100644
 --- a/omnigent/server/routes/sessions/__init__.py
 +++ b/omnigent/server/routes/sessions/__init__.py
-@@ -880,6 +880,7 @@ def create_sessions_router(
+@@ -884,6 +884,7 @@ def create_sessions_router(
      from omnigent.server.routes.sessions.routes_browser import register_browser_routes
      from omnigent.server.routes.sessions.routes_core import register_core_routes
      from omnigent.server.routes.sessions.routes_elicitations import register_elicitations_routes
@@ -555,7 +554,7 @@ index f3f7139..c3e74f7 100644
      from omnigent.server.routes.sessions.routes_events import register_events_routes
      from omnigent.server.routes.sessions.routes_hooks import register_hooks_routes
      from omnigent.server.routes.sessions.routes_items import register_items_routes
-@@ -942,6 +943,13 @@ def create_sessions_router(
+@@ -946,6 +947,13 @@ def create_sessions_router(
          permission_store=permission_store,
      )
  
@@ -838,18 +837,18 @@ index 0000000..dda2b35
 +            result.reported_at = reported_at
 +        return result
 diff --git a/omnigent/server/routes/sessions/routes_events.py b/omnigent/server/routes/sessions/routes_events.py
-index 20a6881..09cd06c 100644
+index 45c1b32..5ca0c12 100644
 --- a/omnigent/server/routes/sessions/routes_events.py
 +++ b/omnigent/server/routes/sessions/routes_events.py
-@@ -182,6 +182,7 @@ from omnigent.server.routes._sessions.helpers import (
+@@ -205,6 +205,7 @@ from omnigent.server.routes._sessions.helpers import (
      _publish_interrupted,
      _publish_mcp_startup,
      _publish_policy_deny,
 +    _publish_sandbox_status,
      _publish_session_superseded,
      _publish_status,
-     _remove_session_worktree_best_effort,
-@@ -1187,6 +1188,72 @@ def register_events_routes(
+     _query_host_runner_status,
+@@ -1633,6 +1634,72 @@ def register_events_routes(
                          conversation_store,
                          int(time.time()) - RUNNER_LIVENESS_TTL_S,
                      )

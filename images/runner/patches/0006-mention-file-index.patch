@@ -1,6 +1,7 @@
 List every file in the workspace for the composer's fuzzy "@" picker.
 
-Adds GET /v1/sessions/{id}/resources/environments/{env}/file-index, which
+Adds GET /v1/sessions/{id}/resources/environments/{env}/file-index (in
+omnigent/runner/resource_routes.py, beside the file tree's routes), which
 returns every file path in the session's workspace in one response, so the
 web UI can match "@auth" against all of them as you type, as Claude Code's
 and Codex's own pickers do. Inside a Git repository it lists what git
@@ -10,38 +11,9 @@ skipping hidden folders, node_modules, .venv and symlinked folders. At most
 50,000 paths, and "truncated" says when the list was cut short. Pairs with
 the server patch 0011-mention-file-index.patch and the web patch
 0014-composer-fuzzy-mentions.patch.
-Base: omnigent v0.15.0 (c8b9b85f822f).
-
-diff --git a/omnigent/runner/app.py b/omnigent/runner/app.py
-index 00d251c..0310b9c 100644
---- a/omnigent/runner/app.py
-+++ b/omnigent/runner/app.py
-@@ -11248,6 +11248,23 @@ def create_runner_app(
-             limit=limit,
-         )
- 
-+    @app.get("/v1/sessions/{session_id}/resources/environments/{environment_id}/file-index")
-+    async def list_environment_file_index(
-+        session_id: str,
-+        environment_id: str,
-+    ) -> JSONResponse:
-+        """Every file path in the workspace, for the composer's fuzzy "@" picker."""
-+        from omnigent.runner.environment_filesystem import CallerProcessFilesystem
-+
-+        agent_spec = await _require_os_env(session_id)
-+        await _ensure_session_registered(session_id)
-+        env = resource_registry.resolve_environment(session_id, environment_id, agent_spec)
-+        paths, truncated = await CallerProcessFilesystem(env).list_file_paths()
-+        return JSONResponse(
-+            status_code=200,
-+            content={"object": "list", "paths": paths, "truncated": truncated},
-+        )
-+
-     async def _fs_search(
-         session_id: str,
-         environment_id: str,
+Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/omnigent/runner/environment_filesystem.py b/omnigent/runner/environment_filesystem.py
-index 6827359..b4e79b0 100644
+index f0079b6..6e4b65a 100644
 --- a/omnigent/runner/environment_filesystem.py
 +++ b/omnigent/runner/environment_filesystem.py
 @@ -58,6 +58,10 @@ _MAX_READ_BYTES = 10 * 1024 * 1024  # 10 MiB
@@ -55,7 +27,7 @@ index 6827359..b4e79b0 100644
  _Params = ParamSpec("_Params")
  
  
-@@ -832,6 +836,124 @@ print(json.dumps({'r': results, 't': truncated}))
+@@ -1099,6 +1103,124 @@ print(json.dumps({'r': results, 't': truncated}))
          entries.sort(key=lambda e: e.path)
          return entries, truncated
  
@@ -180,6 +152,34 @@ index 6827359..b4e79b0 100644
      async def read(
          self,
          path: str,
+diff --git a/omnigent/runner/resource_routes.py b/omnigent/runner/resource_routes.py
+index 259742e..e304033 100644
+--- a/omnigent/runner/resource_routes.py
++++ b/omnigent/runner/resource_routes.py
+@@ -1052,6 +1052,23 @@ def register_resource_routes(
+             limit=limit,
+         )
+ 
++    @app.get("/v1/sessions/{session_id}/resources/environments/{environment_id}/file-index")
++    async def list_environment_file_index(
++        session_id: str,
++        environment_id: str,
++    ) -> JSONResponse:
++        """Every file path in the workspace, for the composer's fuzzy "@" picker."""
++        from omnigent.runner.environment_filesystem import CallerProcessFilesystem
++
++        agent_spec = await _require_os_env(session_id)
++        await _ensure_session_registered(session_id)
++        env = resource_registry.resolve_environment(session_id, environment_id, agent_spec)
++        paths, truncated = await CallerProcessFilesystem(env).list_file_paths()
++        return JSONResponse(
++            status_code=200,
++            content={"object": "list", "paths": paths, "truncated": truncated},
++        )
++
+     async def _fs_search(
+         session_id: str,
+         environment_id: str,
 diff --git a/tests/runner/test_file_index.py b/tests/runner/test_file_index.py
 new file mode 100644
 index 0000000..699bb27

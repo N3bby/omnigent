@@ -6,13 +6,13 @@ loads, and adds it to the session.usage SSE event. Like fast_mode, a post carryi
 skips the cost roll-up. Pairs with the runner patch
 0010-subscription-in-use.patch and the web patch
 0018-composer-subscription.patch. Applies after 0013-subscriptions.patch.
-Base: omnigent v0.15.0 (c8b9b85f822f).
+Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
-index 526e0e3..e2c747e 100644
+index 25a7671..d14b556 100644
 --- a/omnigent/server/routes/_sessions/orchestration.py
 +++ b/omnigent/server/routes/_sessions/orchestration.py
-@@ -1756,6 +1756,32 @@ def _fast_mode_from_usage_data(raw: object) -> bool | None:
+@@ -2039,6 +2039,32 @@ def _fast_mode_from_usage_data(raw: object) -> bool | None:
      )
  
  
@@ -45,7 +45,7 @@ index 526e0e3..e2c747e 100644
  async def _persist_external_session_usage(
      session_id: str,
      body: SessionEventInput,
-@@ -1814,12 +1840,13 @@ async def _persist_external_session_usage(
+@@ -2097,12 +2123,13 @@ async def _persist_external_session_usage(
      has_cumulative = any(body.data.get(k) is not None for k in _CUMULATIVE_USAGE_KEYS)
      rate_limits = _rate_limits_from_usage_data(body.data.get("rate_limits"))
      fast_mode = _fast_mode_from_usage_data(body.data.get("fast_mode"))
@@ -61,7 +61,7 @@ index 526e0e3..e2c747e 100644
                  code=ErrorCode.INVALID_INPUT,
              )
          # A subscription-window or fast-mode refresh touches no context or
-@@ -1831,6 +1858,8 @@ async def _persist_external_session_usage(
+@@ -2114,6 +2141,8 @@ async def _persist_external_session_usage(
              )
          if fast_mode is not None:
              status_labels[_FAST_MODE_LABEL_KEY] = "true" if fast_mode else "false"
@@ -70,7 +70,7 @@ index 526e0e3..e2c747e 100644
          await asyncio.to_thread(conversation_store.set_labels, session_id, status_labels)
          session_stream.publish(
              session_id,
-@@ -1839,6 +1868,7 @@ async def _persist_external_session_usage(
+@@ -2122,6 +2151,7 @@ async def _persist_external_session_usage(
                  conversation_id=session_id,
                  rate_limits=rate_limits,
                  fast_mode=fast_mode,
@@ -78,7 +78,7 @@ index 526e0e3..e2c747e 100644
              ).model_dump(exclude_none=True),
          )
          return None
-@@ -1883,6 +1913,8 @@ async def _persist_external_session_usage(
+@@ -2166,6 +2196,8 @@ async def _persist_external_session_usage(
          label_updates[_RATE_LIMITS_LABEL_KEY] = json.dumps(rate_limits, separators=(",", ":"))
      if fast_mode is not None:
          label_updates[_FAST_MODE_LABEL_KEY] = "true" if fast_mode else "false"
@@ -87,7 +87,7 @@ index 526e0e3..e2c747e 100644
      await asyncio.to_thread(
          conversation_store.set_labels,
          session_id,
-@@ -1925,6 +1957,8 @@ async def _persist_external_session_usage(
+@@ -2208,6 +2240,8 @@ async def _persist_external_session_usage(
          event_payload["rate_limits"] = rate_limits
      if fast_mode is not None:
          event_payload["fast_mode"] = fast_mode
@@ -97,10 +97,10 @@ index 526e0e3..e2c747e 100644
      session_stream.publish(session_id, event.model_dump(exclude_none=True))
      # This session's usage also moves its ANCESTORS' subtree cost (its spend
 diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
-index 01f0fdf..5b2c587 100644
+index 97b5494..864fedb 100644
 --- a/omnigent/server/schemas.py
 +++ b/omnigent/server/schemas.py
-@@ -3178,6 +3178,9 @@ class SessionUsageEvent(_SSEEventBase):
+@@ -3187,6 +3187,9 @@ class SessionUsageEvent(_SSEEventBase):
      rate_limits: dict[str, list[dict[str, float | int | None]]] | None = None
      # Whether the native harness runs in fast mode (Claude's or Codex's ``/fast``).
      fast_mode: bool | None = None

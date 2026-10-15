@@ -16,13 +16,13 @@ the height it opened with, so the search field doesn't slide down as the list
 filters. On touch screens the search field also isn't focused on open, so the
 on-screen keyboard doesn't pop up and pan the page; tapping the field focuses
 it. Desktop, with room to spare, is unchanged.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0005.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0005.
 
 diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
-index 43c57e5..4e46564 100644
+index 97c5608..6fff1b5 100644
 --- a/web/src/shell/NewChatDialog.test.tsx
 +++ b/web/src/shell/NewChatDialog.test.tsx
-@@ -6697,6 +6697,120 @@ describe("NewChatLandingScreen", () => {
+@@ -7104,6 +7104,120 @@ describe("NewChatLandingScreen", () => {
      expect(screen.queryByTestId("new-chat-landing-repo-select")).toBeNull();
    });
  
@@ -144,10 +144,10 @@ index 43c57e5..4e46564 100644
      // Controlled promise so the in-flight state is observable
      // deterministically before the create resolves.
 diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
-index a9fec1e..f88002a 100644
+index 407ce0c..2fd8d56 100644
 --- a/web/src/shell/NewChatDialog.tsx
 +++ b/web/src/shell/NewChatDialog.tsx
-@@ -6,7 +6,16 @@ import {
+@@ -7,7 +7,16 @@ import {
    HarnessPickerConfigPage,
    HarnessPickerSubContent,
  } from "@/components/composer/HarnessPicker";
@@ -163,8 +163,8 @@ index a9fec1e..f88002a 100644
 +  useState,
 +} from "react";
  import { useNavigate, useSearchParams } from "@/lib/routing";
- import {
-   ComposerWorkspaceBar,
+ import { MAIN_CANVAS_ID } from "@/canvas/canvasLayout";
+ import { CANVAS_QUERY_PARAM, canvasLocation } from "@/canvas/canvasNavigation";
 @@ -1025,6 +1034,119 @@ export function deriveRepoName(url: string): string | null {
  const COMBOBOX_TRIGGER_CLASS =
    "flex w-full items-center gap-2 rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors hover:border-ring/60 focus-visible:border-ring";
@@ -335,7 +335,7 @@ index a9fec1e..f88002a 100644
          <Command>
            <CommandInput
              placeholder="Search branches…"
-@@ -2455,6 +2579,10 @@ export function NewChatLandingScreen() {
+@@ -2477,6 +2601,10 @@ export function NewChatLandingScreen() {
    }, []);
    // Free-text URL being typed into the "paste a URL" adder (not yet added).
    const [pendingRepoUrl, setPendingRepoUrl] = useState<string>("");
@@ -346,7 +346,7 @@ index a9fec1e..f88002a 100644
    // When the server advertises the GitHub App and the caller has connected
    // their account, offer a picker over their repos instead of only the
    // free-text URL. The /repos endpoint returns `connected: false` when the
-@@ -5863,9 +5991,10 @@ export function NewChatLandingScreen() {
+@@ -6028,9 +6156,10 @@ export function NewChatLandingScreen() {
                before the sandbox exists, so the workspace is specified as
                a git repository URL (+ optional branch) the server clones
                at create time. Blank = empty server-created workspace. */}
@@ -358,7 +358,7 @@ index a9fec1e..f88002a 100644
                      type="button"
                      aria-label={`Sandbox repositories: ${
                        sandboxRepoSelections.length > 0 ? sandboxRepoLabel : "None selected"
-@@ -5886,7 +6015,12 @@ export function NewChatLandingScreen() {
+@@ -6051,7 +6180,12 @@ export function NewChatLandingScreen() {
                      <ChevronDownIcon className="size-3.5 shrink-0 opacity-60" />
                    </button>
                  </PopoverTrigger>

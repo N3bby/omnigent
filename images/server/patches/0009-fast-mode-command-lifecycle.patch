@@ -1,10 +1,11 @@
 Forward native /fast controls without pending-input or routing bookkeeping.
 
 These controls have no user-prompt echo to reconcile. Applies after
-0008-fast-mode.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+0008-fast-mode.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/native/fast_mode.py b/omnigent/native/fast_mode.py
 new file mode 100644
+index 0000000..4ad5076
 --- /dev/null
 +++ b/omnigent/native/fast_mode.py
 @@ -0,0 +1,24 @@
@@ -33,9 +34,10 @@ new file mode 100644
 +        return "toggle"
 +    return words[1] if words[1] in {"on", "off"} else None
 diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index 49fb3a3..25a7671 100644
 --- a/omnigent/server/routes/_sessions/orchestration.py
 +++ b/omnigent/server/routes/_sessions/orchestration.py
-@@ -6483,6 +6483,16 @@
+@@ -7518,6 +7518,16 @@ async def _dispatch_session_event_to_runner_impl(
                  conversation_store,
                  ensure_outcome.policy_notice,
              )
@@ -54,6 +56,7 @@ diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server
          # back on any failure/cancellation so a message the TUI never
 diff --git a/tests/server/test_fast_mode_command.py b/tests/server/test_fast_mode_command.py
 new file mode 100644
+index 0000000..4fa9b50
 --- /dev/null
 +++ b/tests/server/test_fast_mode_command.py
 @@ -0,0 +1,59 @@

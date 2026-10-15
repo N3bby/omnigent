@@ -3,8 +3,7 @@ Show the subscription usage windows next to the composer's context ring.
 Reads rate_limits from session.usage events and the omnigent.rate_limits
 session label, and renders "5h 23% · 7d 41%" in the composer workspace bar
 with a tap-to-open popover for reset times (the desktop and mobile apps load
-this same web UI). Base: omnigent v0.15.0 (c8b9b85f822f).
-
+this same web UI). Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/web/src/components/composer/ComposerRateLimits.tsx b/web/src/components/composer/ComposerRateLimits.tsx
 new file mode 100644
 index 0000000..94c5e86
@@ -149,7 +148,7 @@ index 0000000..94c5e86
 +  );
 +}
 diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
-index 4fc1816..af7efb9 100644
+index bfcbf34..3035358 100644
 --- a/web/src/lib/events.ts
 +++ b/web/src/lib/events.ts
 @@ -8,6 +8,7 @@
@@ -284,10 +283,10 @@ index 0000000..bf7b6a4
 +  return `${minutes}m`;
 +}
 diff --git a/web/src/lib/sse.ts b/web/src/lib/sse.ts
-index e3d5f79..d9cc9de 100644
+index ae9a34e..848945a 100644
 --- a/web/src/lib/sse.ts
 +++ b/web/src/lib/sse.ts
-@@ -71,6 +71,7 @@ import type {
+@@ -72,6 +72,7 @@ import type {
    ToolResult,
  } from "./events";
  import { NATIVE_TOOL_TYPES } from "./events";
@@ -295,7 +294,7 @@ index e3d5f79..d9cc9de 100644
  import { routingExtrasFromWire } from "./routingDecision";
  import type {
    BackgroundTaskInfo,
-@@ -632,11 +633,16 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+@@ -633,11 +634,16 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
      if (usageByModel === null) {
        return null;
      }
@@ -313,7 +312,7 @@ index e3d5f79..d9cc9de 100644
      ) {
        return null;
      }
-@@ -647,6 +653,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+@@ -648,6 +654,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
        ...(contextWindow !== undefined ? { contextWindow } : {}),
        ...(totalCostUsd !== undefined ? { totalCostUsd } : {}),
        ...(usageByModel !== undefined ? { usageByModel } : {}),
@@ -322,10 +321,10 @@ index e3d5f79..d9cc9de 100644
    }
    if (eventType === "session.model") {
 diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
-index f9f2229..49325ae 100644
+index 4ed6ea4..eca03b6 100644
 --- a/web/src/pages/ChatPage.tsx
 +++ b/web/src/pages/ChatPage.tsx
-@@ -225,6 +225,7 @@ import { fusionOption, isFusionModelUid } from "@/lib/devinFusion";
+@@ -227,6 +227,7 @@ import { fusionOption, isFusionModelUid } from "@/lib/devinFusion";
  import { ComposerWorkspaceStatus } from "@/components/composer/ComposerWorkspaceStatus";
  import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
  import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
@@ -333,7 +332,7 @@ index f9f2229..49325ae 100644
  import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
  import { composerContextFromLabels } from "@/lib/composerContextAdapters";
  import {
-@@ -2615,6 +2616,7 @@ function ComposerImpl(
+@@ -2444,6 +2445,7 @@ function ComposerImpl(
    const hasQueuedComposerMessages = composerQueuedMessages.length > 0;
    const composerContextWindow = useChatStore((s) => s.contextWindow);
    const composerTokensUsed = useChatStore((s) => s.tokensUsed);
@@ -341,27 +340,28 @@ index f9f2229..49325ae 100644
    const openComposerGithubTab = useOpenGithubTab();
    // Devin shares this control but not Claude's vocabulary: its rungs are
    // normal / accept-edits / smart / dangerous, cycled in the TUI.
-@@ -3705,6 +3707,7 @@ function ComposerImpl(
-               <BackgroundTaskIndicator />
+@@ -3580,6 +3582,7 @@ function ComposerImpl(
                <SubagentTaskIndicator conversationId={conversationId} />
+               {goal && <GoalStatusPill goal={goal} onOpen={() => setGoalDialogOpen(true)} />}
              </div>
 +            <ComposerRateLimits rateLimits={composerRateLimits} />
              <ComposerContextRing
                contextWindow={composerContextWindow}
                tokensUsed={composerTokensUsed}
 diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
-index eeac1ae..3d07864 100644
+index 771b4a3..247bfe4 100644
 --- a/web/src/store/chatStore.ts
 +++ b/web/src/store/chatStore.ts
-@@ -147,6 +147,7 @@ import { getSessionHost } from "@/lib/sessionHost";
- import { isSystemUserContent, taskNotificationMarkerContent } from "@/lib/systemMessage";
- import { isNativeTerminalSession as isNativeTerminalSessionFn } from "@/lib/nativeCodingAgents";
+@@ -154,6 +154,8 @@ import { isNativeTerminalSession as isNativeTerminalSessionFn } from "@/lib/nati
  import type { StoredReplyDraft } from "@/lib/replyDraft";
-+import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
+ import { toast } from "sonner";
  
++import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
++
  export interface SendOptions {
-   /** Client-only quote provenance, retained if the composer needs to retry. */
-@@ -854,6 +855,13 @@ export interface ConversationState {
+   /** Compact is a control event, not a user-message turn. */
+   command?: "compact";
+@@ -936,6 +938,13 @@ export interface ConversationState {
     * tokens, total cost) is derived from this map on the frontend.
     */
    sessionUsageByModel: Record<string, ModelUsage> | null;
@@ -375,7 +375,7 @@ index eeac1ae..3d07864 100644
    /**
     * Worktree branch checked out for the active session, surfaced in the
     * composer status line. Seeded from the session snapshot on bind
-@@ -1732,6 +1740,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+@@ -1913,6 +1922,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
    tokensUsed: null,
    sessionCostUsd: null,
    sessionUsageByModel: null,
@@ -383,7 +383,7 @@ index eeac1ae..3d07864 100644
    gitBranch: null,
    todos: [],
    codexModelOptions: [],
-@@ -4040,6 +4049,7 @@ async function bindStream(
+@@ -4520,6 +4530,7 @@ async function bindStream(
          // back re-projects (it does not re-bind, so it cannot recompute it).
          sessionReasoningEffort: effectiveEffort,
          tokensUsed: session.lastTotalTokens ?? null,
@@ -391,7 +391,7 @@ index eeac1ae..3d07864 100644
          sessionCostUsd:
            state.sessionCostUsd !== stateBeforeFetch.sessionCostUsd
              ? state.sessionCostUsd
-@@ -4240,6 +4250,8 @@ function reconnectStatusPatch(
+@@ -4756,6 +4767,8 @@ function reconnectStatusPatch(
    if (session.lastTotalTokens != null) patch.tokensUsed = session.lastTotalTokens;
    if (session.totalCostUsd != null) patch.sessionCostUsd = session.totalCostUsd;
    if (session.usageByModel != null) patch.sessionUsageByModel = session.usageByModel;
@@ -400,7 +400,7 @@ index eeac1ae..3d07864 100644
    // `waiting` is a TURN-END snapshot (the turn finished; only background work
    // outlives it), so it settles the local send lifecycle like `idle` — it must
    // NOT reopen a streaming response. The server keeps `active_response_id`
-@@ -6164,6 +6176,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+@@ -7149,6 +7162,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
          contextWindow?: number;
          sessionCostUsd?: number;
          sessionUsageByModel?: Record<string, ModelUsage>;
@@ -408,7 +408,7 @@ index eeac1ae..3d07864 100644
        } = {};
        if (event.contextTokens !== undefined) {
          patch.tokensUsed = event.contextTokens;
-@@ -6177,6 +6190,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+@@ -7162,6 +7176,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
        if (event.usageByModel !== undefined) {
          patch.sessionUsageByModel = event.usageByModel;
        }
@@ -419,10 +419,10 @@ index eeac1ae..3d07864 100644
          const entry =
            sourceConversationId === null
 diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
-index 7c931b7..3da0c66 100644
+index 74946d0..3da6cdb 100644
 --- a/web/src/store/conversationState.ts
 +++ b/web/src/store/conversationState.ts
-@@ -48,6 +48,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
+@@ -49,6 +49,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
    tokensUsed: true,
    sessionCostUsd: true,
    sessionUsageByModel: true,
@@ -430,7 +430,7 @@ index 7c931b7..3da0c66 100644
    gitBranch: true,
    todos: true,
    codexModelOptions: true,
-@@ -114,6 +115,7 @@ export function createInitialConversationState(): ConversationState {
+@@ -117,6 +118,7 @@ export function createInitialConversationState(): ConversationState {
      tokensUsed: null,
      sessionCostUsd: null,
      sessionUsageByModel: null,

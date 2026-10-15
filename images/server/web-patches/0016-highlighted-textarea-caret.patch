@@ -3,12 +3,35 @@ Keep highlighted editor text and its native caret in the same font.
 The Codex theme gives pre elements a monospace font outside Tailwind
 utilities. Use a neutral div for the aria-hidden copy so it receives the
 same inherited or caller-selected font as the textarea, in both editors.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0015.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0015.
 
+diff --git a/web/src/components/HighlightedTextarea.test.tsx b/web/src/components/HighlightedTextarea.test.tsx
+index 1d0cc35..fa13b20 100644
+--- a/web/src/components/HighlightedTextarea.test.tsx
++++ b/web/src/components/HighlightedTextarea.test.tsx
+@@ -34,7 +34,7 @@ describe("HighlightedTextarea", () => {
+   it("highlights a copy of the text under the textarea, and keeps it in step", async () => {
+     const { container } = render(<Editor initial={"echo hi # greet\n"} language="shellscript" />);
+     const textarea = screen.getByRole("textbox", { name: "Editor" });
+-    const copy = container.querySelector("pre")!;
++    const copy = container.querySelector('[data-slot="highlighted-textarea-copy"]')!;
+     expect(copy).toHaveAttribute("aria-hidden");
+     // Plain until Shiki has loaded, then coloured spans of the same text.
+     expect(copy.textContent).toBe("echo hi # greet\n ");
+@@ -56,7 +56,7 @@ describe("HighlightedTextarea", () => {
+       <HighlightedTextarea value="a" language="text" wrap={false} onChange={() => {}} />,
+     );
+     const textarea = container.querySelector("textarea")!;
+-    const copy = container.querySelector("pre")!;
++    const copy = container.querySelector('[data-slot="highlighted-textarea-copy"]')!;
+     expect(textarea).toHaveAttribute("wrap", "off");
+     textarea.scrollTop = 40;
+     textarea.scrollLeft = 25;
 diff --git a/web/src/components/HighlightedTextarea.tsx b/web/src/components/HighlightedTextarea.tsx
+index cbe281d..1ff2f8d 100644
 --- a/web/src/components/HighlightedTextarea.tsx
 +++ b/web/src/components/HighlightedTextarea.tsx
-@@ -123,11 +123,13 @@
+@@ -123,11 +123,13 @@ export function HighlightedTextarea({
    /** Soft-wrap long lines; off, they scroll sideways, as for code. */
    wrap?: boolean;
  }) {
@@ -23,7 +46,7 @@ diff --git a/web/src/components/HighlightedTextarea.tsx b/web/src/components/Hig
    const layout = cn(
      "m-0 border px-2.5 py-2 text-ui md:text-ui [font-family:inherit] [scrollbar-gutter:stable]",
      wrap ? "whitespace-pre-wrap wrap-break-word" : "whitespace-pre",
-@@ -138,7 +140,8 @@
+@@ -138,7 +140,8 @@ export function HighlightedTextarea({
        data-language={language}
        data-highlighted={lines ? "" : undefined}
      >
@@ -33,7 +56,7 @@ diff --git a/web/src/components/HighlightedTextarea.tsx b/web/src/components/Hig
          ref={copy}
          aria-hidden
          className={cn(
-@@ -165,7 +168,7 @@
+@@ -165,7 +168,7 @@ export function HighlightedTextarea({
            : value}
          {/* A last empty line still takes its height, as in the textarea. */}
          {value.endsWith("\n") && " "}
@@ -42,24 +65,3 @@ diff --git a/web/src/components/HighlightedTextarea.tsx b/web/src/components/Hig
        <Textarea
          value={value}
          wrap={wrap ? "soft" : "off"}
-diff --git a/web/src/components/HighlightedTextarea.test.tsx b/web/src/components/HighlightedTextarea.test.tsx
---- a/web/src/components/HighlightedTextarea.test.tsx
-+++ b/web/src/components/HighlightedTextarea.test.tsx
-@@ -34,7 +34,7 @@
-   it("highlights a copy of the text under the textarea, and keeps it in step", async () => {
-     const { container } = render(<Editor initial={"echo hi # greet\n"} language="shellscript" />);
-     const textarea = screen.getByRole("textbox", { name: "Editor" });
--    const copy = container.querySelector("pre")!;
-+    const copy = container.querySelector('[data-slot="highlighted-textarea-copy"]')!;
-     expect(copy).toHaveAttribute("aria-hidden");
-     // Plain until Shiki has loaded, then coloured spans of the same text.
-     expect(copy.textContent).toBe("echo hi # greet\n ");
-@@ -56,7 +56,7 @@
-       <HighlightedTextarea value="a" language="text" wrap={false} onChange={() => {}} />,
-     );
-     const textarea = container.querySelector("textarea")!;
--    const copy = container.querySelector("pre")!;
-+    const copy = container.querySelector('[data-slot="highlighted-textarea-copy"]')!;
-     expect(textarea).toHaveAttribute("wrap", "off");
-     textarea.scrollTop = 40;
-     textarea.scrollLeft = 25;

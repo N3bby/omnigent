@@ -7,13 +7,13 @@ not get back. The runner's claude wrapper now launches Claude with
 --allow-dangerously-skip-permissions while claude_bypass_permissions is on, so
 bypass is always in the cycle and the cycler may target it. Pairs with images/server/patches/0007 and
 images/server/web-patches/0008.
-Base: omnigent v0.15.0 (c8b9b85f822f).
+Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/harnesses/claude_native/bridge.py b/omnigent/harnesses/claude_native/bridge.py
-index 413cdae..dbbd7ab 100644
+index 86b8f71..6b06e79 100644
 --- a/omnigent/harnesses/claude_native/bridge.py
 +++ b/omnigent/harnesses/claude_native/bridge.py
-@@ -345,14 +345,14 @@ _PERMISSION_MODE_FOOTERS: dict[str, str] = {
+@@ -363,14 +363,14 @@ _PERMISSION_MODE_FOOTERS: dict[str, str] = {
      "acceptEdits": "accept edits on",
      "plan": "plan mode on",
      "auto": "auto mode on",

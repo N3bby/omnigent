@@ -8,7 +8,7 @@ code, or Codex's device code. Credentials can also be imported. lib/
 subscriptions.ts calls the /v1/subscriptions routes in
 images/server/omnigent_subscriptions_api.py. Applies after
 0016-highlighted-textarea-caret.patch.
-Base: omnigent v0.15.0 (c8b9b85f822f).
+Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/web/src/lib/subscriptions.ts b/web/src/lib/subscriptions.ts
 new file mode 100644
@@ -65,10 +65,10 @@ index 0000000..e7bd6ff
 +  return data as T;
 +}
 diff --git a/web/src/pages/SettingsPage.tsx b/web/src/pages/SettingsPage.tsx
-index 2f63959..3338d7e 100644
+index b4a8203..862fdf0 100644
 --- a/web/src/pages/SettingsPage.tsx
 +++ b/web/src/pages/SettingsPage.tsx
-@@ -268,6 +268,9 @@ const PoliciesPage = lazy(() =>
+@@ -275,6 +275,9 @@ const PoliciesPage = lazy(() =>
  const SharingPage = lazy(() =>
    import("@/pages/SharingPage").then((m) => ({ default: m.SharingPage })),
  );
@@ -78,7 +78,7 @@ index 2f63959..3338d7e 100644
  const RepoVariablesPage = lazy(() =>
    import("@/pages/RepoVariablesPage").then((m) => ({ default: m.RepoVariablesPage })),
  );
-@@ -301,7 +304,8 @@ export function SettingsPage() {
+@@ -318,7 +321,8 @@ export function SettingsPage() {
      section === "members" ||
      section === "policies" ||
      section === "sharing" ||
@@ -88,7 +88,7 @@ index 2f63959..3338d7e 100644
    ) {
      return (
        <Suspense fallback={null}>
-@@ -311,6 +315,8 @@ export function SettingsPage() {
+@@ -328,6 +332,8 @@ export function SettingsPage() {
            <PoliciesPage />
          ) : section === "sharing" ? (
            <SharingPage />
@@ -1135,10 +1135,10 @@ index 0000000..332370b
 +  );
 +}
 diff --git a/web/src/shell/settingsNav.test.tsx b/web/src/shell/settingsNav.test.tsx
-index 7421b18..8c66d7b 100644
+index add5bd2..6cba016 100644
 --- a/web/src/shell/settingsNav.test.tsx
 +++ b/web/src/shell/settingsNav.test.tsx
-@@ -125,6 +125,7 @@ describe("settingsNavGroups", () => {
+@@ -146,6 +146,7 @@ describe("settingsNavGroups", () => {
        "members",
        "policies",
        "sharing",
@@ -1146,7 +1146,7 @@ index 7421b18..8c66d7b 100644
        "repo-env",
      ]);
      // Admin under OIDC (accountsEnabled false) → still appears. This is the
-@@ -134,6 +135,7 @@ describe("settingsNavGroups", () => {
+@@ -155,6 +156,7 @@ describe("settingsNavGroups", () => {
        "members",
        "policies",
        "sharing",
@@ -1154,7 +1154,7 @@ index 7421b18..8c66d7b 100644
        "repo-env",
      ]);
    });
-@@ -145,7 +147,11 @@ describe("settingsNavGroups", () => {
+@@ -166,7 +168,11 @@ describe("settingsNavGroups", () => {
      const singleUserAdmin = settingsNavGroups(false, false, true, true).find(
        (g) => g.title === "Admin",
      );
@@ -1168,10 +1168,10 @@ index 7421b18..8c66d7b 100644
  
    it("includes the Sandbox Integrations item only when a connection is enabled", () => {
 diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
-index 45f0dc1..5f6a524 100644
+index 754e873..5bbe40e 100644
 --- a/web/src/shell/settingsNav.tsx
 +++ b/web/src/shell/settingsNav.tsx
-@@ -14,6 +14,7 @@ import {
+@@ -15,6 +15,7 @@ import {
    DownloadIcon,
    GitBranchIcon,
    KeyboardIcon,
@@ -1179,7 +1179,7 @@ index 45f0dc1..5f6a524 100644
    PaletteIcon,
    SettingsIcon,
    Share2Icon,
-@@ -43,6 +44,7 @@ export type SettingsSectionId =
+@@ -47,6 +48,7 @@ export type SettingsSectionId =
    | "members"
    | "policies"
    | "sharing"
@@ -1187,7 +1187,7 @@ index 45f0dc1..5f6a524 100644
    | "repo-env"
    | "archived"
    | "cli"
-@@ -59,6 +61,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
+@@ -65,6 +67,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
    "members",
    "policies",
    "sharing",
@@ -1195,7 +1195,7 @@ index 45f0dc1..5f6a524 100644
    "repo-env",
    "archived",
    "cli",
-@@ -144,6 +147,8 @@ export function settingsNavGroups(
+@@ -161,6 +164,8 @@ export function settingsNavGroups(
      if (!isSingleUser) adminItems.push({ id: "members", label: "Members", icon: UsersIcon });
      adminItems.push({ id: "policies", label: "Policies", icon: ShieldCheckIcon });
      if (!isSingleUser) adminItems.push({ id: "sharing", label: "Sharing", icon: Share2Icon });

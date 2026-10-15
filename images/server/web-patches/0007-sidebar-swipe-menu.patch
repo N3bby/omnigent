@@ -10,8 +10,7 @@ closes it. Touch devices are those with no hover and a coarse pointer, so
 mouse and trackpad devices keep their menus as they were at any width. Also
 stops a long press released without moving from loading the session as a
 new page.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0005.
-
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0005.
 diff --git a/web/src/shell/SessionRowSwipe.test.tsx b/web/src/shell/SessionRowSwipe.test.tsx
 new file mode 100644
 index 0000000..9856056
@@ -522,10 +521,10 @@ index 0000000..0deb2aa
 +}
 diff --git a/web/src/shell/Sidebar.swipeMenu.test.tsx b/web/src/shell/Sidebar.swipeMenu.test.tsx
 new file mode 100644
-index 0000000..e6b765f
+index 0000000..508138a
 --- /dev/null
 +++ b/web/src/shell/Sidebar.swipeMenu.test.tsx
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,151 @@
 +import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 +
 +vi.mock("@/hooks/useScopeCache", () => import("@/test/mockScopeCache"));
@@ -549,40 +548,10 @@ index 0000000..e6b765f
 +  useIsTouchPrimary: () => touch.primary,
 +}));
 +
-+vi.mock("@/hooks/useConversations", () => ({
-+  useConversations: vi.fn(),
-+  useConnectedConversations: () => [],
-+  useStopAndDeleteConversation: () => ({
-+    mutate: vi.fn(),
-+    reset: vi.fn(),
-+    isPending: false,
-+    isError: false,
-+  }),
-+  usePinnedConversations: () => ({
-+    data: { conversations: [], filterHonored: true },
-+    isSuccess: true,
-+  }),
-+  useTogglePinnedConversation: () => ({ mutate: vi.fn() }),
-+  setConversationPinned: vi.fn(() => Promise.resolve({})),
-+  PINNED_CONVERSATIONS_KEY: ["pinned-conversations"],
-+  useRenameConversation: () => ({ mutate: vi.fn() }),
-+  useLeaveSession: () => ({ mutate: vi.fn(), isPending: false }),
-+  useArchiveConversation: () => ({ mutate: vi.fn() }),
-+  useBulkArchiveConversations: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
-+  useBulkDeleteConversations: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
-+  useBulkMoveToProject: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
-+  useBulkStopSessions: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
-+  useStopSession: () => ({ mutate: vi.fn() }),
-+  useProjects: () => ({ data: [] }),
-+  useMoveToProject: () => ({ mutate: vi.fn() }),
-+  useDeleteProject: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
-+  useRenameProject: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
-+  useCreateProject: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
-+  useProjectConfig: () => ({ data: undefined, isLoading: false }),
-+  useUpdateProjectConfig: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
-+  fetchProjectSessionIds: () => Promise.resolve([]),
-+  PROJECT_LABEL_KEY: "omni_project",
-+}));
++vi.mock("@/hooks/useConversations", async () => {
++  const { conversationHooksMock } = await import("@/test/sidebarMockHelpers");
++  return conversationHooksMock();
++});
 +
 +vi.mock("@/components/PermissionsModal", () => ({ PermissionsModal: () => null }));
 +
@@ -708,19 +677,19 @@ index 0000000..e6b765f
 +  });
 +});
 diff --git a/web/src/shell/Sidebar.tsx b/web/src/shell/Sidebar.tsx
-index c42cd0f..2aee576 100644
+index 1ec3bc2..ab356e7 100644
 --- a/web/src/shell/Sidebar.tsx
 +++ b/web/src/shell/Sidebar.tsx
-@@ -221,6 +221,8 @@ import {
- } from "./sidebarNav";
- import { SidebarServerPicker } from "./SidebarServerPicker";
+@@ -282,6 +282,8 @@ import { useDesktopHostId } from "./RevealInFileManager";
  import { ForkSessionDialog } from "./ForkSessionDialog";
+ import { SessionActionMenuItem } from "@/components/SessionActionMenuItem";
+ import { useSessionActionRestrictions } from "@/hooks/useSessionActionRestrictions";
 +import { SessionRowSwipeAction, useSessionRowSwipe } from "./SessionRowSwipe";
 +import { useIsTouchPrimary } from "./sidebarSwipe";
  import { SIDEBAR_ROW } from "./sidebarStyles";
- import { TooltipArrow } from "radix-ui/tooltip";
- import { getEmbedRoot } from "../lib/host";
-@@ -3706,6 +3708,9 @@ function ConversationRowImpl({
+ import { MAIN_CANVAS_ID } from "@/canvas/canvasLayout";
+ import { CANVAS_QUERY_PARAM, canvasLocation, isCanvasPathname } from "@/canvas/canvasNavigation";
+@@ -4472,6 +4474,9 @@ function ConversationRowImpl({
    // project flyout's HoverCard and leave it lingering over the chat. Gate the
    // flyout off below the `md` breakpoint (see `projectFlyoutName`).
    const isMobile = useContext(IsMobileContext);
@@ -730,7 +699,7 @@ index c42cd0f..2aee576 100644
    // When this row becomes the active conversation (e.g. a freshly created
    // session navigated to via `/c/:id`), scroll it toward the center of the
    // sidebar so it's comfortably in view rather than pinned to an edge.
-@@ -3880,6 +3885,12 @@ function ConversationRowImpl({
+@@ -4661,6 +4666,12 @@ function ConversationRowImpl({
      data: { type: "session", label, project: currentProject, isPinned },
      disabled: !isOwner || selectionMode || isArchived || isEditing || isProvisionalRow,
    });
@@ -743,7 +712,7 @@ index c42cd0f..2aee576 100644
    // A drag ends with a synthetic click on the row's <Link> (mousedown + mouseup
    // on the same anchor still fires a click); swallow that one click so a drag
    // doesn't also navigate into the session. Flagged when a drag finishes,
-@@ -4150,8 +4161,17 @@ function ConversationRowImpl({
+@@ -4959,7 +4970,8 @@ function ConversationRowImpl({
            dragListeners?.onTouchStart?.(event);
          }
        }}
@@ -751,6 +720,12 @@ index c42cd0f..2aee576 100644
 +      {...swipe.rowProps}
 +      className={cn("group relative", isDragging && "opacity-40", swipe.rowClassName)}
      >
+       {pinInsertion && pinOrder?.draggingId !== conversation.id && (
+         <span
+@@ -4968,6 +4980,14 @@ function ConversationRowImpl({
+           style={pinInsertion === "before" ? { top: 0 } : { bottom: 0 }}
+         />
+       )}
 +      {/* Touch only: the button a swipe to the left reveals, for this menu. */}
 +      <SessionRowSwipeAction swipe={swipe}>
 +        <ConversationMenuItems
@@ -762,7 +737,7 @@ index c42cd0f..2aee576 100644
        {/* Right-click anywhere on the row opens the same actions as the kebab.
            Suppressed in selection mode (bulk-select owns the row), where the
            bare link is rendered instead. ContextMenuTrigger preventDefaults the
-@@ -4188,7 +4208,7 @@ function ConversationRowImpl({
+@@ -5004,7 +5024,7 @@ function ConversationRowImpl({
        ) : projectFlyoutName ? (
          <HoverCard openDelay={150} closeDelay={0}>
            <ContextMenu>
@@ -771,7 +746,7 @@ index c42cd0f..2aee576 100644
                <HoverCardTrigger asChild>{rowLink}</HoverCardTrigger>
              </ContextMenuTrigger>
              <ContextMenuContent className="min-w-44">
-@@ -4209,7 +4229,9 @@ function ConversationRowImpl({
+@@ -5025,7 +5045,9 @@ function ConversationRowImpl({
          </HoverCard>
        ) : isMobile ? (
          <ContextMenu>
@@ -782,7 +757,7 @@ index c42cd0f..2aee576 100644
            <ContextMenuContent className="min-w-44">
              <ConversationMenuItems
                components={contextBundle}
-@@ -4221,7 +4243,7 @@ function ConversationRowImpl({
+@@ -5037,7 +5059,7 @@ function ConversationRowImpl({
        ) : (
          <Tooltip>
            <ContextMenu>
