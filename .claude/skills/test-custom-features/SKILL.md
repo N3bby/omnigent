@@ -667,7 +667,9 @@ after the next message it names `feature-check`. Switch back, then remove
       connected** with **Tailscale** and **Docker**, the setup script, then
       **Agent ready**. **Log** shows lines from **Kubernetes**, **Clone**,
       **Host** and **Setup script**, and the repository's variable values show
-      as `[hidden]`. When the agent answers, the card is gone.
+      as `[hidden]` (only values of 6 characters or more, so `page` doesn't;
+      to see it, have the setup script echo a longer one). When the agent
+      answers, the card is gone.
     - **A failed clone:** start a new session on the same repository with a
       branch that doesn't exist, such as `feature-check-missing`. Within about
       a minute, not after the start's timeout, the card says **Couldn't clone
