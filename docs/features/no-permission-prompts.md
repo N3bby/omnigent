@@ -47,6 +47,16 @@ its Pod, so it could change the setting back itself.
   (`DISABLE_AUTOUPDATER=1`). An update would replace the wrapper, or hide it
   behind a `claude` shim in a project's mise Node, and new sessions would
   then start without any of this.
+  Whatever the setting, the wrapper also creates `~/.claude.json` with
+  `hasCompletedOnboarding` in a new session's home, before any Claude
+  starts there. Otherwise Claude Code can open its first-run theme picker,
+  which Omnigent can't answer either: upstream sets the key just before the
+  terminal starts, but the host's `claude auth status` may already have
+  written the file without it, and Claude writes back the config it read.
+  The first message then fails after 180s with "Claude Code terminal did not
+  become ready". Upstream hasn't fixed this
+  ([#8010](https://github.com/omnigent-ai/omnigent/pull/8010) was closed
+  unmerged).
 - **Codex** (`images/runner/codex-wrapper.sh`): adds
   `--dangerously-bypass-approvals-and-sandbox`. It also links the shared Codex
   login into each session.
