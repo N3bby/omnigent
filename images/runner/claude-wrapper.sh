@@ -14,6 +14,24 @@ if [ "${OMNIGENT_CLAUDE_BYPASS_PERMISSIONS:-0}" = "1" ] && [ ! -e "$managed" ]; 
     fi
 fi
 
+# Claude Code opens its first-run theme picker, which Omnigent cannot answer,
+# when its global config lacks hasCompletedOnboarding. Omnigent adds the key
+# just before it starts a session's terminal, but in a new home another Claude,
+# such as the host's `claude auth status` or the title generator's `claude -p`,
+# may have created the file without it, and writes back the config it read.
+# So the first Claude in a new home creates the file with the key. It's linked
+# into place whole, and a file that exists by then is left alone.
+config="${CLAUDE_CONFIG_DIR:-${HOME:-/home/omnigent}}/.claude.json"
+if [ ! -e "$config" ]; then
+    seed="$(mktemp "$config.XXXXXX" 2>/dev/null)" || seed=""
+    if [ -z "$seed" ] || ! { printf '%s\n' '{"hasCompletedOnboarding":true}' > "$seed" && { ln "$seed" "$config" || [ -e "$config" ]; }; } 2>/dev/null; then
+        echo "claude-wrapper: could not create $config; Claude Code may show its first-run setup" >&2
+    fi
+    if [ -n "$seed" ]; then rm -f "$seed"; fi
+    unset seed
+fi
+unset config
+
 # Claude Code's auto-updater runs `npm install -g` with the first npm on PATH.
 # That replaces this wrapper with an unpinned Claude, or, under a project's
 # mise Node, adds a `claude` shim to the home volume that comes before it on

@@ -267,6 +267,8 @@ PASS  Claude managed settings bypass permissions
 PASS  claude is the deployment wrapper
 PASS  claude is first on PATH
 PASS  claude wrapper keeps bypass switchable
+PASS  claude wrapper skips Claude's first-run setup
+PASS  Claude's config has finished onboarding
 PASS  runner can switch Claude back to bypass
 PASS  running Claude doesn't auto-update
 PASS  running Claude has --allow-dangerously-skip-permissions
@@ -374,6 +376,7 @@ What a failure usually means:
 | `runner's reports reach the server` | the runner doesn't start its reporter, or the server refuses its reports. It reports only when it sees `IS_SANDBOX`, which upstream's host image (the runner image's base) sets and the host passes on to runners; check that upstream's host still forwards it (`_RUNNER_ENV_ALLOWLIST` in `omnigent/host/connect.py`). A 403 means the report's tunnel token doesn't match the session's runner. The menu then shows no CPU, memory or agent countdown, and Keep running has no effect |
 | `Claude statusLine reports …` | the Claude Code statusLine payload changed shape, or it's not a Pro/Max login |
 | managed settings / wrappers | `images/runner/Dockerfile` no longer installs the wrappers over the real CLIs, or `claude_bypass_permissions` is off |
+| `claude wrapper skips Claude's first-run setup`, `Claude's config has finished onboarding` | the wrapper lost the block that creates `~/.claude.json` with `hasCompletedOnboarding`, or this session's home predates it. A new session's first message then sometimes fails after 180s with Claude Code's theme picker as the terminal's last output |
 | `… switch Claude back to bypass`, `running Claude has --allow-dangerously-skip-permissions` | `images/runner/patches/0003-claude-bypass-switch.patch` was dropped, or this session's Pod started before the deploy |
 | `claude is the deployment wrapper`, `claude is first on PATH`, `… doesn't auto-update` | Claude Code updated itself: it replaced `/usr/local/bin/claude`, or put a `claude` shim in `~/.local/share/mise/shims` by installing into a mise Node. The wrapper sets `DISABLE_AUTOUPDATER=1` to prevent that; this session may predate it. Remove the shim's package with that Node's `npm rm -g @anthropic-ai/claude-code` and run `mise reshim` |
 | user namespace / Podman / compose | k3s, containerd or the admission policies changed; run `scripts/check-userns` on the VM |
