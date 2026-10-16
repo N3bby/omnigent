@@ -33,7 +33,7 @@ server_image = "omnigent-server"
 # resolves the images CI published for the checked-out commit. Upstream build inputs
 # and the PostgreSQL/Vault digests live in versions.yaml.
 runner_digest = "sha256:85c38d7c00c73a80d47a316cac433274f168272b3786b46b7c6dcf3f20902ef9"
-server_digest = "sha256:c084c90339aeb998c6f7a0d93ef21f1fe9f7c65e559b768873cd0927ba4fd504"
+server_digest = "sha256:f9446c7a686514b797a9363eadac3bf819d490e2ecd5e01edd24d11f6ed81295"
 
 server_cpu_request = "500m"
 # Memory reserved for the server. The server, PostgreSQL and Vault have no
