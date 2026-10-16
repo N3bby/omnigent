@@ -20,7 +20,7 @@ new file mode 100644
 index 0000000..d99089c
 --- /dev/null
 +++ b/web/src/codexTheme.css
-@@ -0,0 +1,374 @@
+@@ -0,0 +1,382 @@
 +/* Codex palette: the layout and type changes that go beyond colour.
 + *
 + * themePalette.ts sets the colour tokens for `data-theme="codex"`; this file
@@ -161,6 +161,14 @@ index 0000000..d99089c
 +
 +[data-theme="codex"] [data-streamdown="code-block-header"] > span {
 +  margin-left: 0;
++}
++
++/* The wrap, copy and download buttons float over the header's right end. A
++ * short block is only as wide as its code, which without line numbers and the
++ * card padding left them over the language label. Keep their room free; it
++ * only widens blocks narrower than the label and the buttons. */
++[data-theme="codex"] .chat-code-block [data-streamdown="code-block-header"] {
++  padding-right: 6rem;
 +}
 +
 +/* The header grew, so re-centre its floating buttons on it. */

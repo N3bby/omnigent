@@ -556,7 +556,9 @@ Hand these to the user; they need their own devices or VM access:
     shadow. The labels in that bar, in one font and size,
     sit on one baseline, in Firefox as well as Chrome. A code block's wrap,
     copy and download buttons sit in one row in the middle of its header,
-    evenly spaced and without a backdrop. Queue a message while
+    evenly spaced and without a backdrop, and on a block only a few
+    characters wide (ask for `print(1)`) they don't cover the language label.
+    Queue a message while
     the agent works: it shows above the composer and the bar stays under it.
     Switch between light and dark mode, then pick **Omnigent** again: the
     pink look is back.
