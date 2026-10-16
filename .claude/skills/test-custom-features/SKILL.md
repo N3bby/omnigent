@@ -152,7 +152,7 @@ python -m unittest discover -s tests
 ```
 
 **Expected:** `configuration and manifests for <env> are valid` for both, and
-the unit tests end in `OK` (146 tests, 12 skipped, on 2026-10-15). Warnings that
+the unit tests end in `OK` (152 tests, 12 skipped, on 2026-10-16). Warnings that
 `ansible-playbook` or `shellcheck` isn't installed are fine. The tests cover
 the rendered settings behind several features, such as idle-session timing and
 the per-session home volume. They are the local part of the `Validate`
