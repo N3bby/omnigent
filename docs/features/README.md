@@ -18,6 +18,7 @@ What you see and choose while talking to an agent.
 | [The environment menu](environment-menu.md) | See whether the sandbox is running, starting or stopped, copy its SSH command, restart the agent, or stop the sandbox and keep its files | Nothing to turn off |
 | [The startup card](startup-progress.md) | Each step of a sandbox's start as it happens, why it failed in plain words, and the whole startup log | Nothing to turn off |
 | [Start without a message](start-without-message.md) | Start a session from the New session screen with an empty composer, so its sandbox and @ file search are ready before you ask anything | Nothing to turn off |
+| [A message whose connection dropped is sent again](resend-dropped-message.md) | Sending while a sandbox wakes no longer ends in "Load failed" when your connection drops, and the agent still gets the message once | Nothing to turn off |
 
 ## Subscriptions
 

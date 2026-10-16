@@ -1,0 +1,325 @@
+Send a message again when its connection drops, instead of failing it.
+
+While a sandbox starts, the server holds the message's POST open until the
+agent can take it, and a phone can lose that connection: Tailscale on iOS
+reapplies its routes when the session's Pod joins the tailnet. The server
+still delivered the message, but the send failed with "Load failed", put
+the message back in the composer and showed an error.
+
+postEvent now sends a message with a stable_id again, unchanged, when fetch
+fails without a response (a TypeError), after 1, 2, 4 and 8 seconds and then
+every 15 seconds, about two minutes in all. The server
+(0017-resend-dropped-message.patch) delivers it once, so a resend waits for
+the first copy or gets its answer. Other events, HTTP errors and aborts
+fail as before. When every resend fails, the error says the message may not
+have been sent and that sending it again won't send it twice.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0023-sandbox-picker-under-composer.patch.
+
+diff --git a/web/src/lib/sessionsApi.test.ts b/web/src/lib/sessionsApi.test.ts
+index 343f38d..8d9ec27 100644
+--- a/web/src/lib/sessionsApi.test.ts
++++ b/web/src/lib/sessionsApi.test.ts
+@@ -23,6 +23,7 @@ import {
+   interrupt,
+   listRunners,
+   openSessionStream,
++  MESSAGE_RESEND_DELAYS_MS,
+   postEvent,
+   retryRateLimitedTurn,
+   SESSION_HISTORY_PAGE_SIZE,
+@@ -1301,6 +1302,81 @@ describe("postEvent", () => {
+     expect(out.pendingId).toBe("pending_abc123");
+     expect(out.itemId).toBeUndefined();
+   });
++
++  describe("when the connection drops before the answer", () => {
++    const message = {
++      type: "message",
++      data: {
++        role: "user",
++        content: [{ type: "input_text", text: "hi" }],
++        stable_id: "0123456789abcdef0123456789abcdef",
++      },
++    };
++    const allDelays = MESSAGE_RESEND_DELAYS_MS.reduce((a, b) => a + b, 0);
++
++    beforeEach(() => {
++      vi.useFakeTimers();
++    });
++
++    afterEach(() => {
++      vi.useRealTimers();
++    });
++
++    it("sends a message with a stable_id again, unchanged, until it gets the answer", async () => {
++      fetchMock
++        .mockRejectedValueOnce(new TypeError("Load failed"))
++        .mockRejectedValueOnce(new TypeError("Load failed"))
++        .mockResolvedValueOnce(mockJsonResponse({ queued: true, pending_id: "pending_1" }));
++
++      const out = postEvent("conv_native", message);
++      await vi.advanceTimersByTimeAsync(999);
++      expect(fetchMock).toHaveBeenCalledTimes(1);
++      await vi.advanceTimersByTimeAsync(1 + 2_000);
++
++      await expect(out).resolves.toMatchObject({ queued: true, pendingId: "pending_1" });
++      expect(fetchMock).toHaveBeenCalledTimes(3);
++      for (const [url, init] of fetchMock.mock.calls as [string, RequestInit][]) {
++        expect(url).toBe("/v1/sessions/conv_native/events");
++        expect(JSON.parse(init.body as string)).toEqual(message);
++      }
++    });
++
++    it("gives up with the network error after about two minutes", async () => {
++      fetchMock.mockRejectedValue(new TypeError("Load failed"));
++
++      const out = postEvent("conv_native", message);
++      const failed = expect(out).rejects.toThrow("Load failed");
++      await vi.advanceTimersByTimeAsync(allDelays);
++
++      await failed;
++      expect(fetchMock).toHaveBeenCalledTimes(MESSAGE_RESEND_DELAYS_MS.length + 1);
++      expect(allDelays).toBeGreaterThanOrEqual(100_000);
++      expect(allDelays).toBeLessThanOrEqual(150_000);
++    });
++
++    it("doesn't resend other events, a message without a stable_id, or after the server answers", async () => {
++      const noStableId = { type: "message", data: { role: "user", content: [] } };
++      for (const event of [{ type: "interrupt", data: {} }, noStableId]) {
++        fetchMock.mockReset();
++        fetchMock.mockRejectedValue(new TypeError("Load failed"));
++        // oxlint-disable-next-line no-await-in-loop -- one event at a time
++        await expect(postEvent("conv_native", event)).rejects.toThrow("Load failed");
++        expect(fetchMock).toHaveBeenCalledTimes(1);
++      }
++      fetchMock.mockReset();
++      fetchMock.mockResolvedValue(
++        mockJsonResponse(
++          { error: { code: "runner_unavailable", message: "No runner bound for session" } },
++          { ok: false, status: 503 },
++        ),
++      );
++      await expect(postEvent("conv_native", message)).rejects.toThrow("No runner bound");
++      fetchMock.mockReset();
++      fetchMock.mockRejectedValue(new DOMException("The operation was aborted.", "AbortError"));
++      await expect(postEvent("conv_native", message)).rejects.toThrow("aborted");
++      expect(fetchMock).toHaveBeenCalledTimes(1);
++    });
++  });
+ });
+ 
+ describe("openSessionStream", () => {
+diff --git a/web/src/lib/sessionsApi.ts b/web/src/lib/sessionsApi.ts
+index a662bae..39b58a6 100644
+--- a/web/src/lib/sessionsApi.ts
++++ b/web/src/lib/sessionsApi.ts
+@@ -1372,25 +1372,68 @@ function isNestedSessionItem(item: SessionItem): item is NestedSessionItem {
+   return "data" in item && typeof (item as NestedSessionItem).data === "object";
+ }
+ 
++/**
++ * How long to wait before each resend of a message whose POST lost its
++ * connection, about two minutes in all. While a sandbox starts the server
++ * holds the POST open, and a phone can drop it then, for example when
++ * Tailscale reapplies its routes as the session's Pod joins the tailnet. The
++ * server delivers a message with the same `stable_id` once, so a resend
++ * waits for the first copy or gets its answer.
++ */
++export const MESSAGE_RESEND_DELAYS_MS = [
++  1_000, 2_000, 4_000, 8_000, 15_000, 15_000, 15_000, 15_000, 15_000, 15_000,
++];
++
++/**
++ * Whether `fetch` failed without a response: "Load failed" in Safari,
++ * "Failed to fetch" in Chrome, "NetworkError when attempting to fetch
++ * resource." in Firefox. An aborted fetch rejects with a DOMException instead.
++ */
++export function isNetworkError(err: unknown): boolean {
++  return err instanceof TypeError;
++}
++
++/** Run `send`, and again after a network error, until it gets a response. */
++async function sendResending(send: () => Promise<Response>, attempt = 0): Promise<Response> {
++  try {
++    return await send();
++  } catch (err) {
++    const delay = MESSAGE_RESEND_DELAYS_MS[attempt];
++    if (!isNetworkError(err) || delay === undefined) throw err;
++    await new Promise<void>((resolve) => {
++      setTimeout(resolve, delay);
++    });
++    return sendResending(send, attempt + 1);
++  }
++}
++
+ /**
+  * Submit a single event to a session. Validated server-side per the
+  * `type` discriminator (`message`, `function_call_output`,
+  * `interrupt`, `approval`, etc.); item-typed events are persisted
+  * synchronously before the route returns, then `session.input.consumed`
+  * fires on the live stream.
++ *
++ * A message with a `stable_id` is sent again when the connection drops
++ * before the answer comes (see {@link MESSAGE_RESEND_DELAYS_MS}).
+  */
+ export async function postEvent(
+   sessionId: string,
+   event: SessionEventInput,
+ ): Promise<PostEventResponse> {
+-  const res = await authenticatedFetch(`/v1/sessions/${encodeURIComponent(sessionId)}/events`, {
+-    method: "POST",
+-    headers: {
+-      "Content-Type": "application/json",
+-      ...backgroundSessionTitlesRequestHeaders(),
+-    },
+-    body: JSON.stringify(event),
+-  });
++  const send = (): Promise<Response> =>
++    authenticatedFetch(`/v1/sessions/${encodeURIComponent(sessionId)}/events`, {
++      method: "POST",
++      headers: {
++        "Content-Type": "application/json",
++        ...backgroundSessionTitlesRequestHeaders(),
++      },
++      body: JSON.stringify(event),
++    });
++  const resendable =
++    event.type === "message" &&
++    typeof (event.data as Record<string, unknown> | undefined)?.stable_id === "string";
++  const res = resendable ? await sendResending(send) : await send();
+   // Throw a typed ApiError (not the bare status line) so callers can branch
+   // on `code` — e.g. surface a friendly "runner didn't come online" message
+   // for the 503 the server returns when a host-bound runner never connects.
+diff --git a/web/src/store/chatStore.test.ts b/web/src/store/chatStore.test.ts
+index 4eee3c2..6b605c0 100644
+--- a/web/src/store/chatStore.test.ts
++++ b/web/src/store/chatStore.test.ts
+@@ -32,7 +32,12 @@ import type {
+ import type { ConversationItem, MessageItem } from "@/lib/conversationItems";
+ import { itemsToBlocks } from "@/lib/itemsToBlocks";
+ import { buildBubbles } from "@/lib/renderItems";
+-import { getSessionSlim, INITIAL_WINDOW_ITEMS, SESSION_HISTORY_PAGE_SIZE } from "@/lib/sessionsApi";
++import {
++  getSessionSlim,
++  INITIAL_WINDOW_ITEMS,
++  MESSAGE_RESEND_DELAYS_MS,
++  SESSION_HISTORY_PAGE_SIZE,
++} from "@/lib/sessionsApi";
+ import { SSE_STALL_TIMEOUT_MS } from "@/lib/sse";
+ import { serializeReplyDraft, type StoredReplyDraft } from "@/lib/replyDraft";
+ import { getCurrentAuthorId } from "@/lib/identity";
+@@ -2978,6 +2983,85 @@ describe("chatStore — send (first-send ordering)", () => {
+     });
+   });
+ 
++  it("keeps a message whose connection dropped, and sends it again with the same stable_id", async () => {
++    // While a sandbox wakes the server holds the POST open; a phone can lose
++    // that connection while the server still delivers the message. The send
++    // must not end in "Load failed" with the message back in the composer.
++    vi.useFakeTimers();
++    try {
++      useChatStore.setState({
++        conversationId: "conv_existing",
++        abortController: new AbortController(),
++        status: "idle",
++        sessionStatus: "running",
++        blocks: [],
++        pendingUserMessages: [],
++      });
++      const bodies: unknown[] = [];
++      fetchMock.mockImplementation((input, init) => {
++        const url = String(input);
++        if (url.endsWith("/v1/sessions/conv_existing/events")) {
++          bodies.push(JSON.parse(String(init?.body)));
++          if (bodies.length === 1) return Promise.reject(new TypeError("Load failed"));
++          return mockResponse({ queued: true, pending_id: "pending_1" });
++        }
++        return defaultFetchHandler(input, init);
++      });
++
++      const sent = useChatStore.getState().send("hi", "agent_xyz");
++      await vi.advanceTimersByTimeAsync(1_000);
++      await sent;
++
++      const state = useChatStore.getState();
++      expect(bodies).toHaveLength(2);
++      expect(bodies[1]).toEqual(bodies[0]);
++      expect(state.blocks.filter((b) => b.type === "error")).toEqual([]);
++      expect(state.failedSendDraft).toBeNull();
++      expect(state.pendingUserMessages).toHaveLength(1);
++      expect(state.pendingUserMessages[0]).toMatchObject({ posted: true });
++      expect(state.status).toBe("streaming");
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  it("says the message may not have been sent when the connection stays down", async () => {
++    vi.useFakeTimers();
++    try {
++      useChatStore.setState({
++        conversationId: "conv_existing",
++        abortController: new AbortController(),
++        status: "idle",
++        sessionStatus: "running",
++        blocks: [],
++        pendingUserMessages: [],
++      });
++      fetchMock.mockImplementation((input, init) => {
++        if (String(input).endsWith("/v1/sessions/conv_existing/events")) {
++          return Promise.reject(new TypeError("Load failed"));
++        }
++        return defaultFetchHandler(input, init);
++      });
++
++      const sent = useChatStore.getState().send("hi", "agent_xyz");
++      await vi.advanceTimersByTimeAsync(MESSAGE_RESEND_DELAYS_MS.reduce((a, b) => a + b, 0));
++      await sent;
++
++      const state = useChatStore.getState();
++      expect(state.pendingUserMessages).toEqual([]);
++      expect(state.failedSendDraft).toMatchObject({ conversationId: "conv_existing", text: "hi" });
++      const errorBlocks = state.blocks.filter((b) => b.type === "error");
++      expect(errorBlocks).toHaveLength(1);
++      expect(errorBlocks[0]).toMatchObject({
++        message:
++          "Couldn't reach the server, so your message may not have been sent. It's back in the composer, and sending it again won't send it twice.",
++        code: "",
++      });
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
+   it("routes a send failure to opts.onError and suppresses the default error block + draft", async () => {
+     // A caller that owns its failure UX (e.g. a codex `/side`, whose error
+     // belongs to the side-chat tab) passes onError. The failure must reach it,
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index 3a8ea49..25534e7 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -70,6 +70,7 @@ import {
+   fetchSessionItemsPage,
+   INITIAL_WINDOW_ITEMS,
+   interrupt as interruptSession,
++  isNetworkError,
+   openSessionStream,
+   postEvent,
+   type SessionItemsPage,
+@@ -7322,6 +7323,16 @@ function describeSendFailure(err: unknown): { message: string; code: string } {
+   if (err instanceof ApiError) {
+     return { message: err.message, code: err.code ?? "" };
+   }
++  // `postEvent` already resent the message for about two minutes, so the
++  // connection is down rather than blipped. The server may still have it; a
++  // resend of the same text keeps its stable_id, and the server sends it once.
++  if (isNetworkError(err)) {
++    return {
++      message:
++        "Couldn't reach the server, so your message may not have been sent. It's back in the composer, and sending it again won't send it twice.",
++      code: "",
++    };
++  }
+   return { message: err instanceof Error ? err.message : String(err), code: "" };
+ }
+ 

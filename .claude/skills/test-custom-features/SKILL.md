@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, and the sandbox picker under the composer. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, the sandbox picker under the composer, and resending a message whose connection dropped. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -92,6 +92,7 @@ PASS  images/server/patches/0013-subscriptions.patch
 PASS  images/server/patches/0014-session-subscription.patch
 PASS  images/server/patches/0015-environment-menu.patch
 PASS  images/server/patches/0016-startup-progress.patch
+PASS  images/server/patches/0017-resend-dropped-message.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -116,6 +117,7 @@ PASS  images/server/web-patches/0020-environment-menu.patch
 PASS  images/server/web-patches/0021-startup-progress.patch
 PASS  images/server/web-patches/0022-start-without-message.patch
 PASS  images/server/web-patches/0023-sandbox-picker-under-composer.patch
+PASS  images/server/web-patches/0024-resend-dropped-message.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -169,8 +171,9 @@ compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
 `@` file search, a project's repositories, the environment menu, the
-startup card or the New session screen, or changing their native message, composer, file-index, project
-settings, Stop, sandbox lifecycle, sandbox start or runner idle paths:
+startup card, the New session screen or the resend of a dropped message, or
+changing their native message, composer, file-index, project settings, Stop,
+sandbox lifecycle, sandbox start, runner idle or message send paths:
 
 ```bash
 .claude/skills/test-custom-features/scripts/check-patched-tests
@@ -181,8 +184,8 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx` | 1547 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py` | 87 passed, 1 skipped |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx` | 1549 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/integration/test_message_resend.py` | 90 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
@@ -194,7 +197,9 @@ card adds the last three frontend files (33 cases) and the last two backend
 files (16 cases; the one that reads a log through the real Kubernetes client
 is skipped, because these suites don't install it); the New session screen's
 two files cover starting without a message and the sandbox picker under the
-composer (617 cases, most of them earlier ones). These are
+composer (617 cases, most of them earlier ones); resending a message whose
+connection dropped adds 2 cases to `chatStore.test.ts` and the last backend
+file (3 cases, against a fake runner). These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -675,6 +680,16 @@ after the next message it names `feature-check`. Switch back, then remove
     **What should we work on?**. The sidebar row says **Claude Code**. Type
     `@` and part of a file's name: the menu is headed **Search workspace** and
     finds files in the repository. Then delete the session.
+
+18. **A message whose connection dropped:** it needs a waking sandbox, so
+    it's left to you. Open a session in Chrome and choose **Stop sandbox** in
+    its environment menu. Send `feature-check: reply with the word once`, and
+    while the startup card runs, set DevTools → Network to **Offline** for
+    about five seconds, then back to **No throttling**. The message stays,
+    with **Working…**, and no error appears. When the agent is up it gets the
+    message once: its terminal shows it once, and it replies once. On a
+    phone over Tailscale, sending while a stopped session wakes no longer
+    ends in **Load failed**.
 
 ## 7. Clean up
 

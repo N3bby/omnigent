@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Run the fast-mode and fuzzy "@" file search backend regressions and related
 # frontend suites, the project repositories frontend suites, the environment
-# menu's backend and frontend suites, the startup card's, and the New session
-# screen's, against a fresh, fully patched upstream checkout. Keep logs and
-# JUnit reports.
+# menu's backend and frontend suites, the startup card's, the New session
+# screen's, and the resend of a message whose connection dropped, against a
+# fresh, fully patched upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -93,6 +93,7 @@ PY
       tests/onboarding/sandboxes/test_agent_sandbox_environment.py \
       tests/runner/test_environment_report.py \
       tests/onboarding/sandboxes/test_startup_progress_k8s.py tests/server/test_startup_progress.py \
+      tests/server/integration/test_message_resend.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \

@@ -1,0 +1,194 @@
+Deliver a message the web UI sends again only once, server side.
+
+While a sandbox starts, the server holds a message's POST open until the
+agent can take it. If the connection drops in that time, the server still
+delivers the message but the browser sees only a network error, so the web
+UI (0024-resend-dropped-message.patch) sends it again with the same
+stable_id, and so may the user from the composer. Upstream delivers every
+copy: a Claude Code session gets the message typed into its terminal twice.
+
+A message with a stable_id now goes through omnigent_message_resend
+(images/server/omnigent_message_resend.py), keyed by session, user,
+stable_id and content, after the usual access check. A copy that comes
+while the first runs waits for it and gets its answer or error; one that
+comes after a success gets its answer for 15 minutes; after a failure the
+next copy runs again. An edited resend has other content, so it's
+delivered. Messages without a stable_id are handled as before.
+
+The test posts to a claude-native session whose fake runner counts the
+prompts it's given.
+Base: omnigent v0.15.0 (c8b9b85f822f), after 0016-startup-progress.patch.
+
+diff --git a/omnigent/server/routes/sessions/routes_events.py b/omnigent/server/routes/sessions/routes_events.py
+index 8416df8..8cf09d8 100644
+--- a/omnigent/server/routes/sessions/routes_events.py
++++ b/omnigent/server/routes/sessions/routes_events.py
+@@ -11,6 +11,7 @@ from collections.abc import Callable
+ from typing import Any, Literal, cast
+ 
+ import httpx
++import omnigent_message_resend as _resend
+ import omnigent_startup as _startup
+ from fastapi import (
+     APIRouter,
+@@ -526,6 +527,19 @@ def register_events_routes(
+                     )
+                     for event in body
+                 ]
++            stable_id = _resend.stable_id(body.data) if body.type == "message" else None
++            if stable_id is not None:
++                # The web UI sends a message again with its stable_id when the
++                # connection dropped before the answer came; deliver it once
++                # (omnigent_message_resend). Check access before answering a copy.
++                user_id = _get_user_id(request, auth_provider)
++                await _require_access_and_level(
++                    user_id, session_id, LEVEL_EDIT, permission_store, conversation_store
++                )
++                return await _resend.once(
++                    (session_id, user_id, stable_id, _resend.content_key(body.data)),
++                    lambda: _post_event_impl(request, session_id, body, in_flight=in_flight),
++                )
+             return await _post_event_impl(
+                 request,
+                 session_id,
+diff --git a/tests/server/integration/test_message_resend.py b/tests/server/integration/test_message_resend.py
+new file mode 100644
+index 0000000..ff4d9df
+--- /dev/null
++++ b/tests/server/integration/test_message_resend.py
+@@ -0,0 +1,135 @@
++"""A message sent again with its stable_id is delivered once.
++
++The web UI resends a message whose POST lost its connection, with the same
++``stable_id`` (``omnigent_message_resend``). These tests post to a
++claude-native session whose fake runner counts the prompts it's given.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++from typing import Any
++
++import httpx
++import omnigent_message_resend as resend
++import pytest
++
++from omnigent.server.routes import sessions as sessions_module
++from tests.server.integration.test_sessions_child_sessions import (
++    _create_parent_with_subagents,
++)
++
++pytestmark = pytest.mark.asyncio
++
++STABLE_ID = "0123456789abcdef0123456789abcdef"
++
++
++@pytest.fixture(autouse=True)
++def _forget_messages() -> Any:
++    resend.reset()
++    yield
++    resend.reset()
++
++
++async def _native_session(client: httpx.AsyncClient) -> str:
++    parent = await _create_parent_with_subagents(
++        client,
++        name="resend-parent",
++        sub_agents=[{"name": "impl", "harness": "claude-native"}],
++    )
++    resp = await client.post(
++        "/v1/sessions",
++        json={
++            "agent_id": parent["agent_id"],
++            "parent_session_id": parent["session_id"],
++            "title": "impl:resend",
++            "sub_agent_name": "impl",
++        },
++    )
++    assert resp.status_code == 201, resp.text
++    return resp.json()["id"]
++
++
++class _Runner:
++    """A fake runner that counts prompts and can hold the first one."""
++
++    def __init__(self) -> None:
++        self.prompts: list[str] = []
++        self.release = asyncio.Event()
++        self.release.set()
++        self.holding = asyncio.Event()
++
++    async def handle(self, request: httpx.Request) -> httpx.Response:
++        body = json.loads(request.content)
++        if request.url.path.endswith("/events") and body.get("type") == "message":
++            self.prompts.append(body["content"][0]["text"])
++            self.holding.set()
++            await self.release.wait()
++        return httpx.Response(204)
++
++
++@pytest.fixture
++def runner(monkeypatch: pytest.MonkeyPatch) -> Any:
++    fake = _Runner()
++    client = httpx.AsyncClient(transport=httpx.MockTransport(fake.handle), base_url="http://runner")
++
++    async def _get_runner_client(session_id: str, runner_router: object) -> httpx.AsyncClient:
++        del session_id, runner_router
++        return client
++
++    monkeypatch.setattr(sessions_module, "_get_runner_client", _get_runner_client)
++    yield fake
++
++
++def _message(text: str, stable_id: str | None = STABLE_ID) -> dict[str, Any]:
++    data: dict[str, Any] = {"role": "user", "content": [{"type": "input_text", "text": text}]}
++    if stable_id is not None:
++        data["stable_id"] = stable_id
++    return {"type": "message", "data": data}
++
++
++async def test_a_copy_waits_for_the_first_and_gets_its_answer(
++    client: httpx.AsyncClient, runner: _Runner
++) -> None:
++    session_id = await _native_session(client)
++    runner.release.clear()
++    first = asyncio.create_task(client.post(f"/v1/sessions/{session_id}/events", json=_message("hi")))
++    await asyncio.wait_for(runner.holding.wait(), 10)
++    copy = asyncio.create_task(client.post(f"/v1/sessions/{session_id}/events", json=_message("hi")))
++    await asyncio.sleep(0.1)
++    assert not copy.done()
++    runner.release.set()
++    first_resp, copy_resp = await asyncio.gather(first, copy)
++    assert first_resp.status_code == copy_resp.status_code == 202, first_resp.text
++    assert copy_resp.json() == first_resp.json()
++    assert first_resp.json()["pending_id"].startswith("pending_")
++    assert runner.prompts == ["hi"]
++
++
++async def test_a_later_copy_gets_the_answer_without_delivering(
++    client: httpx.AsyncClient, runner: _Runner
++) -> None:
++    session_id = await _native_session(client)
++    first = await client.post(f"/v1/sessions/{session_id}/events", json=_message("hi"))
++    again = await client.post(f"/v1/sessions/{session_id}/events", json=_message("hi"))
++    assert first.status_code == again.status_code == 202, first.text
++    assert again.json() == first.json()
++    assert runner.prompts == ["hi"]
++
++
++async def test_other_messages_are_still_delivered(
++    client: httpx.AsyncClient, runner: _Runner
++) -> None:
++    session_id = await _native_session(client)
++    for event in (
++        _message("one"),
++        # Edited in the composer before it was sent again: same stable_id.
++        _message("one, edited"),
++        _message("two", "fedcba9876543210fedcba9876543210"),
++        _message("three", None),
++        _message("three", None),
++    ):
++        resp = await client.post(f"/v1/sessions/{session_id}/events", json=event)
++        assert resp.status_code == 202, resp.text
++    assert runner.prompts == ["one", "one, edited", "two", "three", "three"]
