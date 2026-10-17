@@ -192,7 +192,7 @@ index de0fb80..bff95f4 100644
   * ``kunlabora/roadpass`` with a line-break opportunity after each slash, on
   * narrow screens. Hidden from sm, where the name truncates instead: Chrome
 @@ -276,7 +301,7 @@ function RepositoryCard({
-           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
+           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1"
            title={absoluteTime(updated)}
          >
 -          {plural(entry.names.length, "variable")}

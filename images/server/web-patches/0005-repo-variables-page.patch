@@ -909,7 +909,7 @@ index 0000000..de0fb80
 +          <FolderGit2Icon className="ui-icon shrink-0 text-muted-foreground" />
 +        </span>
 +        <span
-+          className="min-w-0 text-ui font-medium wrap-anywhere sm:flex-1 sm:truncate"
++          className="min-w-0 text-ui font-medium wrap-anywhere sm:truncate"
 +          title={entry.repository}
 +        >
 +          <span className="font-normal text-muted-foreground">{host}/</span>
@@ -917,7 +917,7 @@ index 0000000..de0fb80
 +          {breakAtSlashes(path)}
 +        </span>
 +        <span
-+          className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
++          className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1"
 +          title={absoluteTime(updated)}
 +        >
 +          {plural(entry.names.length, "variable")}

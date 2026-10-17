@@ -920,7 +920,7 @@ index bff95f4..8e5282d 100644
      </PageScroll>
    );
 @@ -301,7 +347,7 @@ function RepositoryCard({
-           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
+           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1"
            title={absoluteTime(updated)}
          >
 -          {summary(entry.names)}
