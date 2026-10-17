@@ -92,6 +92,7 @@ PASS  images/server/patches/0014-session-subscription.patch
 PASS  images/server/patches/0015-environment-menu.patch
 PASS  images/server/patches/0016-startup-progress.patch
 PASS  images/server/patches/0017-codex-bypass-default.patch
+PASS  images/server/patches/0018-binary-preview-gzip.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -192,7 +193,7 @@ patch sets, and runs the following suites against that source:
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
 | Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx` | 1874 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py` | 101 passed, 1 skipped |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py` | 350 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
@@ -212,6 +213,11 @@ startup card's, which runs the real clone script with Git stubbed. The
 fast-mode backend uses mocked CLI transports: a pass verifies command routing
 and lifecycle handling, not live Claude/Codex availability or billing. The
 file-index backend lists real temporary folders and Git repositories.
+`test_session_resources.py` is upstream's file viewer suite, with three cases
+from the binary preview fix (`0018-binary-preview-gzip.patch`). It runs on the
+locked Starlette 1.3.1, not the 1.8.0 the server image gets, but
+`test_skip_gzip_responder_forwards_start_before_bodies` fails on both without
+the fix.
 
 Prerequisites are Git, GNU patch, and mise. The helper installs the repo's mise
 tools and the Node/pnpm versions pinned in `versions.yaml`. It creates an

@@ -94,6 +94,7 @@ PY
       tests/runner/test_environment_report.py \
       tests/onboarding/sandboxes/test_startup_progress_k8s.py tests/server/test_startup_progress.py \
       tests/server/routes/test_codex_bypass_default.py \
+      tests/server/routes/test_session_resources.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \
