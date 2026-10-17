@@ -5,13 +5,13 @@ already captures for the context ring, and posts them whenever the statusLine
 re-renders. codex-native reads account/rateLimits/read from its app-server at
 turn start and end. Both post external_session_usage data.rate_limits, best-
 effort and deduplicated. Pairs with the server patch 0002-rate-limits.patch and
-the web patch 0001-composer-rate-limits.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+the web patch 0001-composer-rate-limits.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/harnesses/claude_native/forwarder.py b/omnigent/harnesses/claude_native/forwarder.py
-index f151964..8c4e4a9 100644
+index 3a9ba82..daa032d 100644
 --- a/omnigent/harnesses/claude_native/forwarder.py
 +++ b/omnigent/harnesses/claude_native/forwarder.py
-@@ -798,6 +798,8 @@ class _ForwardDedupeState:
+@@ -840,6 +840,8 @@ class _ForwardDedupeState:
  
      usage: dict[str, float] | None = None
      context_window: int | None = None
@@ -20,7 +20,7 @@ index f151964..8c4e4a9 100644
      recorded_token_usage: dict[str, int] | None = None
      observed_model: str | None = None
      posted_model: str | None = None
-@@ -1362,7 +1364,15 @@ async def forward_claude_transcript_to_session(
+@@ -1428,7 +1430,15 @@ async def forward_claude_transcript_to_session(
                          )
                      # Normalize the statusLine shim's raw capture into
                      # context.json (one stat when nothing changed).
@@ -36,7 +36,7 @@ index f151964..8c4e4a9 100644
                      transcript_path = read_transcript_path(bridge_dir)
                      _observe_transcript_discovery(
                          bridge_dir=bridge_dir,
-@@ -5277,6 +5287,47 @@ async def _post_external_session_usage(
+@@ -5652,6 +5662,47 @@ async def _post_external_session_usage(
          resp.raise_for_status()
  
  
@@ -146,10 +146,10 @@ index a3e414c..aa4b4f1 100644
      bridge_dir: Path,
      last_sig: tuple[int, int] | None,
 diff --git a/omnigent/harnesses/codex_native/forwarder.py b/omnigent/harnesses/codex_native/forwarder.py
-index 13310f8..0f7da99 100644
+index 9bb0e09..f2e3ebc 100644
 --- a/omnigent/harnesses/codex_native/forwarder.py
 +++ b/omnigent/harnesses/codex_native/forwarder.py
-@@ -438,6 +438,10 @@ class _CodexForwarderState:
+@@ -466,6 +466,10 @@ class _CodexForwarderState:
      posted_approval_preset: str | None = None
      parent_session_id: str | None = None
      codex_client: CodexAppServerClient | None = None
@@ -160,7 +160,7 @@ index 13310f8..0f7da99 100644
      subagents_by_thread: dict[str, str] = field(default_factory=dict)
      pending_child_threads: dict[str, str | None] = field(default_factory=dict)
      subscribed_child_threads: set[str] = field(default_factory=set)
-@@ -3584,6 +3588,9 @@ async def _maybe_handle_turn_event(
+@@ -3730,6 +3734,9 @@ async def _maybe_handle_turn_event(
                          session_id=session_id,
                          forwarder_state=forwarder_state,
                      )
@@ -170,7 +170,7 @@ index 13310f8..0f7da99 100644
          return True
      if method in {"turn/completed", "turn/failed"}:
          await _handle_terminal_turn_boundary(
-@@ -3598,6 +3605,9 @@ async def _maybe_handle_turn_event(
+@@ -3744,6 +3751,9 @@ async def _maybe_handle_turn_event(
              codex_client=codex_client,
              forwarder_state=forwarder_state,
          )
@@ -180,7 +180,7 @@ index 13310f8..0f7da99 100644
          return True
      if method == "thread/tokenUsage/updated":
          _handle_usage_update(usage_coalescer, params, forwarder_state)
-@@ -3762,6 +3772,132 @@ async def _handle_completed_event(
+@@ -3908,6 +3918,132 @@ async def _handle_completed_event(
      )
  
  

@@ -5,10 +5,10 @@ launch and every wake store omnigent-<first 8 hex of the host id>.<tailnet>,
 the name the runner image joins Tailscale as, in the omnigent.tailscale_host
 session label for page loads, and broadcast it as a session.tailscale event.
 Best-effort: a failed write is logged and the launch carries on.
-Applies after 0002-rate-limits.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+Applies after 0002-rate-limits.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
-index 9379916..03160a4 100644
+index f56924b..21c3c46 100644
 --- a/omnigent/server/routes/_sessions/orchestration.py
 +++ b/omnigent/server/routes/_sessions/orchestration.py
 @@ -12,6 +12,7 @@ import contextlib
@@ -19,15 +19,15 @@ index 9379916..03160a4 100644
  import re
  import secrets
  import time
-@@ -350,6 +351,7 @@ from omnigent.server.schemas import (
+@@ -371,6 +372,7 @@ from omnigent.server.schemas import (
      SessionModelEvent,
      SessionResponse,
      SessionStatusEvent,
 +    SessionTailscaleEvent,
      SessionUsageEvent,
  )
- from omnigent.spec.types import (
-@@ -3175,6 +3177,69 @@ async def _wait_for_host_bound_runner_client(
+ from omnigent.server.subagent_activity import (
+@@ -4098,6 +4100,69 @@ async def _wait_for_host_bound_runner_client(
              await asyncio.gather(*outstanding, return_exceptions=True)
  
  
@@ -97,7 +97,7 @@ index 9379916..03160a4 100644
  async def _run_managed_launch(
      *,
      session_id: str,
-@@ -3377,6 +3442,7 @@ async def _bind_and_launch_managed_runner(
+@@ -4300,6 +4365,7 @@ async def _bind_and_launch_managed_runner(
          return
      if relaunch_host is not None:
          await _note_workspace_reset_on_recreate(session_id, conversation_store)
@@ -105,7 +105,7 @@ index 9379916..03160a4 100644
      # Host bound; what remains is launching the runner and waiting
      # for its tunnel.
      _publish_sandbox_status(session_id, "connecting")
-@@ -4197,6 +4263,8 @@ async def _run_managed_wake(
+@@ -5120,6 +5186,8 @@ async def _run_managed_wake(
          if refreshed is None:
              tracker.fail(session_id, "session not found after wake")
              return
@@ -115,10 +115,10 @@ index 9379916..03160a4 100644
          host_conn = host_registry.get(host_id) if host_registry is not None else None
          if host_registry is not None and host_conn is None:
 diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
-index f0513ec..3b40c79 100644
+index 9de884a..cbaea32 100644
 --- a/omnigent/server/schemas.py
 +++ b/omnigent/server/schemas.py
-@@ -3178,6 +3178,25 @@ class SessionUsageEvent(_SSEEventBase):
+@@ -3187,6 +3187,25 @@ class SessionUsageEvent(_SSEEventBase):
      rate_limits: dict[str, list[dict[str, float | int | None]]] | None = None
  
  

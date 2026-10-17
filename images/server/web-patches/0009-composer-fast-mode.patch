@@ -9,10 +9,10 @@ session.usage events and the omnigent.fast_mode session label drive a small,
 filled lightning bolt left of the model selector, with a tooltip. Pairs with
 the runner patch 0004-fast-mode.patch and the server patch
 0008-fast-mode.patch. Applies after 0002-composer-tailscale-host.patch. Base:
-omnigent v0.15.0 (c8b9b85f822f).
+omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/web/src/components/SlashCommandMenu.tsx b/web/src/components/SlashCommandMenu.tsx
-index 24b78a4..aa2ae2d 100644
+index 66819f8..a03abf4 100644
 --- a/web/src/components/SlashCommandMenu.tsx
 +++ b/web/src/components/SlashCommandMenu.tsx
 @@ -22,6 +22,7 @@ export const BUILTIN_SLASH_COMMANDS: Record<string, string> = {
@@ -24,7 +24,7 @@ index 24b78a4..aa2ae2d 100644
  };
  
 diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
-index 85196d5..7fb0470 100644
+index 4d18c37..27637f9 100644
 --- a/web/src/lib/events.ts
 +++ b/web/src/lib/events.ts
 @@ -558,6 +558,8 @@ export interface SessionStatusEvent {
@@ -142,10 +142,10 @@ index 0000000..9feec31
 +  return fastMode ? "/fast off" : "/fast on";
 +}
 diff --git a/web/src/lib/sse.ts b/web/src/lib/sse.ts
-index a463da4..0553407 100644
+index 3f4811e..03611f3 100644
 --- a/web/src/lib/sse.ts
 +++ b/web/src/lib/sse.ts
-@@ -73,6 +73,7 @@ import type {
+@@ -74,6 +74,7 @@ import type {
  } from "./events";
  import { NATIVE_TOOL_TYPES } from "./events";
  import { parseRateLimits } from "./rateLimits";
@@ -153,7 +153,7 @@ index a463da4..0553407 100644
  import { parseTailscaleHost } from "./tailscale";
  import { routingExtrasFromWire } from "./routingDecision";
  import type {
-@@ -639,12 +640,17 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+@@ -640,12 +641,17 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
      if (rateLimits === null) {
        return null;
      }
@@ -172,7 +172,7 @@ index a463da4..0553407 100644
      ) {
        return null;
      }
-@@ -656,6 +662,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+@@ -657,6 +663,7 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
        ...(totalCostUsd !== undefined ? { totalCostUsd } : {}),
        ...(usageByModel !== undefined ? { usageByModel } : {}),
        ...(rateLimits !== undefined ? { rateLimits } : {}),
@@ -181,7 +181,7 @@ index a463da4..0553407 100644
    }
    if (eventType === "session.model") {
 diff --git a/web/src/pages/ChatPage.test.ts b/web/src/pages/ChatPage.test.ts
-index 69d76e7..7fcc681 100644
+index c615000..cb1dbf6 100644
 --- a/web/src/pages/ChatPage.test.ts
 +++ b/web/src/pages/ChatPage.test.ts
 @@ -1345,10 +1345,12 @@ describe("buildSlashCommandMap", () => {
@@ -233,10 +233,19 @@ index 69d76e7..7fcc681 100644
        "/mlflow-bug",
      ]);
 diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
-index 7632c5e..90e218b 100644
+index bd63625..e46fbd6 100644
 --- a/web/src/pages/ChatPage.tsx
 +++ b/web/src/pages/ChatPage.tsx
-@@ -226,6 +226,7 @@ import { ComposerWorkspaceStatus } from "@/components/composer/ComposerWorkspace
+@@ -25,7 +25,7 @@ import {
+   useState,
+ } from "react";
+ import { BotIcon, WandSparklesIcon, FileTextIcon, Loader2Icon, XIcon } from "lucide-react";
+-import { Tooltip, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
++import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+ import {
+   composerSendShortcutKeys,
+   KeyboardShortcutTooltipContent,
+@@ -228,6 +228,7 @@ import { ComposerWorkspaceStatus } from "@/components/composer/ComposerWorkspace
  import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
  import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
  import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
@@ -244,7 +253,7 @@ index 7632c5e..90e218b 100644
  import { ComposerTailscaleHost } from "@/components/composer/ComposerTailscaleHost";
  import { ComposerGatewayLink } from "@/components/composer/ComposerGatewayLink";
  import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
-@@ -2137,6 +2138,7 @@ export function buildSlashCommandMap(
+@@ -1969,6 +1970,7 @@ export function buildSlashCommandMap(
    showSide = false,
    skillPrefix: "/" | "$" = "/",
    supportsModelReset = false,
@@ -252,7 +261,7 @@ index 7632c5e..90e218b 100644
  ): Record<string, string> {
    const m: Record<string, string> = {};
    for (const [name, description] of Object.entries(BUILTIN_SLASH_COMMANDS)) {
-@@ -2147,6 +2149,8 @@ export function buildSlashCommandMap(
+@@ -1979,6 +1981,8 @@ export function buildSlashCommandMap(
      if (name === "/btw" && !showBtw) continue;
      // /side is a Codex CLI built-in (ephemeral fork) — only offer it on codex-native.
      if (name === "/side" && !showSide) continue;
@@ -261,7 +270,7 @@ index 7632c5e..90e218b 100644
      m[name] = name === "/model" && supportsModelReset ? `${description} | default` : description;
    }
    for (const skill of skills) {
-@@ -2177,6 +2181,7 @@ export function buildSlashCommandWithArgsSet(
+@@ -2009,6 +2013,7 @@ export function buildSlashCommandWithArgsSet(
    showBtw = false,
    showSide = false,
    skillPrefix: "/" | "$" = "/",
@@ -269,7 +278,7 @@ index 7632c5e..90e218b 100644
  ): Set<string> {
    const s = new Set<string>();
    if (showEffort) s.add("/effort");
-@@ -2185,6 +2190,8 @@ export function buildSlashCommandWithArgsSet(
+@@ -2017,6 +2022,8 @@ export function buildSlashCommandWithArgsSet(
    if (showBtw) s.add("/btw");
    // Selecting /side fills "/side " so the user types the side question after it.
    if (showSide) s.add("/side");
@@ -278,7 +287,7 @@ index 7632c5e..90e218b 100644
    for (const skill of skills) s.add(`${skillPrefix}${skill.name}`);
    return s;
  }
-@@ -2238,6 +2245,18 @@ export function composerHarnessLabel(
+@@ -2070,6 +2077,18 @@ export function composerHarnessLabel(
    return display ?? harness;
  }
  
@@ -297,7 +306,7 @@ index 7632c5e..90e218b 100644
  /**
   * Status tray under the composer: branch left, model/context right.
   * Pulled up behind the card so a shelf peeks below; skips render when empty.
-@@ -2782,6 +2801,9 @@ function ComposerImpl(
+@@ -2647,6 +2666,9 @@ function ComposerImpl(
    // only on codex-native sessions. Selected/typed, it sends as plaintext to the
    // vendor turn path (see submit); the runner opens the fork as a sub-agent chat.
    const showSide = supportsSideChat(sessionHarness);
@@ -307,7 +316,7 @@ index 7632c5e..90e218b 100644
    const slashCommands = useMemo(
      () =>
        buildSlashCommandMap(
-@@ -2793,6 +2815,7 @@ function ComposerImpl(
+@@ -2658,6 +2680,7 @@ function ComposerImpl(
          showSide,
          skillPrefix,
          supportsModelReset,
@@ -315,15 +324,15 @@ index 7632c5e..90e218b 100644
        ),
      [
        skills,
-@@ -2803,6 +2826,7 @@ function ComposerImpl(
+@@ -2668,6 +2691,7 @@ function ComposerImpl(
        showSide,
        skillPrefix,
        supportsModelReset,
 +      showFast,
      ],
    );
-   // Skills always need an optional argument fill-in so the user can
-@@ -2810,8 +2834,16 @@ function ComposerImpl(
+   const slashCommandNames = useMemo(() => Object.keys(slashCommands), [slashCommands]);
+@@ -2676,8 +2700,16 @@ function ComposerImpl(
    // existing fill/execute split.
    const slashCommandsWithArgs = useMemo(
      () =>
@@ -342,7 +351,7 @@ index 7632c5e..90e218b 100644
    );
  
    // Suggest names until a space starts the arguments; exclude file paths.
-@@ -3342,6 +3374,21 @@ function ComposerImpl(
+@@ -3289,6 +3321,21 @@ function ComposerImpl(
        // executed locally. It must reach the vendor TUI as plaintext so Claude
        // Code opens its side chat and the forwarder relays the answer to the
        // web overlay; fall through to the plaintext send path below.
@@ -364,7 +373,7 @@ index 7632c5e..90e218b 100644
        if (
          cmd !== "/btw" &&
          cmd !== "/side" &&
-@@ -4026,6 +4073,23 @@ function ComposerImpl(
+@@ -3860,6 +3907,23 @@ function ComposerImpl(
            ),
            trailing: (
              <>
@@ -389,18 +398,18 @@ index 7632c5e..90e218b 100644
                  <SessionHarnessPicker
                    busy={configBusy}
 diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
-index 9c4364b..77dc4a8 100644
+index 094e17a..072555a 100644
 --- a/web/src/store/chatStore.ts
 +++ b/web/src/store/chatStore.ts
-@@ -148,6 +148,7 @@ import { isSystemUserContent, taskNotificationMarkerContent } from "@/lib/system
- import { isNativeTerminalSession as isNativeTerminalSessionFn } from "@/lib/nativeCodingAgents";
- import type { StoredReplyDraft } from "@/lib/replyDraft";
+@@ -155,6 +155,7 @@ import type { StoredReplyDraft } from "@/lib/replyDraft";
+ import { toast } from "sonner";
+ 
  import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
 +import { fastModeFromLabels } from "@/lib/fastMode";
  import { tailscaleHostFromLabels } from "@/lib/tailscale";
  
  export interface SendOptions {
-@@ -863,6 +864,13 @@ export interface ConversationState {
+@@ -946,6 +947,13 @@ export interface ConversationState {
     * ``session.usage`` events that carry them. ``null`` until reported.
     */
    rateLimits: RateLimits | null;
@@ -414,7 +423,7 @@ index 9c4364b..77dc4a8 100644
    /**
     * Tailnet name of the session's managed runner Pod, e.g.
     * ``omnigent-e1dcab9b.tail1234.ts.net``. Seeded from the session's
-@@ -1749,6 +1757,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+@@ -1931,6 +1939,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
    sessionCostUsd: null,
    sessionUsageByModel: null,
    rateLimits: null,
@@ -422,7 +431,7 @@ index 9c4364b..77dc4a8 100644
    tailscaleHost: null,
    gitBranch: null,
    todos: [],
-@@ -4059,6 +4068,7 @@ async function bindStream(
+@@ -4540,6 +4549,7 @@ async function bindStream(
          sessionReasoningEffort: effectiveEffort,
          tokensUsed: session.lastTotalTokens ?? null,
          rateLimits: rateLimitsFromLabels(session.labels),
@@ -430,7 +439,7 @@ index 9c4364b..77dc4a8 100644
          tailscaleHost: tailscaleHostFromLabels(session.labels),
          sessionCostUsd:
            state.sessionCostUsd !== stateBeforeFetch.sessionCostUsd
-@@ -4262,6 +4272,8 @@ function reconnectStatusPatch(
+@@ -4779,6 +4789,8 @@ function reconnectStatusPatch(
    if (session.usageByModel != null) patch.sessionUsageByModel = session.usageByModel;
    const rateLimits = rateLimitsFromLabels(session.labels);
    if (rateLimits !== null) patch.rateLimits = rateLimits;
@@ -439,7 +448,7 @@ index 9c4364b..77dc4a8 100644
    const tailscaleHost = tailscaleHostFromLabels(session.labels);
    if (tailscaleHost !== null) patch.tailscaleHost = tailscaleHost;
    // `waiting` is a TURN-END snapshot (the turn finished; only background work
-@@ -6192,6 +6204,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+@@ -7178,6 +7190,7 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
          sessionCostUsd?: number;
          sessionUsageByModel?: Record<string, ModelUsage>;
          rateLimits?: RateLimits;
@@ -447,7 +456,7 @@ index 9c4364b..77dc4a8 100644
        } = {};
        if (event.contextTokens !== undefined) {
          patch.tokensUsed = event.contextTokens;
-@@ -6208,6 +6221,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+@@ -7194,6 +7207,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
        if (event.rateLimits !== undefined) {
          patch.rateLimits = event.rateLimits;
        }
@@ -458,10 +467,10 @@ index 9c4364b..77dc4a8 100644
          const entry =
            sourceConversationId === null
 diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
-index d930eca..26a5066 100644
+index 44781ca..1fd62cb 100644
 --- a/web/src/store/conversationState.ts
 +++ b/web/src/store/conversationState.ts
-@@ -49,6 +49,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
+@@ -50,6 +50,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
    sessionCostUsd: true,
    sessionUsageByModel: true,
    rateLimits: true,
@@ -469,7 +478,7 @@ index d930eca..26a5066 100644
    tailscaleHost: true,
    gitBranch: true,
    todos: true,
-@@ -117,6 +118,7 @@ export function createInitialConversationState(): ConversationState {
+@@ -120,6 +121,7 @@ export function createInitialConversationState(): ConversationState {
      sessionCostUsd: null,
      sessionUsageByModel: null,
      rateLimits: null,

@@ -3,23 +3,171 @@ Remove the Share button from the web UI.
 Drops Share from the chat header, its dropdown and the mobile three-dot menu,
 and from each session row's menu in the sidebar (kebab and right-click). The
 Settings → Sharing admin page and the server's sharing API are unchanged.
-Base: omnigent v0.15.0 (c8b9b85f822f).
-
+Upstream's tests of the Share affordances check that they're gone.
+Base: omnigent v0.18.0 (a8676d23e88d).
+diff --git a/web/src/shell/AppShell.test.tsx b/web/src/shell/AppShell.test.tsx
+index bbf27d8..a296ef2 100644
+--- a/web/src/shell/AppShell.test.tsx
++++ b/web/src/shell/AppShell.test.tsx
+@@ -4670,65 +4670,15 @@ describe("AppShell clone/fork action", () => {
+ });
+ 
+ describe("AppShell share action", () => {
+-  it("passes the conversation workspace to the Share dialog before the snapshot loads", () => {
+-    withWindowOrigin("https://app.example.com", () => {
+-      mockConversations([{ id: "conv_home", permission_level: 4, workspace: "/home/alice" }]);
+-      renderShell("/c/conv_home", serverInfo({ sharing_mode: "restricted_read_only" }));
+-      fireEvent.click(screen.getByRole("button", { name: /share session/i }));
+-      expect(
+-        screen.getByText(/This session's working directory \(a home or root directory\)/),
+-      ).toBeInTheDocument();
+-      expect(screen.getByText(/Please be careful when sharing/)).toBeInTheDocument();
+-      expect(screen.getByRole("button", { name: /^grant$/i })).toBeInTheDocument();
+-    });
+-  });
+-
+-  it("shows the Share button to an owner of a top-level session", () => {
+-    // permission_level 4 = owner. Share is owner-only; a top-level session
+-    // the viewer owns can be shared. (A multi-user owner's list row carries
+-    // level 4; null only occurs in single-user mode, where Share is hidden.)
++  it("has no Share button, even for an owner of a top-level session", () => {
++    // This deployment removes Share from the header, its dropdown and the
++    // mobile three-dot menu.
+     withWindowOrigin("https://app.example.com", () => {
+       mockConversations([{ id: "conv_top", permission_level: 4 }]);
+ 
+       renderShell("/c/conv_top");
+ 
+-      const shareButton = screen.getByRole("button", { name: /share session/i });
+-      expect(shareButton).toBeInTheDocument();
+-      expect(shareButton).toBeEnabled();
+-    });
+-  });
+-
+-  it("disables the Share button when the server is local", () => {
+-    withWindowOrigin("http://localhost:6767", () => {
+-      mockConversations([{ id: "conv_top", permission_level: 4 }]);
+-
+-      renderShell("/c/conv_top");
+-
+-      const shareButton = screen.getByRole("button", { name: /share session/i });
+-      expect(shareButton).toBeDisabled();
+-      expect(
+-        screen.getByLabelText(
+-          "Share session disabled: Sharing is unavailable from a local server.",
+-        ),
+-      ).toBeInTheDocument();
+-      expect(shareButton).toHaveAttribute("title", "Sharing is unavailable from a local server.");
+-    });
+-  });
+-
+-  it("disables the Share button when the server reports sharing_mode off", () => {
+-    // Non-local origin isolates the reason to the server policy (not the
+-    // local-server path), so the tooltip must be the sharing-off message.
+-    withWindowOrigin("https://app.example.com", () => {
+-      mockConversations([{ id: "conv_top", permission_level: 4 }]);
+-
+-      renderShell("/c/conv_top", serverInfo({ sharing_mode: "off" }));
+-
+-      const shareButton = screen.getByRole("button", { name: /share session/i });
+-      expect(shareButton).toBeDisabled();
+-      expect(shareButton).toHaveAttribute(
+-        "title",
+-        "Sharing has been disabled for this Omnigent server.",
+-      );
++      expect(screen.queryByRole("button", { name: /share session/i })).toBeNull();
+     });
+   });
+ 
+@@ -4747,34 +4697,6 @@ describe("AppShell share action", () => {
+     });
+   });
+ 
+-  it("keeps the Share button on a multi-user header-auth deploy (not single_user)", () => {
+-    // Header-auth multi-user (SSO proxy): accounts off AND no login_url, same
+-    // shape as single-user, but single_user is false — the button must stay.
+-    // This is the regression the single_user signal fixes.
+-    withWindowOrigin("https://app.example.com", () => {
+-      mockConversations([{ id: "conv_top", permission_level: 4 }]);
+-
+-      renderShell("/c/conv_top", serverInfo({ single_user: false }));
+-
+-      const shareButton = screen.getByRole("button", { name: /share session/i });
+-      expect(shareButton).toBeInTheDocument();
+-      expect(shareButton).toBeEnabled();
+-    });
+-  });
+-
+-  it("keeps the Share button enabled when sharing_mode is read_only", () => {
+-    // read_only still permits (read) grants, so the affordance stays live —
+-    // the modal caps the level, the button is not disabled.
+-    withWindowOrigin("https://app.example.com", () => {
+-      mockConversations([{ id: "conv_top", permission_level: 4 }]);
+-
+-      renderShell("/c/conv_top", serverInfo({ sharing_mode: "read_only" }));
+-
+-      const shareButton = screen.getByRole("button", { name: /share session/i });
+-      expect(shareButton).toBeEnabled();
+-    });
+-  });
+-
+   it("hides the Share button on a sub-agent (child) session", () => {
+     // The server rejects sharing a sub-agent session (children inherit the
+     // parent's grants), so the affordance is suppressed for children even
+@@ -4848,7 +4770,7 @@ describe("Mobile header actions menu", () => {
+     return trigger;
+   }
+ 
+-  it("offers Share and Fork for an owner of a top-level session", () => {
++  it("offers Fork but no Share for an owner of a top-level session", () => {
+     withWindowOrigin("https://app.example.com", () => {
+       mockConversations([
+         {
+@@ -4865,9 +4787,8 @@ describe("Mobile header actions menu", () => {
+ 
+       // Menu labels drop the redundant "session" suffix (most entries relate to
+       // the session), so match the bare verbs.
+-      const shareItem = screen.getByRole("menuitem", { name: /^share$/i });
+-      expect(shareItem).toBeInTheDocument();
+-      expect(shareItem).not.toHaveAttribute("data-disabled");
++      // This deployment removes Share from the menu.
++      expect(screen.queryByRole("menuitem", { name: /^share$/i })).toBeNull();
+       expect(screen.getByRole("menuitem", { name: /^fork$/i })).toBeInTheDocument();
+       // Agent info is always available (policies section is shown for any session).
+       expect(screen.getByRole("menuitem", { name: /agent info/i })).toBeInTheDocument();
+@@ -4876,17 +4797,6 @@ describe("Mobile header actions menu", () => {
+     });
+   });
+ 
+-  it("disables the mobile Share item when the server is local", () => {
+-    withWindowOrigin("http://127.0.0.1:6767", () => {
+-      mockConversations([{ id: "conv_host", permission_level: 4, labels: {} }]);
+-
+-      renderShell("/c/conv_host");
+-      openActionsMenu();
+-
+-      expect(screen.getByRole("menuitem", { name: /^share$/i })).toHaveAttribute("data-disabled");
+-    });
+-  });
+-
+   it("offers no Share to a read-only collaborator", () => {
+     // level 1 = read: can fork, but not share (needs ≥3).
+     mockConversations([{ id: "conv_shared", permission_level: 1 }]);
 diff --git a/web/src/shell/AppShell.tsx b/web/src/shell/AppShell.tsx
-index 1ec7959..fd48acc 100644
+index 0245cf3..b27e489 100644
 --- a/web/src/shell/AppShell.tsx
 +++ b/web/src/shell/AppShell.tsx
-@@ -77,9 +77,6 @@ import {
-   nativeCodingAgentForSubagentWrapper,
+@@ -98,8 +98,7 @@ import {
    WRAPPER_LABEL_KEY,
  } from "@/lib/nativeCodingAgents";
--import { useServerInfo } from "@/lib/CapabilitiesContext";
--import { isSingleUserMode } from "@/lib/capabilities";
+ import { useServerInfo } from "@/lib/CapabilitiesContext";
+-import { isFeatureEnabled, isSingleUserMode } from "@/lib/capabilities";
 -import { isCurrentServerLocal } from "@/lib/serverOrigin";
++import { isFeatureEnabled } from "@/lib/capabilities";
  import { isTempConvId, useChatStore } from "@/store/chatStore";
+ import { supportsSideChat } from "@/lib/sideChat";
  import {
-   STARTING_GRACE_S,
-@@ -625,32 +622,9 @@ export function AppShell() {
+@@ -734,31 +733,9 @@ export function AppShell() {
    // three-dot menu render the exact same set (they can't drift apart).
    // Stop session is not a header action — it lives in the sidebar row's
    // kebab menu (see Sidebar's ConversationRow).
@@ -32,7 +180,6 @@ index 1ec7959..fd48acc 100644
 -  // ``isOwnerLevel`` is permissive on a null level (single-user / still
 -  // loading), matching the sidebar's owner-only Share gate and the terminal
 -  // ``readOnly`` gate below; the authoritative snapshot level resolves it.
--  const serverInfo = useServerInfo();
 -  const canShare =
 -    !!conversationId &&
 -    isKnownTopLevel &&
@@ -55,20 +202,89 @@ index 1ec7959..fd48acc 100644
    // Any viewer can fork a shared session, sub-agents included — forking a
    // child is how it gets promoted to a top-level session of its own. Gated on
    // knowing which the session is (sidebar row or loaded snapshot) so the
-@@ -2161,8 +2135,6 @@ export function AppShell() {
-                     wrapperLabel={wrapperLabel}
+@@ -2476,8 +2453,6 @@ export function AppShell() {
                      canShare={canShare}
                      canFork={canClone}
+                     forkDisabledReason={forkDisabledReason}
 -                    shareDisabled={shareDisabled}
 -                    shareDisabledReason={shareDisabledReason}
                      onShare={() => setShareOpen(true)}
                      onFork={() => forkDialogContextValue.openForkDialog()}
                      hasAgentInfo={hasAgentInfo}
+diff --git a/web/src/shell/Sidebar.rowActions.test.tsx b/web/src/shell/Sidebar.rowActions.test.tsx
+index ffde910..5cffba6 100644
+--- a/web/src/shell/Sidebar.rowActions.test.tsx
++++ b/web/src/shell/Sidebar.rowActions.test.tsx
+@@ -1258,7 +1258,8 @@ describe("right-click context menu", () => {
+ 
+     // The context menu carries the full set of kebab actions — same testids,
+     // so it renders from the shared ConversationMenuItems body.
+-    expect(screen.getByTestId("share-conversation")).toBeInTheDocument();
++    // This deployment removes Share from the row menus.
++    expect(screen.queryByTestId("share-conversation")).toBeNull();
+     expect(screen.getByTestId("rename-conversation")).toBeInTheDocument();
+     expect(screen.getByTestId("move-to-project")).toBeInTheDocument();
+     expect(screen.getByTestId("archive-conversation")).toBeInTheDocument();
+@@ -1393,26 +1394,18 @@ describe("right-click context menu", () => {
+ });
+ 
+ describe("sharing kill switch", () => {
+-  it("disables the row's Share item for a manager when sharing_mode is off", () => {
+-    // CONV is owner-level (permission_level null → canManage), yet a server
+-    // reporting sharing_mode off must gray out Share for everyone.
+-    mockConversations([CONV]);
+-    renderSidebar(undefined, serverInfo({ sharing_mode: "off" }));
+-
+-    fireEvent.contextMenu(screen.getByRole("link", { name: /My Session/ }));
+-
+-    // Radix marks a disabled menu item with data-disabled; the enabled
+-    // (on / read_only) branch renders a plain selectable item without it.
+-    expect(screen.getByTestId("share-conversation")).toHaveAttribute("data-disabled");
+-  });
+-
+-  it("keeps the row's Share item enabled for a manager when sharing is on", () => {
+-    mockConversations([CONV]);
+-    renderSidebar(undefined, serverInfo({ sharing_mode: "on" }));
++  it("has no Share item for a manager, whatever the sharing mode", () => {
++    // This deployment removes Share from each row's kebab and right-click menu.
++    for (const sharing_mode of ["off", "on"] as const) {
++      mockConversations([CONV]);
++      const { unmount } = renderSidebar(undefined, serverInfo({ sharing_mode }));
+ 
+-    fireEvent.contextMenu(screen.getByRole("link", { name: /My Session/ }));
++      fireEvent.contextMenu(screen.getByRole("link", { name: /My Session/ }));
+ 
+-    expect(screen.getByTestId("share-conversation")).not.toHaveAttribute("data-disabled");
++      expect(screen.queryByTestId("share-conversation")).toBeNull();
++      expect(screen.getByTestId("rename-conversation")).toBeInTheDocument();
++      unmount();
++    }
+   });
+ 
+   it("omits the row's Share item entirely in single-user mode", () => {
+@@ -1430,17 +1423,6 @@ describe("sharing kill switch", () => {
+     expect(screen.getByTestId("rename-conversation")).toBeInTheDocument();
+   });
+ 
+-  it("keeps the row's Share item on a multi-user header-auth deploy (not single_user)", () => {
+-    // Header-auth multi-user (SSO proxy): accounts off AND no login_url, same
+-    // shape as single-user, but single_user false — the item must stay.
+-    mockConversations([CONV]);
+-    renderSidebar(undefined, serverInfo({ single_user: false }));
+-
+-    fireEvent.contextMenu(screen.getByRole("link", { name: /My Session/ }));
+-
+-    expect(screen.getByTestId("share-conversation")).toBeInTheDocument();
+-    expect(screen.getByTestId("share-conversation")).not.toHaveAttribute("data-disabled");
+-  });
+ });
+ 
+ describe("peek mode row menu", () => {
 diff --git a/web/src/shell/Sidebar.tsx b/web/src/shell/Sidebar.tsx
-index 76b6fbb..c42cd0f 100644
+index 2c2ec4d..1ec3bc2 100644
 --- a/web/src/shell/Sidebar.tsx
 +++ b/web/src/shell/Sidebar.tsx
-@@ -57,7 +57,6 @@ import {
+@@ -66,7 +66,6 @@ import {
    PlusIcon,
    SearchIcon,
    Settings2Icon,
@@ -76,15 +292,15 @@ index 76b6fbb..c42cd0f 100644
    SmilePlusIcon,
    SquareIcon,
    SquareCheckIcon,
-@@ -161,7 +160,6 @@ import { relativeTime } from "@/lib/relativeTime";
- import { USER_SESSION_TITLE_MAX_CHARS } from "@/lib/sessionTitles";
- import { showToast } from "@/components/ui/toast";
+@@ -183,7 +182,6 @@ import { showToast } from "@/components/ui/toast";
  import { showArchiveUndoToast } from "./archiveUndoToast";
+ import { unpinWithUndo } from "./unpinUndoToast";
+ import { useArchiveWorktreePrompt } from "./ArchiveWorktreeDialog";
 -import { PermissionsModal } from "@/components/PermissionsModal";
  import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
  import { ProjectRowIcon } from "./ProjectPicker";
  import { EmojiPicker } from "@/components/ProjectIconPicker";
-@@ -3296,7 +3294,6 @@ function ConversationMenuItems({
+@@ -3814,7 +3812,6 @@ function ConversationMenuItems({
    isPinned,
    isArchived,
    isOwner,
@@ -92,15 +308,15 @@ index 76b6fbb..c42cd0f 100644
    isSingleUser,
    canStop,
    canMarkUnread,
-@@ -3307,7 +3304,6 @@ function ConversationMenuItems({
+@@ -3824,7 +3821,6 @@ function ConversationMenuItems({
+   onMarkRead,
    onProjectAssigned,
    moveToProject,
-   stopSession,
 -  setShareOpen,
    setForkOpen,
    setIsEditing,
    setStopOpen,
-@@ -3321,11 +3317,7 @@ function ConversationMenuItems({
+@@ -3838,11 +3834,7 @@ function ConversationMenuItems({
    isPinned: boolean;
    isArchived: boolean;
    isOwner: boolean;
@@ -113,15 +329,15 @@ index 76b6fbb..c42cd0f 100644
    isSingleUser: boolean;
    canStop: boolean;
    // Whether "Mark as unread" applies: any row not already showing the
-@@ -3338,7 +3330,6 @@ function ConversationMenuItems({
+@@ -3854,7 +3846,6 @@ function ConversationMenuItems({
+   onMarkRead: () => void;
    onProjectAssigned?: (projectName: string) => void;
    moveToProject: ReturnType<typeof useMoveToProject>;
-   stopSession: ReturnType<typeof useStopSession>;
 -  setShareOpen: (open: boolean) => void;
    setForkOpen: (open: boolean) => void;
    setIsEditing: (editing: boolean) => void;
    setStopOpen: (open: boolean) => void;
-@@ -3422,33 +3413,6 @@ function ConversationMenuItems({
+@@ -3940,33 +3931,6 @@ function ConversationMenuItems({
            {isPinned ? "Unpin" : "Pin"}
          </C.Item>
        )}
@@ -152,10 +368,10 @@ index 76b6fbb..c42cd0f 100644
 -            </TooltipContent>
 -          </Tooltip>
 -        ))}
-       <C.Item data-testid="fork-conversation" onSelect={() => setForkOpen(true)}>
-         <GitForkIcon className="size-3.5" />
-         Fork
-@@ -3783,7 +3747,6 @@ function ConversationRowImpl({
+       <SessionActionMenuItem
+         Item={C.Item}
+         data-testid="fork-conversation"
+@@ -4550,7 +4514,6 @@ function ConversationRowImpl({
    const [menuOpen, setMenuOpen] = useState(false);
    // Opt-in "delete local branch" checkbox (worktree sessions only).
    const [deleteBranch, setDeleteBranch] = useState(false);
@@ -163,7 +379,7 @@ index 76b6fbb..c42cd0f 100644
    const [forkOpen, setForkOpen] = useState(false);
    const [leaveOpen, setLeaveOpen] = useState(false);
    const gitBranch = conversation.git_branch ?? null;
-@@ -3796,13 +3759,7 @@ function ConversationRowImpl({
+@@ -4563,13 +4526,7 @@ function ConversationRowImpl({
    // `isOwner` below is derived from it. From context (ViewerIdContext).
    const viewerId = useContext(ViewerIdContext);
    const isOwner = isOwnedByViewer(conversation, viewerId);
@@ -177,7 +393,7 @@ index 76b6fbb..c42cd0f 100644
    const isSingleUser = isSingleUserMode(serverInfo);
    // Gates the kebab's "Stop session" item. `false` = runner known-offline
    // (already stopped — hide the destructive control); `undefined` = not yet
-@@ -4056,7 +4013,6 @@ function ConversationRowImpl({
+@@ -4860,7 +4817,6 @@ function ConversationRowImpl({
      isPinned,
      isArchived,
      isOwner,
@@ -185,17 +401,17 @@ index 76b6fbb..c42cd0f 100644
      isSingleUser,
      canStop,
      canMarkUnread,
-@@ -4067,7 +4023,6 @@ function ConversationRowImpl({
+@@ -4870,7 +4826,6 @@ function ConversationRowImpl({
+     onMarkRead: () => markConversationRead(conversation.id, conversation.updated_at),
      onProjectAssigned,
      moveToProject,
-     stopSession,
 -    setShareOpen,
      setForkOpen,
      setIsEditing,
      setStopOpen,
-@@ -4465,15 +4420,6 @@ function ConversationRowImpl({
-           </DropdownMenu>
-         </div>
+@@ -5323,15 +5278,6 @@ function ConversationRowImpl({
+           </ContextMenuContent>
+         </ContextMenu>
        )}
 -      {/* Mount only while open — one per row, its hook tree + JSX would
 -          otherwise run closed on every row re-render. */}

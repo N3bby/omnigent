@@ -2,7 +2,8 @@ Add a Codex palette that makes the web UI look like the Codex desktop app.
 
 Codex sits next to the other palettes in Settings -> Appearance and works in
 light and dark mode. themePalette.ts adds its colour tokens (neutral greys,
-black or white primary, a blue accent) and themePalettes.generated.css is
+black or white primary, a blue accent, and a darker blue for links in light
+mode, which upstream wants at 4.5:1 on white) and themePalettes.generated.css is
 regenerated from them. codexTheme.css changes the layout under
 [data-theme="codex"]: the native system font, a flat grey sidebar with
 compact rows, user messages in a borderless grey bubble, "Worked" folds
@@ -12,14 +13,14 @@ when messages are queued above it, its labels on one baseline whatever the
 fonts and browser, a terminal mark instead of the mascot on the
 new-session screen, and rounder menus. The other palettes are unchanged.
 Applies after 0010-fast-mode-command-lifecycle.patch.
-Base: omnigent v0.15.0 (c8b9b85f822f).
+Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/web/src/codexTheme.css b/web/src/codexTheme.css
 new file mode 100644
-index 0000000..11cdce8
+index 0000000..d99089c
 --- /dev/null
 +++ b/web/src/codexTheme.css
-@@ -0,0 +1,374 @@
+@@ -0,0 +1,382 @@
 +/* Codex palette: the layout and type changes that go beyond colour.
 + *
 + * themePalette.ts sets the colour tokens for `data-theme="codex"`; this file
@@ -160,6 +161,14 @@ index 0000000..11cdce8
 +
 +[data-theme="codex"] [data-streamdown="code-block-header"] > span {
 +  margin-left: 0;
++}
++
++/* The wrap, copy and download buttons float over the header's right end. A
++ * short block is only as wide as its code, which without line numbers and the
++ * card padding left them over the language label. Keep their room free; it
++ * only widens blocks narrower than the label and the buttons. */
++[data-theme="codex"] .chat-code-block [data-streamdown="code-block-header"] {
++  padding-right: 6rem;
 +}
 +
 +/* The header grew, so re-centre its floating buttons on it. */
@@ -395,7 +404,7 @@ index 0000000..11cdce8
 +  border-radius: 16px;
 +}
 diff --git a/web/src/index.css b/web/src/index.css
-index 5ae9a88..e30e86a 100644
+index 617e01b..9b9642b 100644
 --- a/web/src/index.css
 +++ b/web/src/index.css
 @@ -4,6 +4,7 @@
@@ -407,7 +416,7 @@ index 5ae9a88..e30e86a 100644
  /* Streamdown ships utility classes pre-compiled in its dist; this @source
   * pragma tells Tailwind v4 to scan those files so the classes survive the
 diff --git a/web/src/lib/themePalette.ts b/web/src/lib/themePalette.ts
-index 9da72d1..3e5be74 100644
+index 1b435fa..6c79846 100644
 --- a/web/src/lib/themePalette.ts
 +++ b/web/src/lib/themePalette.ts
 @@ -29,6 +29,7 @@ const STORAGE_KEY = "omnigent:ui-theme-palette";
@@ -418,7 +427,7 @@ index 9da72d1..3e5be74 100644
    "dracula",
    "github",
    "catppuccin",
-@@ -295,6 +296,72 @@ export const PALETTES: readonly PaletteMeta[] = [
+@@ -300,6 +301,74 @@ export const PALETTES: readonly PaletteMeta[] = [
        }),
      },
    },
@@ -454,6 +463,8 @@ index 9da72d1..3e5be74 100644
 +        borderStrong: "#c4c4c4",
 +        ring: "#0285ff",
 +        brandAccent: "#0285ff",
++        // Codex's #0285ff is too light for link text on white (3.6:1).
++        link: "#0571d7",
 +        sidebar: "#f7f7f7",
 +        sidebarPrimary: "#0d0d0d",
 +        sidebarActive: "rgba(0, 0, 0, 0.06)",
@@ -492,10 +503,10 @@ index 9da72d1..3e5be74 100644
      id: "dracula",
      label: "Dracula",
 diff --git a/web/src/themePalettes.generated.css b/web/src/themePalettes.generated.css
-index dbc1096..69bfd44 100644
+index 7402cf0..23a2e59 100644
 --- a/web/src/themePalettes.generated.css
 +++ b/web/src/themePalettes.generated.css
-@@ -97,6 +97,98 @@
+@@ -99,6 +99,98 @@
      linear-gradient(135deg, rgba(255, 255, 255, 0.04), transparent 60%);
  }
  

@@ -1,26 +1,10 @@
 Recognize active Codex credentials before launch and invalidate account-specific model caches.
 
-diff --git a/omnigent/harnesses/codex_native/main.py b/omnigent/harnesses/codex_native/main.py
---- a/omnigent/harnesses/codex_native/main.py
-+++ b/omnigent/harnesses/codex_native/main.py
-@@ -159,7 +159,12 @@
- 
-     codex_home = _codex_home_config_source_from_env()
-     return _CodexAuthSource(
--        auth_path=codex_home / "auth.json",
-+        auth_path=(
-+            Path("/run/omnigent/subscriptions/codex-auth.json")
-+            if Path("/run/omnigent/subscriptions/codex-auth.json").is_file()
-+            and Path("/run/omnigent/subscriptions/codex-auth.json").stat().st_size > 0
-+            else codex_home / "auth.json"
-+        ),
-         config_path=codex_home / "config.toml",
-     )
- 
 diff --git a/omnigent/harnesses/codex_native/app_server.py b/omnigent/harnesses/codex_native/app_server.py
+index 6011b14..50f0f6b 100644
 --- a/omnigent/harnesses/codex_native/app_server.py
 +++ b/omnigent/harnesses/codex_native/app_server.py
-@@ -1345,6 +1345,7 @@
+@@ -1512,6 +1512,7 @@ def _codex_config_identity(source_home: Path) -> tuple[object, ...]:
          binary_identity(str(source_home / "config.toml")),
          binary_identity(picker_config.get("model_catalog_json")),
          binary_identity(str(source_home / "auth.json")),
@@ -28,7 +12,7 @@ diff --git a/omnigent/harnesses/codex_native/app_server.py b/omnigent/harnesses/
      )
  
  
-@@ -1396,8 +1397,11 @@
+@@ -1563,8 +1564,11 @@ def _probe_codex_home(config_overrides: Sequence[str]) -> Path:
      # ``CODEX_HOME``) never reuses another source's bridged ``auth.json``
      # symlink or account-specific cached state under identical overrides.
      source_home = _codex_home_config_source_from_env()
@@ -41,7 +25,7 @@ diff --git a/omnigent/harnesses/codex_native/app_server.py b/omnigent/harnesses/
      ).hexdigest()[:12]
      home = Path.home() / ".omnigent" / "cache" / "codex-model-probe" / key
      home.mkdir(mode=0o700, parents=True, exist_ok=True)
-@@ -3520,6 +3524,9 @@
+@@ -3785,6 +3789,9 @@ def _codex_login_usable() -> bool:
      """
      from omnigent.onboarding.ambient import codex_auth_has_credential
  
@@ -50,4 +34,22 @@ diff --git a/omnigent/harnesses/codex_native/app_server.py b/omnigent/harnesses/
 +        return codex_auth_has_credential(projected)
      return codex_auth_has_credential(_codex_home_config_source_from_env() / "auth.json")
  
+ 
+diff --git a/omnigent/harnesses/codex_native/main.py b/omnigent/harnesses/codex_native/main.py
+index 0de59d8..e4e6fa9 100644
+--- a/omnigent/harnesses/codex_native/main.py
++++ b/omnigent/harnesses/codex_native/main.py
+@@ -167,7 +167,12 @@ def _resolve_codex_auth_source() -> _CodexAuthSource:
+ 
+     codex_home = _codex_home_config_source_from_env()
+     return _CodexAuthSource(
+-        auth_path=codex_home / "auth.json",
++        auth_path=(
++            Path("/run/omnigent/subscriptions/codex-auth.json")
++            if Path("/run/omnigent/subscriptions/codex-auth.json").is_file()
++            and Path("/run/omnigent/subscriptions/codex-auth.json").stat().st_size > 0
++            else codex_home / "auth.json"
++        ),
+         config_path=codex_home / "config.toml",
+     )
  

@@ -68,7 +68,7 @@ else
 fi
 
 echo "== Fuzzy @ file search: runner patch is installed"
-check "runner serves the workspace file index" grep -q '/file-index"' "$site/omnigent/runner/app.py"
+check "runner serves the workspace file index" grep -qs '/file-index"' "$site/omnigent/runner/resource_routes.py" "$site/omnigent/runner/app.py"
 check "runner lists every workspace file" grep -q 'def list_file_paths' "$site/omnigent/runner/environment_filesystem.py"
 echo "== Agents don't stop to ask"
 want='{"permissions":{"defaultMode":"bypassPermissions"},"skipDangerousModePermissionPrompt":true}'
@@ -101,7 +101,9 @@ else
   fail "running Claude has --allow-dangerously-skip-permissions" "$claude_args"
 fi
 check "codex is the deployment wrapper" grep -q -- '--dangerously-bypass-approvals-and-sandbox' /usr/local/bin/codex
-codex_args="$(pgrep -a codex-real 2>/dev/null | head -n1)"
+# Codex runs as node, so match its command line. The app-server and the TUI
+# are separate processes, and only the ones that were given the flag show it.
+codex_args="$(pgrep -af codex-real 2>/dev/null || true)"
 if [[ -z "$codex_args" ]]; then
   skip "running Codex has --dangerously-bypass-approvals-and-sandbox" "no Codex running in this Pod"
 elif [[ "$codex_args" == *--dangerously-bypass-approvals-and-sandbox* ]]; then

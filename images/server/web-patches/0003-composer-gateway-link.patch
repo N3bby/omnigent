@@ -8,7 +8,7 @@ SSH configuration ID local to each client. In the desktop app the link
 opens as a new window: the app blocks same-window links to other apps and
 routes new-window ones to its open-link prompt. Applies after
 0002-composer-tailscale-host.patch.
-Base: omnigent v0.15.0 (c8b9b85f822f).
+Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/web/src/components/composer/ComposerGatewayLink.test.tsx b/web/src/components/composer/ComposerGatewayLink.test.tsx
 new file mode 100644
@@ -198,10 +198,10 @@ index 0000000..3f9e6a0
 +  return `jetbrains-gateway://connect#${params.toString().replaceAll("+", "%20")}`;
 +}
 diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
-index 9e4a16a..7632c5e 100644
+index 6d9137b..bd63625 100644
 --- a/web/src/pages/ChatPage.tsx
 +++ b/web/src/pages/ChatPage.tsx
-@@ -227,6 +227,7 @@ import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
+@@ -229,6 +229,7 @@ import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
  import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
  import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
  import { ComposerTailscaleHost } from "@/components/composer/ComposerTailscaleHost";
@@ -209,8 +209,8 @@ index 9e4a16a..7632c5e 100644
  import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
  import { composerContextFromLabels } from "@/lib/composerContextAdapters";
  import {
-@@ -3702,6 +3703,10 @@ function ComposerImpl(
-             showWorktree={composerGit.isWorktree === true}
+@@ -3576,6 +3577,10 @@ function ComposerImpl(
+             onOpen={openComposerGithubTab}
            />
            <ComposerTailscaleHost host={composerTailscaleHost} />
 +          <ComposerGatewayLink

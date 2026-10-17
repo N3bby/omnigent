@@ -15,13 +15,12 @@ The repository chip now starts further right, so its popover, lined up with
 the chip's start and kept from flipping or sliding by 0006, was squeezed into
 the room right of the chip on a phone. The popover now slides left on open
 just far enough to keep its 24rem width, 8px off the screen's right edge.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0022-start-without-message.patch.
-
+Base: omnigent v0.18.0 (a8676d23e88d), after 0022-start-without-message.patch.
 diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
-index b7f3ef3..fbf8ba8 100644
+index 6382973..19ed513 100644
 --- a/web/src/shell/NewChatDialog.test.tsx
 +++ b/web/src/shell/NewChatDialog.test.tsx
-@@ -2861,8 +2861,8 @@ describe("Run on this machine (desktop host enrollment)", () => {
+@@ -2924,8 +2924,8 @@ describe("Run on this machine (desktop host enrollment)", () => {
  
      const chip = screen.getByTestId("new-chat-landing-host-chip");
      await waitFor(() => expect(chip).toHaveAccessibleName("Host: Connecting…, Offline"));
@@ -32,7 +31,7 @@ index b7f3ef3..fbf8ba8 100644
  
      await openHostMenu();
      const item = await screen.findByTestId("new-chat-landing-run-on-this-machine");
-@@ -3282,17 +3282,21 @@ describe("NewChatLandingScreen", () => {
+@@ -3443,17 +3443,20 @@ describe("NewChatLandingScreen", () => {
      const voice = screen.getByRole("button", { name: "Voice dictation" });
      const submit = screen.getByTestId("new-chat-landing-submit");
      expect(attach).toHaveClass("size-8", "md:size-7");
@@ -52,8 +51,7 @@ index b7f3ef3..fbf8ba8 100644
 -      "pl-1",
 -      "pr-2",
 -      "md:h-7",
-+      "px-0.5",
-+      "md:px-1",
++      "px-1",
 +      "text-xs",
 +      "leading-4",
      );
@@ -62,7 +60,7 @@ index b7f3ef3..fbf8ba8 100644
      expect(hostChip).toHaveAttribute("title", "Host: This machine, Online");
      expect(permission).toHaveClass(
        "h-8",
-@@ -3359,18 +3363,20 @@ describe("NewChatLandingScreen", () => {
+@@ -3519,18 +3522,20 @@ describe("NewChatLandingScreen", () => {
      expect(rightControls).toHaveClass("flex", "shrink-0", "items-center", "gap-1");
      expect(rightControls).toHaveClass("ml-auto", "max-w-full");
      expect(rightControls).not.toHaveClass("flex-1");
@@ -86,7 +84,7 @@ index b7f3ef3..fbf8ba8 100644
        permission,
        harness,
        voice,
-@@ -3396,7 +3402,7 @@ describe("NewChatLandingScreen", () => {
+@@ -3556,7 +3561,7 @@ describe("NewChatLandingScreen", () => {
        "16",
      );
      expect(screen.getByTestId("new-chat-landing-host-status")).toHaveClass("size-2");
@@ -95,7 +93,7 @@ index b7f3ef3..fbf8ba8 100644
      expect(screen.queryByTestId("new-chat-landing-footer")).toBeNull();
      expect(composerSurface).toContainElement(composer);
      expect(composerSurface).not.toContainElement(notices);
-@@ -5776,13 +5782,13 @@ describe("NewChatLandingScreen", () => {
+@@ -6091,13 +6096,12 @@ describe("NewChatLandingScreen", () => {
        "leading-4",
      );
      expect(screen.getByTestId("new-chat-landing-host-chip")).toHaveClass(
@@ -109,14 +107,13 @@ index b7f3ef3..fbf8ba8 100644
 +      "h-6",
 +      "max-w-[calc(50%-0.25rem)]",
 +      "gap-1",
-+      "px-0.5",
-+      "md:px-1",
++      "px-1",
 +      "text-xs",
 +      "leading-4",
      );
      expect(screen.getByTestId("new-chat-landing-permission-chip")).toHaveClass(
        "h-8",
-@@ -6812,6 +6818,47 @@ describe("NewChatLandingScreen", () => {
+@@ -7220,6 +7224,47 @@ describe("NewChatLandingScreen", () => {
      ).toBe("bottom");
    });
  
@@ -165,10 +162,10 @@ index b7f3ef3..fbf8ba8 100644
      // Controlled promise so the in-flight state is observable
      // deterministically before the create resolves.
 diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
-index 3b0321d..17e040a 100644
+index 2761bad..6ea3ca5 100644
 --- a/web/src/shell/NewChatDialog.tsx
 +++ b/web/src/shell/NewChatDialog.tsx
-@@ -20,7 +20,6 @@ import { useNavigate, useSearchParams } from "@/lib/routing";
+@@ -23,7 +23,6 @@ import { CANVAS_QUERY_PARAM, canvasLocation } from "@/canvas/canvasNavigation";
  import {
    ComposerWorkspaceBar,
    ComposerWorkspaceTrigger,
@@ -176,8 +173,8 @@ index 3b0321d..17e040a 100644
    ComposerPermissionPicker,
    ComposerConfigTooltipRows,
  } from "@/components/composer/ComposerControls";
-@@ -44,6 +43,7 @@ import {
- } from "@/components/composer/ChatComposer";
+@@ -50,6 +49,7 @@ import {
+ import { ComposerMentionChips } from "@/components/composer/ComposerMentionChips";
  import { useQuery, useQueryClient } from "@tanstack/react-query";
  import {
 +  LaptopIcon,
@@ -255,7 +252,7 @@ index 3b0321d..17e040a 100644
    };
  }
  
-@@ -2603,8 +2634,9 @@ export function NewChatLandingScreen() {
+@@ -2625,8 +2656,9 @@ export function NewChatLandingScreen() {
    const [pendingRepoUrl, setPendingRepoUrl] = useState<string>("");
    // The repository chip's popover stays on the side it opened on as repos are
    // added and the keyboard comes and goes. It's about 400px tall with a repo
@@ -267,7 +264,7 @@ index 3b0321d..17e040a 100644
    // When the server advertises the GitHub App and the caller has connected
    // their account, offer a picker over their repos instead of only the
    // free-text URL. The /repos endpoint returns `connected: false` when the
-@@ -5941,6 +5973,193 @@ export function NewChatLandingScreen() {
+@@ -6097,6 +6129,195 @@ export function NewChatLandingScreen() {
      );
    };
  
@@ -409,7 +406,9 @@ index 3b0321d..17e040a 100644
 +          </DropdownMenuItem>
 +        )}
 +        {hasCloudOptions && <DropdownMenuSeparator />}
-+        <div className="px-2 py-1 text-xs leading-[18px] text-muted-foreground/75">Local</div>
++        <div className="px-2 py-1 text-xs leading-[18px] text-muted-foreground/75">
++          My machines
++        </div>
 +        {allHosts.length === 0 && !showConnectThisMachine && (
 +          <div className="px-2 py-1.5 text-sm text-muted-foreground">No hosts connected yet.</div>
 +        )}
@@ -461,23 +460,23 @@ index 3b0321d..17e040a 100644
    // The two compact triggers preserve the existing directory and worktree
    // actions while exposing their distinct state truthfully.
    const workspaceChip = (
-@@ -6025,6 +6244,7 @@ export function NewChatLandingScreen() {
-         >
-           {sandboxSelected && (
-             <ComposerWorkspaceBar data-testid="new-chat-landing-workspace-controls">
+@@ -6190,6 +6411,7 @@ export function NewChatLandingScreen() {
+               className="h-7 px-2 py-0.5 md:h-[37px] md:px-3 md:py-1.5"
+               data-testid="new-chat-landing-workspace-controls"
+             >
 +              {hostPicker}
                {/* Sandbox repository chip — the sandbox counterpart of the
                working-directory chip. There is no filesystem to browse
                before the sandbox exists, so the workspace is specified as
-@@ -6240,6 +6460,7 @@ export function NewChatLandingScreen() {
-           )}
-           {!sandboxSelected && (
-             <ComposerWorkspaceBar data-testid="new-chat-landing-workspace-controls">
+@@ -6408,6 +6630,7 @@ export function NewChatLandingScreen() {
+               className="h-7 px-2 py-0.5 md:h-[37px] md:px-3 md:py-1.5"
+               data-testid="new-chat-landing-workspace-controls"
+             >
 +              {hostPicker}
                {workspaceLoading && cachedWorkspace === null && (
                  <NewChatPickerLoading
                    label="Loading working directory"
-@@ -6730,180 +6951,6 @@ export function NewChatLandingScreen() {
+@@ -6833,180 +7056,6 @@ export function NewChatLandingScreen() {
                          }}
                        />
                      </div>
@@ -605,7 +604,7 @@ index 3b0321d..17e040a 100644
 -                        )}
 -                        {hasCloudOptions && <DropdownMenuSeparator />}
 -                        <div className="px-2 py-1 text-xs leading-[18px] text-muted-foreground/75">
--                          Local
+-                          My machines
 -                        </div>
 -                        {allHosts.length === 0 && !showConnectThisMachine && (
 -                          <div className="px-2 py-1.5 text-sm text-muted-foreground">

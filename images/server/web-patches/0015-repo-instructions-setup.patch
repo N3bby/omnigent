@@ -15,7 +15,7 @@ load lazily (HighlightedTextarea): the instructions as Markdown, the script as
 shell or as the language its #! line names. The field stays a native
 textarea with transparent text over a highlighted copy, so typing, selection
 and phone keyboards work as before.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0014.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0014.
 
 diff --git a/web/src/components/HighlightedTextarea.test.tsx b/web/src/components/HighlightedTextarea.test.tsx
 new file mode 100644
@@ -920,7 +920,7 @@ index bff95f4..8e5282d 100644
      </PageScroll>
    );
 @@ -301,7 +347,7 @@ function RepositoryCard({
-           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
+           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1"
            title={absoluteTime(updated)}
          >
 -          {summary(entry.names)}

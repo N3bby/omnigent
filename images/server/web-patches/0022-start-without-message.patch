@@ -14,13 +14,12 @@ the agent, such as "Claude Code", as for any untitled session.
 
 Smart Routing is allowed too: the server skips routing on a blank message
 and keeps the default harness.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0021-startup-progress.patch.
-
+Base: omnigent v0.18.0 (a8676d23e88d), after 0021-startup-progress.patch.
 diff --git a/web/src/shell/NewChatDialog.flow.test.tsx b/web/src/shell/NewChatDialog.flow.test.tsx
-index c9cd26b..1bdf60a 100644
+index 802f3d9..600181c 100644
 --- a/web/src/shell/NewChatDialog.flow.test.tsx
 +++ b/web/src/shell/NewChatDialog.flow.test.tsx
-@@ -903,27 +903,54 @@ describe("NewChatLandingScreen create flow", () => {
+@@ -1119,27 +1119,54 @@ describe("NewChatLandingScreen create flow", () => {
      expect(screen.getByTestId("new-chat-landing-workspace-chip").textContent).toContain("foo");
    });
  
@@ -92,10 +91,10 @@ index c9cd26b..1bdf60a 100644
  
    it("does not create a session when Enter confirms active IME composition", async () => {
 diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
-index 4e46564..b7f3ef3 100644
+index 6fff1b5..6382973 100644
 --- a/web/src/shell/NewChatDialog.test.tsx
 +++ b/web/src/shell/NewChatDialog.test.tsx
-@@ -3417,6 +3417,8 @@ describe("NewChatLandingScreen", () => {
+@@ -3577,6 +3577,8 @@ describe("NewChatLandingScreen", () => {
    });
  
    it("uses the scoped light tooltip treatment for submit errors", async () => {
@@ -104,7 +103,7 @@ index 4e46564..b7f3ef3 100644
      renderLanding();
  
      const submit = screen.getByTestId("new-chat-landing-submit");
-@@ -4891,39 +4893,38 @@ describe("NewChatLandingScreen", () => {
+@@ -5165,26 +5167,23 @@ describe("NewChatLandingScreen", () => {
      );
    });
  
@@ -136,6 +135,19 @@ index 4e46564..b7f3ef3 100644
      expect(submit.disabled).toBe(false);
    });
  
+@@ -5202,7 +5201,8 @@ describe("NewChatLandingScreen", () => {
+     expect(await screen.findByRole("status", { name: "Loading working directory" })).toBeVisible();
+     const submit = screen.getByTestId("new-chat-landing-submit");
+     fireEvent.pointerMove(submit.parentElement!, { pointerType: "mouse" });
+-    expect(await screen.findByRole("tooltip")).toHaveTextContent("Enter a message to get started");
++    // A session starts without a message, so the empty composer can submit.
++    expect(await screen.findByRole("tooltip")).toHaveTextContent("Start session");
+ 
+     fireEvent.change(screen.getByTestId("new-chat-landing-input"), {
+       target: { value: "set up the project" },
+@@ -5267,15 +5267,17 @@ describe("NewChatLandingScreen", () => {
+   });
+ 
    it("keeps the disabled reason tooltip on the new-chat submit button", async () => {
 +    // No hosts: the tooltip names the next missing input.
 +    mockHosts([]);
@@ -156,10 +168,10 @@ index 4e46564..b7f3ef3 100644
  
    it("shows the default shortcut in the new-chat submit tooltip", async () => {
 diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
-index 2315788..3b0321d 100644
+index d077805..2761bad 100644
 --- a/web/src/shell/NewChatDialog.tsx
 +++ b/web/src/shell/NewChatDialog.tsx
-@@ -5002,8 +5002,9 @@ export function NewChatLandingScreen() {
+@@ -5132,8 +5132,9 @@ export function NewChatLandingScreen() {
      }
    }, [pickerLoading, pickerSelectionError, pickerEdits]);
  
@@ -168,9 +180,9 @@ index 2315788..3b0321d 100644
    const canSubmit =
 -    (message.trim().length > 0 || files.length > 0) &&
      !pickerLoading &&
-     !workspaceLoading &&
-     !pendingSkillCompletion &&
-@@ -5037,9 +5038,7 @@ export function NewChatLandingScreen() {
+     !workspaceStartLoading &&
+     !worktreeRequestPending &&
+@@ -5168,9 +5169,7 @@ export function NewChatLandingScreen() {
                    ? "Please choose a host and working directory"
                    : configuredAgentUnavailable && selectedAgent == null
                      ? "This project's configured agent is unavailable — pick an agent to continue"
@@ -181,7 +193,7 @@ index 2315788..3b0321d 100644
  
    // Names the picked provider, else the server's default label.
    const selectedSandboxLabel =
-@@ -5340,7 +5339,7 @@ export function NewChatLandingScreen() {
+@@ -5480,7 +5479,7 @@ export function NewChatLandingScreen() {
    async function handleCreate() {
      // Mirror the Send button's disabled condition (canSubmit) so the Enter-key
      // and form-submit paths that call this directly can't create a session with
@@ -190,9 +202,9 @@ index 2315788..3b0321d 100644
      if (!canSubmit) return;
      // A create is actually happening: report it for pointer clicks (via the
      // form submit) and Enter-key sends alike. After the guard so guarded no-ops
-@@ -5850,7 +5849,7 @@ export function NewChatLandingScreen() {
+@@ -6006,7 +6005,7 @@ export function NewChatLandingScreen() {
        if (localConv !== null && effectiveAgentId !== null) {
-         const tempRouteSuffix = `/c/${localConv.tempConvId}`;
+         const tempConvId = localConv.tempConvId;
          promoteSessionDraft(localConv.tempConvId, data.id);
 -        // Hydrate the temp id onto the real id and POST the first message.
 +        // Hydrate the temp id onto the real id and POST the first message, if any.
@@ -200,10 +212,10 @@ index 2315788..3b0321d 100644
            localConv.tempConvId,
            data.id,
 diff --git a/web/src/store/chatStore.test.ts b/web/src/store/chatStore.test.ts
-index 2801437..4eee3c2 100644
+index d47beb7..865b7b0 100644
 --- a/web/src/store/chatStore.test.ts
 +++ b/web/src/store/chatStore.test.ts
-@@ -3204,6 +3204,37 @@ describe("chatStore — navigate-first first send (B1/B2 regressions)", () => {
+@@ -3282,6 +3282,37 @@ describe("chatStore — navigate-first first send (B1/B2 regressions)", () => {
      expect(posts).toHaveLength(1);
    });
  
@@ -242,10 +254,10 @@ index 2801437..4eee3c2 100644
      seedSession("conv_real");
      fetchMock.mockImplementation((input, init) => {
 diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
-index f4ad824..3a8ea49 100644
+index 3ebc282..0756504 100644
 --- a/web/src/store/chatStore.ts
 +++ b/web/src/store/chatStore.ts
-@@ -376,12 +376,14 @@ export function beginLocalConversation(
+@@ -386,12 +386,14 @@ export function beginLocalConversation(
              : {}),
          };
  
@@ -262,7 +274,7 @@ index f4ad824..3a8ea49 100644
    });
    useChatStore.setState({ conversationId: tempConvId });
    conversationRegistry.setActive(tempConvId);
-@@ -394,7 +396,8 @@ export function beginLocalConversation(
+@@ -414,7 +416,8 @@ export function hasPendingLocalMessage(tempConvId: string): boolean {
   * `createSession` returns: rekey the registry entry (carrying the optimistic
   * bubble), the send chain, and the sidebar row from `tempConvId` to `realId`;
   * flip the store + URL when still viewing it; then POST the first message via
@@ -272,8 +284,8 @@ index f4ad824..3a8ea49 100644
   *
   * Navigate-away safe: the registry/chain/sidebar rekey is id-addressed and
   * always runs. The store flip + `navigate` run ONLY when still on `tempConvId`,
-@@ -428,6 +431,13 @@ export function hydrateLocalConversation(
-     navigate(`/c/${realId}`, { replace: true });
+@@ -461,6 +464,13 @@ export function hydrateLocalConversation(
+     return;
    }
  
 +  if (skill === null && !text.trim() && !files?.length) {

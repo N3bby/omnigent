@@ -8,8 +8,7 @@ calls /v1/repo-env (images/server/omnigent_repo_env_api.py, mounted by
 "N variables", which lists the names on click.
 On a phone, a long repository wraps at its slashes, each name sits above its
 value, buttons are 40px for touch, and the badge shows only the count.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0004.
-
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0004.
 diff --git a/web/src/components/RepoEnvBadge.test.tsx b/web/src/components/RepoEnvBadge.test.tsx
 new file mode 100644
 index 0000000..e62b78f
@@ -910,7 +909,7 @@ index 0000000..de0fb80
 +          <FolderGit2Icon className="ui-icon shrink-0 text-muted-foreground" />
 +        </span>
 +        <span
-+          className="min-w-0 text-ui font-medium wrap-anywhere sm:flex-1 sm:truncate"
++          className="min-w-0 text-ui font-medium wrap-anywhere sm:truncate"
 +          title={entry.repository}
 +        >
 +          <span className="font-normal text-muted-foreground">{host}/</span>
@@ -918,7 +917,7 @@ index 0000000..de0fb80
 +          {breakAtSlashes(path)}
 +        </span>
 +        <span
-+          className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
++          className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1"
 +          title={absoluteTime(updated)}
 +        >
 +          {plural(entry.names.length, "variable")}
@@ -1370,10 +1369,10 @@ index 0000000..de0fb80
 +  );
 +}
 diff --git a/web/src/pages/SettingsPage.tsx b/web/src/pages/SettingsPage.tsx
-index 5f052b0..2f63959 100644
+index 8083d71..b4a8203 100644
 --- a/web/src/pages/SettingsPage.tsx
 +++ b/web/src/pages/SettingsPage.tsx
-@@ -268,6 +268,9 @@ const PoliciesPage = lazy(() =>
+@@ -275,6 +275,9 @@ const PoliciesPage = lazy(() =>
  const SharingPage = lazy(() =>
    import("@/pages/SharingPage").then((m) => ({ default: m.SharingPage })),
  );
@@ -1383,7 +1382,7 @@ index 5f052b0..2f63959 100644
  
  /**
   * Settings content panel. The section nav lives in the sidebar card
-@@ -294,15 +297,22 @@ export function SettingsPage() {
+@@ -311,15 +314,22 @@ export function SettingsPage() {
    // Rendered in ANY multi-user mode (accounts AND OIDC), not gated on
    // `accountsEnabled` — the nav + pages handle admin gating, and Members runs
    // read-only under OIDC (no password actions).
@@ -1409,7 +1408,7 @@ index 5f052b0..2f63959 100644
        </Suspense>
      );
 diff --git a/web/src/shell/NewChatDialog.projectPrefill.test.tsx b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
-index 8c524e8..b7f93a1 100644
+index f96b3a0..dbd4dd7 100644
 --- a/web/src/shell/NewChatDialog.projectPrefill.test.tsx
 +++ b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
 @@ -23,6 +23,9 @@ import {
@@ -1423,10 +1422,10 @@ index 8c524e8..b7f93a1 100644
  vi.mock("@/hooks/useSkills", () => ({
    useSkills: () => ({ skills: [], skillsStatus: "ready", refetch: vi.fn() }),
 diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
-index a423f5f..43c57e5 100644
+index 58ae538..97c5608 100644
 --- a/web/src/shell/NewChatDialog.test.tsx
 +++ b/web/src/shell/NewChatDialog.test.tsx
-@@ -226,6 +226,9 @@ vi.mock("@/hooks/useHostWorktrees", async (importOriginal) => ({
+@@ -235,6 +235,9 @@ vi.mock("@/hooks/useHostWorktrees", async (importOriginal) => ({
  vi.mock("@/hooks/useDirectorySessions", () => ({
    useDirectorySessions: vi.fn(),
  }));
@@ -1437,18 +1436,18 @@ index a423f5f..43c57e5 100644
    useRunnerHealthRegistration: vi.fn(),
  }));
 diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
-index 109a552..a9fec1e 100644
+index ffa1f9d..407ce0c 100644
 --- a/web/src/shell/NewChatDialog.tsx
 +++ b/web/src/shell/NewChatDialog.tsx
-@@ -315,6 +315,7 @@ import {
+@@ -323,6 +323,7 @@ import {
    KeyboardShortcutTooltipContent,
  } from "@/components/KeyboardShortcut";
  import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 +import { RepoEnvBadge } from "@/components/RepoEnvBadge";
  import { CreateAgentDialog } from "./CreateAgentDialog";
  import { buildAgentBundle, type AgentBundleInput } from "@/lib/agentBundle";
- import { createBundledSession, launchRunner } from "@/lib/sessionsApi";
-@@ -5937,6 +5938,7 @@ export function NewChatLandingScreen() {
+ import { installAgentBundle } from "@/lib/agentsApi";
+@@ -6102,6 +6103,7 @@ export function NewChatLandingScreen() {
                            <span className="min-w-0 flex-1 truncate text-sm" title={sel.url}>
                              {name}
                            </span>
@@ -1457,10 +1456,10 @@ index 109a552..a9fec1e 100644
                              <div className="w-36 shrink-0">
                                <SandboxRepoBranchSelect
 diff --git a/web/src/shell/settingsNav.test.tsx b/web/src/shell/settingsNav.test.tsx
-index f21c8dd..7421b18 100644
+index ef1e4f0..add5bd2 100644
 --- a/web/src/shell/settingsNav.test.tsx
 +++ b/web/src/shell/settingsNav.test.tsx
-@@ -121,11 +121,21 @@ describe("settingsNavGroups", () => {
+@@ -142,11 +142,21 @@ describe("settingsNavGroups", () => {
      expect(ids(false, false)).not.toContain("members");
      // Admin on an accounts deploy → all appear, grouped under "Admin".
      const accountsAdmin = settingsNavGroups(true, false, true).find((g) => g.title === "Admin");
@@ -1484,7 +1483,7 @@ index f21c8dd..7421b18 100644
    });
  
    it("drops Members and Sharing from the Admin group in single-user mode, keeping Policies", () => {
-@@ -135,7 +145,7 @@ describe("settingsNavGroups", () => {
+@@ -156,7 +166,7 @@ describe("settingsNavGroups", () => {
      const singleUserAdmin = settingsNavGroups(false, false, true, true).find(
        (g) => g.title === "Admin",
      );
@@ -1494,18 +1493,18 @@ index f21c8dd..7421b18 100644
  
    it("includes the Sandbox Integrations item only when a connection is enabled", () => {
 diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
-index 5a18747..45f0dc1 100644
+index c312717..754e873 100644
 --- a/web/src/shell/settingsNav.tsx
 +++ b/web/src/shell/settingsNav.tsx
-@@ -21,6 +21,7 @@ import {
-   TerminalIcon,
+@@ -23,6 +23,7 @@ import {
    UserCogIcon,
    UsersIcon,
+   VectorSquareIcon,
 +  VariableIcon,
  } from "lucide-react";
  import { Link, useLocation } from "@/lib/routing";
  import { Button } from "@/components/ui/button";
-@@ -42,6 +43,7 @@ export type SettingsSectionId =
+@@ -46,6 +47,7 @@ export type SettingsSectionId =
    | "members"
    | "policies"
    | "sharing"
@@ -1513,7 +1512,7 @@ index 5a18747..45f0dc1 100644
    | "archived"
    | "cli"
    | "updates";
-@@ -57,6 +59,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
+@@ -63,6 +65,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
    "members",
    "policies",
    "sharing",
@@ -1521,7 +1520,7 @@ index 5a18747..45f0dc1 100644
    "archived",
    "cli",
    "updates",
-@@ -141,6 +144,8 @@ export function settingsNavGroups(
+@@ -158,6 +161,8 @@ export function settingsNavGroups(
      if (!isSingleUser) adminItems.push({ id: "members", label: "Members", icon: UsersIcon });
      adminItems.push({ id: "policies", label: "Policies", icon: ShieldCheckIcon });
      if (!isSingleUser) adminItems.push({ id: "sharing", label: "Sharing", icon: Share2Icon });

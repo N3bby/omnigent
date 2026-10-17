@@ -16,7 +16,7 @@ which keeps a keystroke near a millisecond on a kernel-sized workspace.
 Without the index (still loading, or an older runner) the menu filters the
 folder as before. The new-session launcher's "@" menu, which reads the
 host's filesystem, is unchanged.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0013.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0013.
 
 diff --git a/web/src/components/FileMentionMenu.tsx b/web/src/components/FileMentionMenu.tsx
 index 232c903..b76f38c 100644
@@ -150,10 +150,10 @@ index 232c903..b76f38c 100644
                    {isDir && (
                      <button
 diff --git a/web/src/hooks/useWorkspaceChangedFiles.ts b/web/src/hooks/useWorkspaceChangedFiles.ts
-index 1afd373..0655c7f 100644
+index fff2211..e0e6f58 100644
 --- a/web/src/hooks/useWorkspaceChangedFiles.ts
 +++ b/web/src/hooks/useWorkspaceChangedFiles.ts
-@@ -583,6 +583,55 @@ export function useWorkspaceFileSearch(
+@@ -601,6 +601,55 @@ export function useWorkspaceFileSearch(
    });
  }
  
@@ -644,10 +644,10 @@ index 0000000..013c89c
 +  return { within: "", query: token };
 +}
 diff --git a/web/src/pages/ChatPage.composer.test.tsx b/web/src/pages/ChatPage.composer.test.tsx
-index 53c6448..b918a3b 100644
+index 3df6c13..dad5a93 100644
 --- a/web/src/pages/ChatPage.composer.test.tsx
 +++ b/web/src/pages/ChatPage.composer.test.tsx
-@@ -44,6 +44,7 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
+@@ -47,6 +47,7 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
      ...actual,
      useWorkspaceAllFiles: () => ({ data: undefined }),
      useWorkspaceDirectory: () => ({ data: undefined }),
@@ -656,7 +656,7 @@ index 53c6448..b918a3b 100644
  });
  
 diff --git a/web/src/pages/ChatPage.mention.test.tsx b/web/src/pages/ChatPage.mention.test.tsx
-index 0662ffa..3da337d 100644
+index deec3b3..c882ce1 100644
 --- a/web/src/pages/ChatPage.mention.test.tsx
 +++ b/web/src/pages/ChatPage.mention.test.tsx
 @@ -20,11 +20,16 @@ import type { WorkspaceFile } from "@/hooks/useWorkspaceChangedFiles";
@@ -798,7 +798,7 @@ index 0662ffa..3da337d 100644
 +  });
 +});
 diff --git a/web/src/pages/ChatPage.statusLine.test.tsx b/web/src/pages/ChatPage.statusLine.test.tsx
-index 88a140e..3b500e8 100644
+index e499bad..27f722f 100644
 --- a/web/src/pages/ChatPage.statusLine.test.tsx
 +++ b/web/src/pages/ChatPage.statusLine.test.tsx
 @@ -24,6 +24,7 @@ vi.mock("@/hooks/useWorkspaceChangedFiles", async (importOriginal) => {
@@ -810,10 +810,10 @@ index 88a140e..3b500e8 100644
  });
  
 diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
-index 276975f..6d1aeb5 100644
+index f3bbd93..11e0ac0 100644
 --- a/web/src/pages/ChatPage.tsx
 +++ b/web/src/pages/ChatPage.tsx
-@@ -206,8 +206,11 @@ import { FilePathAwareMessageResponse } from "@/components/blocks/ChatMarkdown";
+@@ -209,8 +209,11 @@ import { FilePathAwareMessageResponse } from "@/components/blocks/ChatMarkdown";
  import {
    useWorkspaceAllFiles,
    useWorkspaceDirectory,
@@ -825,7 +825,7 @@ index 276975f..6d1aeb5 100644
  import { ComposerMicButton } from "@/components/ComposerMicButton";
  import { ComposerAttachments } from "@/components/ComposerAttachments";
  import { isCostRoutingSession, isSubagentRoutingSession } from "@/components/CostRoutingControl";
-@@ -2908,7 +2911,37 @@ function ComposerImpl(
+@@ -2745,7 +2748,37 @@ function ComposerImpl(
    // is how nested files are reached (recursion via navigation, mirroring
    // the terminal's git-tracked walk). At any level the user can attach a
    // single file or the whole folder.
@@ -864,7 +864,7 @@ index 276975f..6d1aeb5 100644
    // Root listing reuses the gate's useWorkspaceAllFiles; a sub-directory
    // uses the lazy per-dir hook (disabled — null path — at the root). Both
    // return files AND directories with a ``type`` discriminator.
-@@ -2919,9 +2952,12 @@ function ComposerImpl(
+@@ -2756,9 +2789,12 @@ function ComposerImpl(
    const mentionSourceEntries: WorkspaceFile[] = mentionDir
      ? (mentionDirQuery.data ?? [])
      : (workspaceFilesQuery.data?.data ?? []);
@@ -880,7 +880,7 @@ index 276975f..6d1aeb5 100644
    // True while a mention token is active but its listing hasn't resolved yet:
    // the cold-boot root fetch, or a sub-directory's first load after drilling
    // in. During this window ``mentionEntries`` is transiently empty (so the
-@@ -2929,10 +2965,13 @@ function ComposerImpl(
+@@ -2766,10 +2802,13 @@ function ComposerImpl(
    // send the half-typed "@dir/" token as a chat message. A *settled*
    // zero-match (e.g. "@notafile") is deliberately excluded — sending that
    // literally is the user's intent.
@@ -895,7 +895,7 @@ index 276975f..6d1aeb5 100644
  
    // Shared selection/chip/keyboard glue (see useMentionBrowser). The token
    // state and the data source above stay here; everything stateful is shared
-@@ -3884,7 +3923,8 @@ function ComposerImpl(
+@@ -3754,7 +3793,8 @@ function ComposerImpl(
              so "@" isn't silently dead during runner cold-boot or a drill-in. */}
                {(mentionOpen || mentionListingPending) && (
                  <FileMentionMenu

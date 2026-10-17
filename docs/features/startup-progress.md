@@ -31,7 +31,9 @@ that's running and the time since the start.
 where it came from: **Omnigent**, **Kubernetes** (the Pod's events),
 **Clone**, **Host**, **Setup script** and **Agent**. The chips at the top
 show one source at a time, and **Copy log** copies what's shown. Repository
-variable values in the log show as `[hidden]`.
+variable values of 6 characters or more show as `[hidden]` in the log;
+shorter ones are left alone, so that hiding them doesn't blank out ordinary
+words.
 
 ### When it's done
 

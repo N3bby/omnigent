@@ -2,35 +2,20 @@ Send native /fast controls without a streaming latch or pending bubble.
 
 Bypass the turn queue, preserve running responses on success and failure,
 and surface command delivery errors. Applies after 0009-composer-fast-mode.patch.
-Base: omnigent v0.15.0 (c8b9b85f822f).
-
-diff --git a/web/src/lib/fastMode.ts b/web/src/lib/fastMode.ts
---- a/web/src/lib/fastMode.ts
-+++ b/web/src/lib/fastMode.ts
-@@ -2,6 +2,11 @@
-  * Whether a native harness runs in fast mode: Claude Code's `/fast`, or
-  * Codex's Fast service tier. Reported by the session's runner.
-  */
-+
-+/** Whether text is a native settings command rather than an agent prompt. */
-+export function isFastModeCommand(text: string): boolean {
-+  return /^\/fast(?:\s+(?:on|off))?$/.test(text.trim());
-+}
-
- /** Session label holding `"true"` or `"false"`, for a reload before any update. */
- export const FAST_MODE_LABEL_KEY = "omnigent.fast_mode";
+Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/web/src/lib/fastMode.test.ts b/web/src/lib/fastMode.test.ts
+index 5b54916..ea4dd64 100644
 --- a/web/src/lib/fastMode.test.ts
 +++ b/web/src/lib/fastMode.test.ts
 @@ -1,6 +1,6 @@
  import { describe, expect, it } from "vitest";
-
+ 
 -import { fastCommandText, fastModeFromLabels, parseFastMode } from "./fastMode";
 +import { fastCommandText, fastModeFromLabels, isFastModeCommand, parseFastMode } from "./fastMode";
-
+ 
  describe("fastModeFromLabels", () => {
    it("reads the session label", () => {
-@@ -41,3 +41,12 @@
+@@ -41,3 +41,12 @@ describe("fastCommandText", () => {
      expect(fastCommandText("maybe", false)).toBeNull();
    });
  });
@@ -43,63 +28,63 @@ diff --git a/web/src/lib/fastMode.test.ts b/web/src/lib/fastMode.test.ts
 +    expect(isFastModeCommand(text)).toBe(false);
 +  });
 +});
-diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
---- a/web/src/store/chatStore.ts
-+++ b/web/src/store/chatStore.ts
-@@ -148,7 +148,7 @@
- import { isNativeTerminalSession as isNativeTerminalSessionFn } from "@/lib/nativeCodingAgents";
- import type { StoredReplyDraft } from "@/lib/replyDraft";
- import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
--import { fastModeFromLabels } from "@/lib/fastMode";
-+import { fastModeFromLabels, isFastModeCommand } from "@/lib/fastMode";
- import { tailscaleHostFromLabels } from "@/lib/tailscale";
-
- export interface SendOptions {
-@@ -2042,6 +2042,37 @@
-     // screen. `pinnedSetter` routes every write for this send there.
-     const pinnedId = opts?.pinnedConversationId ?? null;
-     const pinnedSetter: typeof setActive = pinnedId === null ? setActive : setterFor(pinnedId);
-+    const targetState = pinnedId === null ? get() : setterForState(pinnedId);
-+    if (
-+      (targetState?.sessionHarness === "claude-native" ||
-+        targetState?.sessionHarness === "codex-native") &&
-+      !files?.length &&
-+      isFastModeCommand(text)
-+    ) {
-+      // No turn or pending bubble: the POST acknowledges the settings command.
-+      let commandSessionId = pinnedId ?? get().conversationId;
-+      const { waitForPrior, rekey, releaseSend } = enterSendChain(commandSessionId);
-+      try {
-+        await waitForPrior();
-+        commandSessionId = await ensureBoundSession(agentId, get, opts, commandSessionId, rekey);
-+        await postEvent(commandSessionId, {
-+          type: "message",
-+          data: { role: "user", content: [{ type: "input_text", text }] },
-+        });
-+      } catch (err) {
-+        const { message, code } = describeSendFailure(err);
-+        const commandSetter =
-+          commandSessionId === null ? pinnedSetter : setterFor(commandSessionId);
-+        if (!opts?.onError) {
-+          commandSetter((s) => ({ blocks: [...s.blocks, makeClientErrorBlock(message, code)] }));
-+        } else {
-+          opts.onError(message);
-+        }
-+      } finally {
-+        releaseSend();
-+      }
-+      return;
-+    }
-     const retryId =
-       pinnedId === null
-         ? get().pendingRetryStableId
+diff --git a/web/src/lib/fastMode.ts b/web/src/lib/fastMode.ts
+index 9feec31..059c6f7 100644
+--- a/web/src/lib/fastMode.ts
++++ b/web/src/lib/fastMode.ts
+@@ -3,6 +3,11 @@
+  * Codex's Fast service tier. Reported by the session's runner.
+  */
+ 
++/** Whether text is a native settings command rather than an agent prompt. */
++export function isFastModeCommand(text: string): boolean {
++  return /^\/fast(?:\s+(?:on|off))?$/.test(text.trim());
++}
++
+ /** Session label holding `"true"` or `"false"`, for a reload before any update. */
+ export const FAST_MODE_LABEL_KEY = "omnigent.fast_mode";
+ 
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index e46fbd6..f3bbd93 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -228,7 +228,7 @@ import { ComposerWorkspaceStatus } from "@/components/composer/ComposerWorkspace
+ import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
+ import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
+ import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
+-import { fastCommandText } from "@/lib/fastMode";
++import { fastCommandText, isFastModeCommand } from "@/lib/fastMode";
+ import { ComposerTailscaleHost } from "@/components/composer/ComposerTailscaleHost";
+ import { ComposerGatewayLink } from "@/components/composer/ComposerGatewayLink";
+ import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
+@@ -929,6 +929,10 @@ export function ChatPage() {
+       // routes /side through send; generic /side is intercepted in the composer.
+       const opensSideChat =
+         usesNativeSideChatFork(chat.sessionHarness) && isSideChatCommand(text.trim());
++      const changesFastMode =
++        (chat.sessionHarness === "claude-native" || chat.sessionHarness === "codex-native") &&
++        !files?.length &&
++        isFastModeCommand(text);
+       if (
+         shouldQueueSend(
+           chat.conversationId,
+@@ -936,7 +940,7 @@ export function ChatPage() {
+           chat.sessionStatus,
+           chat.queuedMessages,
+           readAlwaysSteer(),
+-          opensSideChat,
++          opensSideChat || changesFastMode,
+         )
+       ) {
+         chat.enqueueMessage(text, files, replyDraft);
 diff --git a/web/src/store/chatStore.test.ts b/web/src/store/chatStore.test.ts
+index 5f5f0aa..d47beb7 100644
 --- a/web/src/store/chatStore.test.ts
 +++ b/web/src/store/chatStore.test.ts
-@@ -2674,6 +2674,57 @@
+@@ -2707,6 +2707,57 @@ describe("chatStore — send (first-send ordering)", () => {
      ).toBe(false);
    });
-
+ 
 +  it.each(["claude-native", "codex-native"])(
 +    "%s fast controls never latch a turn or add a pending bubble",
 +    async (harness) => {
@@ -154,62 +139,53 @@ diff --git a/web/src/store/chatStore.test.ts b/web/src/store/chatStore.test.ts
    it("existing-session send only posts an event (no createSession, no stream open)", async () => {
      // Simulate a session already bound: state has conversationId +
      // abortController set. send must NOT createSession or openStream.
-diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
---- a/web/src/pages/ChatPage.tsx
-+++ b/web/src/pages/ChatPage.tsx
-@@ -226,7 +226,7 @@
- import { ComposerPrLink } from "@/components/composer/ComposerPrLink";
- import { ComposerContextRing } from "@/components/composer/ComposerContextRing";
- import { ComposerRateLimits } from "@/components/composer/ComposerRateLimits";
--import { fastCommandText } from "@/lib/fastMode";
-+import { fastCommandText, isFastModeCommand } from "@/lib/fastMode";
- import { ComposerTailscaleHost } from "@/components/composer/ComposerTailscaleHost";
- import { ComposerGatewayLink } from "@/components/composer/ComposerGatewayLink";
- import { useComposerGitStatus } from "@/hooks/useComposerGitStatus";
-@@ -372,11 +372,8 @@
-  * once this conversation has a queued message it must drain in order, or a
-  * direct send could overtake a still-queued earlier one on an idle flicker.
-  *
-- * ``opensSideChat`` (a codex ``/side`` command) always POSTs now. A side chat is
-- * forked onto its own thread and is non-interrupting by design — asking while
-- * the agent works is the whole point — so it must not park in the queue behind
-- * the parent's active turn. It shares no ordering with main-thread sends, so it
-- * bypasses ``hasQueued`` too.
-+ * Native `/fast` controls and Codex `/side` commands bypass the turn queue:
-+ * neither starts a turn on the main thread.
-  */
- export function shouldQueueSend(
-   conversationId: string | null,
-@@ -384,10 +381,10 @@
-   sessionStatus: SessionStatus,
-   queuedMessages: QueuedMessage[],
-   alwaysSteer = false,
--  opensSideChat = false,
-+  isControlCommand = false,
- ): boolean {
-   if (conversationId === null) return false;
--  if (opensSideChat) return false;
-+  if (isControlCommand) return false;
-   const hasQueued = queuedMessages.some((m) => m.conversationId === conversationId);
-   if (alwaysSteer) return hasQueued;
-   const isBusy = status === "streaming" || sessionStatus === "running";
-@@ -976,6 +973,10 @@
-       // routes /side through send; generic /side is intercepted in the composer.
-       const opensSideChat =
-         usesNativeSideChatFork(chat.sessionHarness) && isSideChatCommand(text.trim());
-+      const changesFastMode =
-+        (chat.sessionHarness === "claude-native" || chat.sessionHarness === "codex-native") &&
-+        !files?.length &&
-+        isFastModeCommand(text);
-       if (
-         shouldQueueSend(
-           chat.conversationId,
-@@ -983,7 +984,7 @@
-           chat.sessionStatus,
-           chat.queuedMessages,
-           readAlwaysSteer(),
--          opensSideChat,
-+          opensSideChat || changesFastMode,
-         )
-       ) {
-         chat.enqueueMessage(text, files, replyDraft);
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index 072555a..36f852a 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -155,7 +155,7 @@ import type { StoredReplyDraft } from "@/lib/replyDraft";
+ import { toast } from "sonner";
+ 
+ import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
+-import { fastModeFromLabels } from "@/lib/fastMode";
++import { fastModeFromLabels, isFastModeCommand } from "@/lib/fastMode";
+ import { tailscaleHostFromLabels } from "@/lib/tailscale";
+ 
+ export interface SendOptions {
+@@ -2287,6 +2287,36 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+     const pinnedId = opts?.pinnedConversationId ?? null;
+     const pinnedSetter: typeof setActive = pinnedId === null ? setActive : setterFor(pinnedId);
+     const pinnedState = pinnedId === null ? get() : setterForState(pinnedId);
++    if (
++      (pinnedState?.sessionHarness === "claude-native" ||
++        pinnedState?.sessionHarness === "codex-native") &&
++      !files?.length &&
++      isFastModeCommand(text)
++    ) {
++      // No turn or pending bubble: the POST acknowledges the settings command.
++      let commandSessionId = pinnedId ?? get().conversationId;
++      const { waitForPrior, rekey, releaseSend } = enterSendChain(commandSessionId);
++      try {
++        await waitForPrior();
++        commandSessionId = await ensureBoundSession(agentId, get, opts, commandSessionId, rekey);
++        await postEvent(commandSessionId, {
++          type: "message",
++          data: { role: "user", content: [{ type: "input_text", text }] },
++        });
++      } catch (err) {
++        const { message, code } = describeSendFailure(err);
++        const commandSetter =
++          commandSessionId === null ? pinnedSetter : setterFor(commandSessionId);
++        if (!opts?.onError) {
++          commandSetter((s) => ({ blocks: [...s.blocks, makeClientErrorBlock(message, code)] }));
++        } else {
++          opts.onError(message);
++        }
++      } finally {
++        releaseSend();
++      }
++      return;
++    }
+     const retryId = pinnedState?.pendingRetryStableId ?? null;
+     const restoredDraft = pinnedState?.restoredSendDraft ?? null;
+     // Submitting consumes what the composer held, a restored failed send

@@ -9,21 +9,20 @@ an empty record, a process on no account from Settings, posts nothing. claude-na
 statusLine render; codex-native when it subscribes to a thread and at each turn
 start. Pairs with the server patch 0014-session-subscription.patch and the web
 patch 0018-composer-subscription.patch. Applies after
-0009-stop-codex-process.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
-
+0009-stop-codex-process.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/omnigent/harnesses/claude_native/forwarder.py b/omnigent/harnesses/claude_native/forwarder.py
-index 9aaa4bd..05dc1db 100644
+index 2f72254..9fc6799 100644
 --- a/omnigent/harnesses/claude_native/forwarder.py
 +++ b/omnigent/harnesses/claude_native/forwarder.py
-@@ -55,6 +55,7 @@ from omnigent.native._native_post_delivery import (
-     post_external_session_status,
-     post_may_have_been_delivered,
+@@ -64,6 +64,7 @@ from omnigent.native.failure_telemetry import (
+     native_failure_id,
+     normalize_failure_context,
  )
 +from omnigent.native.subscription_record import forward_subscription
  from omnigent.process_logging import harness_stderr_capture_enabled
+ from omnigent.runner.transports.ws_tunnel.event_delivery import RunnerEventDispatcher
  from omnigent.session_event_batch import (
-     MAX_SESSION_EVENT_BATCH_EVENTS,
-@@ -802,6 +803,8 @@ class _ForwardDedupeState:
+@@ -844,6 +845,8 @@ class _ForwardDedupeState:
      posted_rate_limits: dict[str, object] | None = None
      # Last ``/fast`` state POSTed from the statusLine capture.
      posted_fast_mode: bool | None = None
@@ -32,7 +31,7 @@ index 9aaa4bd..05dc1db 100644
      recorded_token_usage: dict[str, int] | None = None
      observed_model: str | None = None
      posted_model: str | None = None
-@@ -1381,6 +1384,13 @@ async def forward_claude_transcript_to_session(
+@@ -1447,6 +1450,13 @@ async def forward_claude_transcript_to_session(
                              bridge_dir=bridge_dir,
                              dedupe=dedupe,
                          )
@@ -47,18 +46,18 @@ index 9aaa4bd..05dc1db 100644
                      _observe_transcript_discovery(
                          bridge_dir=bridge_dir,
 diff --git a/omnigent/harnesses/codex_native/forwarder.py b/omnigent/harnesses/codex_native/forwarder.py
-index 83b1493..059879f 100644
+index 9230fe9..7922467 100644
 --- a/omnigent/harnesses/codex_native/forwarder.py
 +++ b/omnigent/harnesses/codex_native/forwarder.py
-@@ -64,6 +64,7 @@ from omnigent.native._native_post_delivery import (
+@@ -74,6 +74,7 @@ from omnigent.native._native_post_delivery import (
      post_may_have_been_delivered,
      replay_dead_letters,
  )
 +from omnigent.native.subscription_record import forward_subscription
+ from omnigent.runtime.tool_output import cap_tool_output
+ from omnigent.session_event_batch import MAX_SESSION_EVENT_REQUEST_BYTES
  from omnigent.util.json_types import JsonObject as _JsonObject
- 
- _logger = logging.getLogger(__name__)
-@@ -446,6 +447,8 @@ class _CodexForwarderState:
+@@ -474,6 +475,8 @@ class _CodexForwarderState:
      # the last value POSTed; ``None`` until a thread reports its tier.
      fast_mode: bool | None = None
      posted_fast_mode: bool | None = None
@@ -67,7 +66,7 @@ index 83b1493..059879f 100644
      rate_limits_task: asyncio.Task[None] | None = field(default=None, repr=False)
      subagents_by_thread: dict[str, str] = field(default_factory=dict)
      pending_child_threads: dict[str, str | None] = field(default_factory=dict)
-@@ -2662,6 +2665,12 @@ async def _subscribe_until_ready_inner(
+@@ -2704,6 +2707,12 @@ async def _subscribe_until_ready_inner(
              await _sync_fast_mode_change(
                  ap_client, session_id=session_id, forwarder_state=forwarder_state
              )
@@ -80,7 +79,7 @@ index 83b1493..059879f 100644
          await _replay_resume_response(
              ap_client,
              session_id=session_id,
-@@ -3637,6 +3646,13 @@ async def _maybe_handle_turn_event(
+@@ -3783,6 +3792,13 @@ async def _maybe_handle_turn_event(
                          session_id=session_id,
                          forwarder_state=forwarder_state,
                      )

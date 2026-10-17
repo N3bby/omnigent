@@ -6,7 +6,7 @@ the other variables: the card lists "Git token" instead of GIT_TOKEN, and the
 editor has a Git token switch with a write-only field, where a blank field keeps
 the stored token and switching it off removes it. A GIT_TOKEN typed as a
 variable name is refused, and one in a pasted .env fills the field.
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0001-0011.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0011.
 
 diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
 index d44da2d..4449014 100644
@@ -192,7 +192,7 @@ index de0fb80..bff95f4 100644
   * ``kunlabora/roadpass`` with a line-break opportunity after each slash, on
   * narrow screens. Hidden from sm, where the name truncates instead: Chrome
 @@ -276,7 +301,7 @@ function RepositoryCard({
-           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
+           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1"
            title={absoluteTime(updated)}
          >
 -          {plural(entry.names.length, "variable")}

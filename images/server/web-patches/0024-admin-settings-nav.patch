@@ -1,0 +1,74 @@
+Show the Admin settings group again on a fresh page load.
+
+Since upstream #8634 (v0.17.0) the shell renders before the boot /v1/me
+probe settles, but useIsAdmin still seeded its query with initialData from
+the not-yet-resolved identity, which counts as fresh for its 30-second
+staleTime. Admins got no Admin group in Settings (Members, Policies,
+Sharing, and this deployment's Subscriptions and Repository variables)
+unless the page stayed open long enough to refetch. The cached flag is now
+placeholderData, so the query waits for the probe. Upstream fix to backport;
+delete this patch once upstream ships one.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0023-sandbox-picker-under-composer.patch.
+diff --git a/web/src/hooks/useIsAdmin.test.tsx b/web/src/hooks/useIsAdmin.test.tsx
+new file mode 100644
+index 0000000..d7e8772
+--- /dev/null
++++ b/web/src/hooks/useIsAdmin.test.tsx
+@@ -0,0 +1,37 @@
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { renderHook, waitFor } from "@testing-library/react";
++import type { ReactNode } from "react";
++import { describe, expect, it, vi } from "vitest";
++
++// The /v1/me probe, still in flight when the shell first renders.
++const identity = vi.hoisted(() => ({
++  admin: false,
++  resolve: () => {},
++}));
++vi.mock("@/lib/identity", () => ({
++  getCurrentIsAdmin: () => identity.admin,
++  resolveIdentity: () =>
++    new Promise<string>((resolve) => {
++      identity.resolve = () => {
++        identity.admin = true;
++        resolve("admin@example.com");
++      };
++    }),
++}));
++
++import { useIsAdmin } from "./useIsAdmin";
++
++describe("useIsAdmin", () => {
++  it("reports an admin once the boot identity probe settles after first render", async () => {
++    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++    const wrapper = ({ children }: { children: ReactNode }) => (
++      <QueryClientProvider client={client}>{children}</QueryClientProvider>
++    );
++    const { result } = renderHook(() => useIsAdmin(), { wrapper });
++    expect(result.current).toBe(false);
++
++    identity.resolve();
++
++    await waitFor(() => expect(result.current).toBe(true));
++  });
++});
+diff --git a/web/src/hooks/useIsAdmin.ts b/web/src/hooks/useIsAdmin.ts
+index 4a0052e..088cf68 100644
+--- a/web/src/hooks/useIsAdmin.ts
++++ b/web/src/hooks/useIsAdmin.ts
+@@ -23,9 +23,11 @@ export function useIsAdmin(): boolean {
+       return getCurrentIsAdmin();
+     },
+     staleTime: 30_000,
+-    // Seed from the already-resolved cache so first paint is correct when
+-    // identity resolved during boot (the common case).
+-    initialData: getCurrentIsAdmin,
++    // The shell renders before the boot /v1/me probe settles (main.tsx), so
++    // show the cached flag as a placeholder: unlike initialData it doesn't
++    // count as fresh, so the query still waits for the probe instead of
++    // reporting "not an admin" for the next 30 seconds.
++    placeholderData: getCurrentIsAdmin,
+   });
+-  return data;
++  return data ?? false;
+ }

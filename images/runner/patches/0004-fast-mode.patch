@@ -15,13 +15,12 @@ thread/settings/updated, so /fast typed in the terminal shows too.
 
 Pairs with the server patch 0008-fast-mode.patch and the web patch
 0009-composer-fast-mode.patch. Applies after 0001-rate-limits.patch. Base:
-omnigent v0.15.0 (c8b9b85f822f).
-
+omnigent v0.18.0 (a8676d23e88d).
 diff --git a/omnigent/harnesses/claude_native/bridge.py b/omnigent/harnesses/claude_native/bridge.py
-index 413cdae..7efc305 100644
+index 6b06e79..3fe6200 100644
 --- a/omnigent/harnesses/claude_native/bridge.py
 +++ b/omnigent/harnesses/claude_native/bridge.py
-@@ -7688,7 +7688,6 @@ _CLAUDE_CLI_DROPPED_COMMANDS: frozenset[str] = frozenset(
+@@ -8259,7 +8259,6 @@ _CLAUDE_CLI_DROPPED_COMMANDS: frozenset[str] = frozenset(
          "cost",
          "doctor",
          "exit",
@@ -29,7 +28,7 @@ index 413cdae..7efc305 100644
          "feedback",
          "help",
          "hooks",
-@@ -7716,6 +7715,9 @@ _CLAUDE_CLI_SURFACED_COMMANDS: frozenset[str] = frozenset(
+@@ -8287,6 +8286,9 @@ _CLAUDE_CLI_SURFACED_COMMANDS: frozenset[str] = frozenset(
          "clear",
          "compact",
          "effort",
@@ -39,7 +38,7 @@ index 413cdae..7efc305 100644
          "model",
          "ultrareview",
      }
-@@ -7783,6 +7785,28 @@ def _escape_unsupported_slash_command(content: str) -> str:
+@@ -8354,6 +8356,28 @@ def _escape_unsupported_slash_command(content: str) -> str:
      return _escape_slash_command_text(content)
  
  
@@ -69,10 +68,10 @@ index 413cdae..7efc305 100644
      """
      Return whether *content* is Claude Code's ``/login`` or ``/logout``.
 diff --git a/omnigent/harnesses/claude_native/forwarder.py b/omnigent/harnesses/claude_native/forwarder.py
-index 8c4e4a9..9aaa4bd 100644
+index daa032d..2f72254 100644
 --- a/omnigent/harnesses/claude_native/forwarder.py
 +++ b/omnigent/harnesses/claude_native/forwarder.py
-@@ -800,6 +800,8 @@ class _ForwardDedupeState:
+@@ -842,6 +842,8 @@ class _ForwardDedupeState:
      context_window: int | None = None
      # Last subscription ``rate_limits`` POSTed from the statusLine capture.
      posted_rate_limits: dict[str, object] | None = None
@@ -81,7 +80,7 @@ index 8c4e4a9..9aaa4bd 100644
      recorded_token_usage: dict[str, int] | None = None
      observed_model: str | None = None
      posted_model: str | None = None
-@@ -1373,6 +1375,12 @@ async def forward_claude_transcript_to_session(
+@@ -1439,6 +1441,12 @@ async def forward_claude_transcript_to_session(
                              bridge_dir=bridge_dir,
                              dedupe=dedupe,
                          )
@@ -94,7 +93,7 @@ index 8c4e4a9..9aaa4bd 100644
                      transcript_path = read_transcript_path(bridge_dir)
                      _observe_transcript_discovery(
                          bridge_dir=bridge_dir,
-@@ -5328,6 +5336,47 @@ async def _forward_rate_limits(
+@@ -5703,6 +5711,47 @@ async def _forward_rate_limits(
      dedupe.posted_rate_limits = rate_limits
  
  
@@ -158,11 +157,11 @@ index aa4b4f1..9bdcdf5 100644
  
  
 diff --git a/omnigent/harnesses/codex_native/bridge.py b/omnigent/harnesses/codex_native/bridge.py
-index fc9c51e..8818f91 100644
+index 60287c1..876983d 100644
 --- a/omnigent/harnesses/codex_native/bridge.py
 +++ b/omnigent/harnesses/codex_native/bridge.py
-@@ -747,6 +747,81 @@ def write_codex_config_effort(bridge_dir: Path, effort: str) -> bool:
-     )
+@@ -906,6 +906,81 @@ def mirror_applied_codex_settings(bridge_dir: Path, applied: Mapping[str, str])
+     return failed
  
  
 +# Codex's Fast service tier. Its model catalog lists Fast as ``priority``;
@@ -244,18 +243,18 @@ index fc9c51e..8818f91 100644
      config_path: Path,
      key: str,
 diff --git a/omnigent/harnesses/codex_native/forwarder.py b/omnigent/harnesses/codex_native/forwarder.py
-index 0f7da99..83b1493 100644
+index f2e3ebc..9230fe9 100644
 --- a/omnigent/harnesses/codex_native/forwarder.py
 +++ b/omnigent/harnesses/codex_native/forwarder.py
-@@ -33,6 +33,7 @@ from omnigent.harnesses.codex_native.bridge import (
-     DeveloperInstructionsReadState,
-     clear_active_turn_id_if_matches,
+@@ -42,6 +42,7 @@ from omnigent.harnesses.codex_native.bridge import (
+     clear_certificate_failure,
+     codex_config_revision,
      codex_home_for_bridge_dir,
 +    is_codex_fast_service_tier,
      pending_mcp_servers,
      read_bridge_state,
-     read_codex_config_developer_instructions_state,
-@@ -441,6 +442,10 @@ class _CodexForwarderState:
+     read_certificate_failure,
+@@ -469,6 +470,10 @@ class _CodexForwarderState:
      # Last subscription ``rate_limits`` POSTed, and the in-flight
      # ``account/rateLimits/read`` refresh (at most one at a time).
      posted_rate_limits: _JsonObject | None = None
@@ -266,7 +265,7 @@ index 0f7da99..83b1493 100644
      rate_limits_task: asyncio.Task[None] | None = field(default=None, repr=False)
      subagents_by_thread: dict[str, str] = field(default_factory=dict)
      pending_child_threads: dict[str, str | None] = field(default_factory=dict)
-@@ -489,6 +494,7 @@ class _CodexForwarderState:
+@@ -517,6 +522,7 @@ class _CodexForwarderState:
              return
          self._note_model_fields(result)
          self._note_approval_mode_fields(result)
@@ -274,7 +273,7 @@ index 0f7da99..83b1493 100644
          # Do NOT seed ``posted_model`` here. Omnigent must learn the session's
          # ACTUAL model — including the spawn default — because the cost-budget
          # gate resolves the model as ``conv.model_override or spec.llm.model``,
-@@ -515,6 +521,7 @@ class _CodexForwarderState:
+@@ -543,6 +549,7 @@ class _CodexForwarderState:
              self._note_effort_fields(settings)
              self._note_collaboration_mode_fields(settings)
              self._note_approval_mode_fields(settings)
@@ -282,7 +281,7 @@ index 0f7da99..83b1493 100644
              # Live thread settings are the running process's truth: remember
              # the model so a stale config.toml re-read at the next
              # turn/started cannot roll the mirror back (see
-@@ -911,6 +918,11 @@ class _CodexForwarderState:
+@@ -939,6 +946,11 @@ class _CodexForwarderState:
          if isinstance(mode, str) and mode:
              self.collaboration_mode = mode
  
@@ -294,7 +293,7 @@ index 0f7da99..83b1493 100644
      def _note_approval_mode_fields(self, payload: _JsonObject) -> None:
          """Record Codex approval/sandbox settings as launch args + a runtime preset."""
          args = _codex_terminal_launch_args_from_settings(payload)
-@@ -2647,6 +2659,9 @@ async def _subscribe_until_ready_inner(
+@@ -2689,6 +2701,9 @@ async def _subscribe_until_ready_inner(
              await _sync_codex_approval_mode_change(
                  ap_client, session_id=session_id, forwarder_state=forwarder_state
              )
@@ -304,7 +303,7 @@ index 0f7da99..83b1493 100644
          await _replay_resume_response(
              ap_client,
              session_id=session_id,
-@@ -3398,6 +3413,40 @@ async def _sync_model_change(
+@@ -3448,6 +3463,40 @@ async def _sync_model_change(
          forwarder_state.posted_model = model
  
  
@@ -345,7 +344,7 @@ index 0f7da99..83b1493 100644
  async def _sync_reasoning_effort_change(
      client: httpx.AsyncClient,
      *,
-@@ -3631,6 +3680,9 @@ async def _maybe_handle_turn_event(
+@@ -3777,6 +3826,9 @@ async def _maybe_handle_turn_event(
              await _sync_codex_approval_mode_change(
                  client, session_id=session_id, forwarder_state=forwarder_state
              )
@@ -356,10 +355,10 @@ index 0f7da99..83b1493 100644
      if method == "turn/plan/updated":
          if delta_coalescer is not None:
 diff --git a/omnigent/inner/claude_native_executor.py b/omnigent/inner/claude_native_executor.py
-index c32fe3e..4964bf1 100644
+index fb397f8..a7c427a 100644
 --- a/omnigent/inner/claude_native_executor.py
 +++ b/omnigent/inner/claude_native_executor.py
-@@ -29,6 +29,7 @@ from omnigent.harnesses.claude_native.bridge import (
+@@ -32,6 +32,7 @@ from omnigent.harnesses.claude_native.bridge import (
      read_launch_model,
      read_model_env,
      read_model_picker_values,
@@ -367,7 +366,7 @@ index c32fe3e..4964bf1 100644
  )
  from omnigent.inner.executor import (
      EnqueuedContent,
-@@ -128,6 +129,7 @@ class ClaudeNativeExecutor(Executor):
+@@ -131,6 +132,7 @@ class ClaudeNativeExecutor(Executor):
  
      async def _inject_prompt(self, text: str, notices: list[str]) -> None:
          """Inject user text with one-shot context while holding the injection lock."""
@@ -376,30 +375,31 @@ index c32fe3e..4964bf1 100644
          context_path.unlink(missing_ok=True)
          if notices:
 diff --git a/omnigent/inner/codex_native_executor.py b/omnigent/inner/codex_native_executor.py
-index 69de7c7..728ceb3 100644
+index 4d19564..b28a211 100644
 --- a/omnigent/inner/codex_native_executor.py
 +++ b/omnigent/inner/codex_native_executor.py
-@@ -21,6 +21,7 @@ from omnigent.harnesses.codex_native.app_server import (
-     client_for_transport,
+@@ -30,6 +30,7 @@ from omnigent.harnesses.codex_native.app_server import (
  )
  from omnigent.harnesses.codex_native.bridge import (
+     CODEX_APP_SERVER_STOPPED,
 +    CODEX_FAST_SERVICE_TIER,
      CODEX_NATIVE_BRIDGE_DIR_ENV_VAR,
      CODEX_NATIVE_REQUEST_SESSION_ID_ENV_VAR,
      CODEX_NATIVE_STARTUP_PUBLICATION_GRACE_SECONDS,
-@@ -31,9 +32,11 @@ from omnigent.harnesses.codex_native.bridge import (
-     read_bridge_startup_error,
+@@ -44,10 +45,12 @@ from omnigent.harnesses.codex_native.bridge import (
      read_bridge_startup_timeout,
      read_bridge_state,
+     read_codex_config_effort,
 +    read_codex_config_fast_mode,
+     read_codex_config_model,
      read_mcp_startup,
+     read_unmirrored_codex_settings,
      update_active_turn_id,
-     write_codex_config_effort,
 +    write_codex_config_fast_mode,
-     write_codex_config_model,
  )
  from omnigent.inner.codex_goal_command import (
-@@ -175,6 +178,67 @@ async def _start_codex_turn(
+     goal_objective_from_content,
+@@ -398,6 +401,67 @@ async def _start_codex_turn(
          _logger.info("Codex native started turn: turn_id=%s", turn_id)
  
  
@@ -467,7 +467,7 @@ index 69de7c7..728ceb3 100644
  async def _steer_codex_turn(
      client: CodexAppServerClient,
      *,
-@@ -304,6 +368,7 @@ class CodexNativeExecutor(Executor):
+@@ -530,6 +594,7 @@ class CodexNativeExecutor(Executor):
          input_items = _content_to_input_items(content, self._bridge_dir)
          if not input_items:
              return False
@@ -475,7 +475,7 @@ index 69de7c7..728ceb3 100644
          # Serialized against run_turn so the read-decide-RPC-write below
          # is atomic with respect to the initiating-message injection.
          async with self._inject_lock:
-@@ -311,7 +376,7 @@ class CodexNativeExecutor(Executor):
+@@ -537,13 +602,20 @@ class CodexNativeExecutor(Executor):
              if state is None or not _session_is_active(state.session_id, self._request_session_id):
                  _logger.info("Codex native injection skipped: bridge state missing or inactive")
                  return False
@@ -483,10 +483,9 @@ index 69de7c7..728ceb3 100644
 +            if state.active_turn_id is None and fast_command is None:
                  _logger.info("Codex native injection skipped: no active turn")
                  return False
-             client = client_for_transport(
-@@ -320,6 +385,13 @@ class CodexNativeExecutor(Executor):
-             )
-             await client.connect()
+             client = await _connect_to_app_server(state)
+             if client is None:
+                 return False
              try:
 +                if fast_command is not None:
 +                    # /fast mid-turn switches the tier for later turns
@@ -498,7 +497,7 @@ index 69de7c7..728ceb3 100644
                  await _inject_codex_turn(
                      client,
                      bridge_dir=self._bridge_dir,
-@@ -433,6 +505,7 @@ class CodexNativeExecutor(Executor):
+@@ -674,6 +746,7 @@ class CodexNativeExecutor(Executor):
          del tools, system_prompt
          settings_overrides = _model_effort_overrides(config)
          latest_user_content = _latest_user_content(messages)
@@ -506,8 +505,8 @@ index 69de7c7..728ceb3 100644
          goal_objective = goal_objective_from_content(latest_user_content)
          if goal_objective is not None:
              # Reject over-long objectives here so the app-server's raw
-@@ -551,7 +624,15 @@ class CodexNativeExecutor(Executor):
-                     await client.connect()
+@@ -787,7 +860,15 @@ class CodexNativeExecutor(Executor):
+                 else:
                      try:
                          side_question = side_chat.side_chat_question(input_items)
 -                        if side_question is not None:

@@ -5,13 +5,13 @@ or "false" in the omnigent.fast_mode session label for page loads, and adds it
 to the session.usage SSE event. Like a rate-limits-only post, a post carrying
 only fast_mode skips the cost roll-up. Pairs with the runner patch
 0004-fast-mode.patch and the web patch 0009-composer-fast-mode.patch. Applies
-after 0002-rate-limits.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
+after 0002-rate-limits.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
-index 03160a4..c006a12 100644
+index 21c3c46..49fb3a3 100644
 --- a/omnigent/server/routes/_sessions/orchestration.py
 +++ b/omnigent/server/routes/_sessions/orchestration.py
-@@ -1734,6 +1734,28 @@ def _rate_limits_from_usage_data(
+@@ -2017,6 +2017,28 @@ def _rate_limits_from_usage_data(
      return {"windows": canonical}
  
  
@@ -40,7 +40,7 @@ index 03160a4..c006a12 100644
  async def _persist_external_session_usage(
      session_id: str,
      body: SessionEventInput,
-@@ -1791,25 +1813,32 @@ async def _persist_external_session_usage(
+@@ -2074,25 +2096,32 @@ async def _persist_external_session_usage(
      )
      has_cumulative = any(body.data.get(k) is not None for k in _CUMULATIVE_USAGE_KEYS)
      rate_limits = _rate_limits_from_usage_data(body.data.get("rate_limits"))
@@ -83,7 +83,7 @@ index 03160a4..c006a12 100644
              ).model_dump(exclude_none=True),
          )
          return None
-@@ -1852,6 +1881,8 @@ async def _persist_external_session_usage(
+@@ -2135,6 +2164,8 @@ async def _persist_external_session_usage(
          label_updates[_LAST_CONTEXT_WINDOW_LABEL_KEY] = str(raw_window)
      if rate_limits is not None:
          label_updates[_RATE_LIMITS_LABEL_KEY] = json.dumps(rate_limits, separators=(",", ":"))
@@ -92,7 +92,7 @@ index 03160a4..c006a12 100644
      await asyncio.to_thread(
          conversation_store.set_labels,
          session_id,
-@@ -1892,6 +1923,8 @@ async def _persist_external_session_usage(
+@@ -2175,6 +2206,8 @@ async def _persist_external_session_usage(
          event_payload["usage_by_model"] = usage_by_model
      if rate_limits is not None:
          event_payload["rate_limits"] = rate_limits
@@ -102,10 +102,10 @@ index 03160a4..c006a12 100644
      session_stream.publish(session_id, event.model_dump(exclude_none=True))
      # This session's usage also moves its ANCESTORS' subtree cost (its spend
 diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
-index 3b40c79..01f0fdf 100644
+index cbaea32..97b5494 100644
 --- a/omnigent/server/schemas.py
 +++ b/omnigent/server/schemas.py
-@@ -3176,6 +3176,8 @@ class SessionUsageEvent(_SSEEventBase):
+@@ -3185,6 +3185,8 @@ class SessionUsageEvent(_SSEEventBase):
      # Subscription usage windows from a native harness, e.g. ``{"windows":
      # [{"window_minutes": 300, "used_percent": 23.0, "resets_at": 1790370000}]}``.
      rate_limits: dict[str, list[dict[str, float | int | None]]] | None = None

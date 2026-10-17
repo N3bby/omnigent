@@ -25,7 +25,8 @@ its liveness and whether a turn is running; after an action the menu shows
 where it's heading until the ~10s liveness poll catches up. Controls are
 greyed out for anyone but the session's owner, and in read-only sessions. A
 new sandbox session shows the menu while it launches, before its host is
-bound. Sessions on other hosts keep the old menu. Spacing is scoped to
+bound. Sessions on other hosts, and on sandbox providers other than
+agent_sandbox, keep upstream's menu. Spacing is scoped to
 .environment-menu in index.css: every block sits 16px from the menu edge or
 the nearest divider, and labels use text-box trimming so icons line up with
 their capitals. agent_sandbox is named "Agent Sandbox" instead of
@@ -38,22 +39,22 @@ Sessions on other hosts keep Stop session. The subscription tag's switch hint
 points at Restart agent, which keeps the Pod and is enough to pick up another
 account.
 Pairs with the server patch 0015-environment-menu.patch.
-Applies after 0019-project-repositories.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
-
+Applies after 0019-project-repositories.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/web/src/components/HostBadge.test.tsx b/web/src/components/HostBadge.test.tsx
-index 4b484e3..a747115 100644
+index 67e671b..063a6bf 100644
 --- a/web/src/components/HostBadge.test.tsx
 +++ b/web/src/components/HostBadge.test.tsx
-@@ -1,6 +1,8 @@
- import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+@@ -1,7 +1,9 @@
+ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+ import userEvent from "@testing-library/user-event";
 +import type * as EnvironmentMenuModule from "@/components/composer/EnvironmentMenu";
  import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  
 +import { useChatStore } from "@/store/chatStore";
  import { HostBadge, resolveHostBadge } from "./HostBadge";
  import type { Host } from "@/hooks/useHosts";
- 
-@@ -79,8 +81,22 @@ vi.mock("@/hooks/useSession", () => ({
+ import {
+@@ -85,8 +87,22 @@ vi.mock("@/hooks/useSession", () => ({
  vi.mock("@/hooks/useHosts", () => ({
    useHosts: (opts: unknown) => useHostsMock(opts),
  }));
@@ -76,7 +77,7 @@ index 4b484e3..a747115 100644
  }));
  // Stub the switch dialog: it owns its own network/query wiring, so the badge
  // test only cares that it is mounted with the session's current binding.
-@@ -392,3 +408,45 @@ describe("HostBadge", () => {
+@@ -577,3 +593,45 @@ describe("HostBadge", () => {
      expect(screen.getByTestId("host-badge").textContent).toBe("new-box, offline");
    });
  });
@@ -123,17 +124,19 @@ index 4b484e3..a747115 100644
 +  });
 +});
 diff --git a/web/src/components/HostBadge.tsx b/web/src/components/HostBadge.tsx
-index 288f49a..b82d080 100644
+index faa97ac..45eb904 100644
 --- a/web/src/components/HostBadge.tsx
 +++ b/web/src/components/HostBadge.tsx
-@@ -3,8 +3,15 @@ import { useRef, useState } from "react";
- import { useHosts } from "@/hooks/useHosts";
+@@ -4,10 +4,17 @@ import { useHosts } from "@/hooks/useHosts";
  import type { Host } from "@/hooks/useHosts";
  import { useSession } from "@/hooks/useSession";
+ import { useSessionActionRestrictions } from "@/hooks/useSessionActionRestrictions";
 +import { useSessionEnvironment } from "@/hooks/useSessionEnvironment";
  import { useSessionHostOnline } from "@/hooks/RunnerHealthProvider";
 +import { livenessRowFromSession, useSessionLiveness } from "@/hooks/useSessionLiveness";
  import { sandboxOptionLabel } from "@/lib/capabilities";
+ import { DisabledActionTooltip } from "./DisabledActionTooltip";
+ import { SessionActionMenuItem } from "./SessionActionMenuItem";
 +import { useServerInfo } from "@/lib/CapabilitiesContext";
 +import { nativeCodingAgentForWrapper, WRAPPER_LABEL_KEY } from "@/lib/nativeCodingAgents";
 +import type { Session } from "@/lib/types";
@@ -142,7 +145,7 @@ index 288f49a..b82d080 100644
  import { SwitchHostDialog } from "@/shell/SwitchHostDialog";
  import { cn } from "@/lib/utils";
  import { ComposerHostTrigger } from "@/components/composer/ComposerControls";
-@@ -77,11 +84,14 @@ export function HostBadge({
+@@ -80,11 +87,14 @@ export function HostBadge({
    onReconnect,
    appearance = "status",
    readOnly = false,
@@ -157,7 +160,7 @@ index 288f49a..b82d080 100644
  }) {
    const [switchOpen, setSwitchOpen] = useState(false);
    const { session } = useSession(sessionId);
-@@ -91,6 +101,8 @@ export function HostBadge({
+@@ -94,6 +104,8 @@ export function HostBadge({
    // resolve — the badge renders nothing in that case anyway.
    const { data: hosts } = useHosts({ includeSandbox: true, enabled: Boolean(hostId) });
    const liveOnline = useSessionHostOnline(sessionId);
@@ -166,12 +169,16 @@ index 288f49a..b82d080 100644
  
    const host = hostId ? hosts?.find((h) => h.host_id === hostId) : undefined;
  
-@@ -128,6 +140,19 @@ export function HostBadge({
-       : liveOnline;
- 
-   const badge = resolveHostBadge({ hostId, host, online });
-+  // A sandbox session gets the environment menu: its state and controls.
-+  if (appearance === "composer" && (host?.sandbox_provider || (!hostId && launching))) {
+@@ -136,6 +148,23 @@ export function HostBadge({
+   useEffect(() => {
+     if (!canSwitch) setSwitchOpen(false);
+   }, [canSwitch]);
++  // An Agent Sandbox session gets the environment menu: its state and
++  // controls. Other sandbox providers keep upstream's host menu.
++  if (
++    appearance === "composer" &&
++    (host?.sandbox_provider === "agent_sandbox" || (!hostId && launching))
++  ) {
 +    return (
 +      <SandboxEnvironmentMenu
 +        sessionId={sessionId}
@@ -185,8 +192,8 @@ index 288f49a..b82d080 100644
 +  }
    if (appearance === "composer") {
      const reconnectable = badge?.status === "offline" && !session?.hostResumable && !!onReconnect;
-     const canSwitch = host !== undefined && !host.sandbox_provider && !readOnly;
-@@ -268,3 +293,65 @@ export function HostBadge({
+     const label = badge ? `Host ${badge.label}, ${STATUS_WORD[badge.status]}` : "No host bound";
+@@ -283,3 +312,65 @@ export function HostBadge({
      </>
    );
  }
@@ -358,10 +365,10 @@ index 0000000..fda944f
 +  );
 +}
 diff --git a/web/src/components/composer/ComposerControls.tsx b/web/src/components/composer/ComposerControls.tsx
-index 9b546b5..61caecb 100644
+index 65bc5a6..0d2c27b 100644
 --- a/web/src/components/composer/ComposerControls.tsx
 +++ b/web/src/components/composer/ComposerControls.tsx
-@@ -79,9 +79,11 @@ export const ComposerHostTrigger = forwardRef<
+@@ -97,9 +97,11 @@ export const ComposerHostTrigger = forwardRef<
      status: "online" | "offline" | "unknown";
      cloud?: boolean;
      testIdPrefix?: string;
@@ -374,7 +381,7 @@ index 9b546b5..61caecb 100644
    ref,
  ) {
    const Icon = cloud ? MonitorCloudIcon : LaptopIcon;
-@@ -98,15 +100,20 @@ export const ComposerHostTrigger = forwardRef<
+@@ -116,15 +118,20 @@ export const ComposerHostTrigger = forwardRef<
        {...props}
      >
        <span className="flex items-center">
@@ -2121,10 +2128,10 @@ index 0000000..8b9ddad
 +  return [pending?.target ?? null, (target) => setPending({ target, from: actual })];
 +}
 diff --git a/web/src/hooks/useConversations.ts b/web/src/hooks/useConversations.ts
-index eee87e5..d238cb8 100644
+index 3626029..a105398 100644
 --- a/web/src/hooks/useConversations.ts
 +++ b/web/src/hooks/useConversations.ts
-@@ -1258,8 +1258,13 @@ export function useLeaveSession() {
+@@ -1277,8 +1277,13 @@ export function useLeaveSession() {
  export function useStopSession() {
    const queryClient = useQueryClient();
    return useMutation({
@@ -2248,10 +2255,10 @@ index 0000000..8247c9c
 +  });
 +}
 diff --git a/web/src/index.css b/web/src/index.css
-index e30e86a..bdc352e 100644
+index 9b9642b..338b9ee 100644
 --- a/web/src/index.css
 +++ b/web/src/index.css
-@@ -373,6 +373,37 @@
+@@ -382,6 +382,37 @@
    padding-right: 8px;
  }
  
@@ -2290,10 +2297,10 @@ index e30e86a..bdc352e 100644
    margin: 4px 0;
  }
 diff --git a/web/src/lib/capabilities.ts b/web/src/lib/capabilities.ts
-index 568a30f..53b2b9c 100644
+index bb16667..d0f185c 100644
 --- a/web/src/lib/capabilities.ts
 +++ b/web/src/lib/capabilities.ts
-@@ -404,6 +404,7 @@ const SANDBOX_PROVIDER_NAMES: Record<string, string> = {
+@@ -441,6 +441,7 @@ const SANDBOX_PROVIDER_NAMES: Record<string, string> = {
    lakebox: "Databricks",
    daytona: "Daytona",
    e2b: "E2B",
@@ -2302,10 +2309,10 @@ index 568a30f..53b2b9c 100644
  
  /**
 diff --git a/web/src/lib/sessionsApi.ts b/web/src/lib/sessionsApi.ts
-index b00c753..76a2a8b 100644
+index c624703..e2fea86 100644
 --- a/web/src/lib/sessionsApi.ts
 +++ b/web/src/lib/sessionsApi.ts
-@@ -1446,9 +1446,19 @@ export function interrupt(sessionId: string): Promise<PostEventResponse> {
+@@ -1453,9 +1453,19 @@ export function interrupt(sessionId: string, responseId?: string): Promise<PostE
   * Owner-only server-side. For claude-native sessions the bound runner
   * hard-kills the tmux pane the `claude` binary runs in — the analog
   * of exiting from inside tmux, but driven from the web UI.
@@ -2328,10 +2335,10 @@ index b00c753..76a2a8b 100644
  
  /** Reconnect or relaunch the existing runner without replaying user input. */
 diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
-index 6e2c337..ef87f01 100644
+index c857a68..c802bac 100644
 --- a/web/src/pages/ChatPage.tsx
 +++ b/web/src/pages/ChatPage.tsx
-@@ -4099,6 +4099,7 @@ function ComposerImpl(
+@@ -3936,6 +3936,7 @@ function ComposerImpl(
                    sessionId={composerSessionId}
                    appearance="composer"
                    readOnly={isReadOnly}
@@ -2340,18 +2347,31 @@ index 6e2c337..ef87f01 100644
                  />
                )}
 diff --git a/web/src/shell/Sidebar.stop.test.tsx b/web/src/shell/Sidebar.stop.test.tsx
-index e52d883..c3a8e25 100644
+index d7aea51..bb1e30c 100644
 --- a/web/src/shell/Sidebar.stop.test.tsx
 +++ b/web/src/shell/Sidebar.stop.test.tsx
-@@ -10,6 +10,7 @@ import { SidebarDataProvider } from "@/hooks/useSidebarData";
+@@ -1,5 +1,5 @@
+-import { renderSidebar } from "@/test/sidebarTestHelpers";
+ import { conversationPage } from "@/test/sidebarMockHelpers";
++import { SidebarDataProvider } from "@/hooks/useSidebarData";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
+ vi.mock("@/hooks/useScopeCache", () => import("@/test/mockScopeCache"));
+@@ -12,8 +12,12 @@ vi.mock("@/hooks/useScopeCache", () => import("@/test/mockScopeCache"));
  // ConversationRow in Sidebar.tsx.
  
  import type * as RunnerHealthProviderModule from "@/hooks/RunnerHealthProvider";
 +import type { Host } from "@/hooks/useHosts";
  
- import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
- import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-@@ -23,6 +24,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
+-import { cleanup, fireEvent, screen } from "@testing-library/react";
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { MemoryRouter } from "react-router-dom";
++import { TooltipProvider } from "@/components/ui/tooltip";
+ 
+ // Controllable stop mutation + runner-liveness lookup, declared via
+ // vi.hoisted so the vi.mock factories can reference them. The dialog reads
+@@ -22,6 +26,8 @@ import { cleanup, fireEvent, screen } from "@testing-library/react";
  const mocks = vi.hoisted(() => ({
    stop: { mutate: vi.fn(), reset: vi.fn(), isPending: false, isError: false },
    runnerOnline: vi.fn<(id: string | undefined) => boolean | undefined>(() => undefined),
@@ -2359,8 +2379,8 @@ index e52d883..c3a8e25 100644
 +  hosts: [] as Host[],
  }));
  
- vi.mock("@/hooks/useConversations", () => ({
-@@ -63,6 +66,7 @@ vi.mock("@/hooks/useConversations", () => ({
+ vi.mock("@/hooks/useConversations", async () => {
+@@ -35,6 +41,7 @@ vi.mock("@/hooks/useConversations", async () => {
  vi.mock("@/hooks/RunnerHealthProvider", async (importOriginal) => ({
    ...(await importOriginal<typeof RunnerHealthProviderModule>()),
    useSessionRunnerOnline: (id: string | undefined) => mocks.runnerOnline(id),
@@ -2368,16 +2388,39 @@ index e52d883..c3a8e25 100644
  }));
  
  vi.mock("@/components/PermissionsModal", () => ({ PermissionsModal: () => null }));
-@@ -115,6 +119,8 @@ function mockConversations(conversations: Conversation[]) {
+@@ -44,6 +51,7 @@ vi.mock("@/components/PermissionsModal", () => ({ PermissionsModal: () => null }
+ vi.mock("@/lib/serverOrigin", () => ({ isCurrentServerLocal: () => false }));
  
- function renderSidebar() {
-   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+ import { type Conversation, useConversations } from "@/hooks/useConversations";
++import { Sidebar } from "./Sidebar";
+ 
+ const useConvMock = vi.mocked(useConversations);
+ 
+@@ -66,6 +74,23 @@ function mockConversations(conversations: Conversation[]) {
+   useConvMock.mockImplementation(() => withData);
+ }
+ 
++function renderSidebar() {
++  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 +  // The hosts list the row reads to tell a sandbox session from another one.
 +  qc.setQueryData(["hosts", { includeSandbox: true }], mocks.hosts);
-   return render(
-     <QueryClientProvider client={qc}>
-       <SidebarDataProvider>
-@@ -139,6 +145,11 @@ beforeEach(() => {
++  return render(
++    <QueryClientProvider client={qc}>
++      <SidebarDataProvider>
++        <TooltipProvider>
++          <MemoryRouter initialEntries={["/"]}>
++            <Sidebar open={true} onClose={vi.fn()} />
++          </MemoryRouter>
++        </TooltipProvider>
++      </SidebarDataProvider>
++    </QueryClientProvider>,
++  );
++}
++
+ /** Open the row's action dropdown (Radix opens on pointerdown, not click). */
+ function openKebab() {
+   fireEvent.pointerDown(screen.getByTestId("conversation-actions"), { button: 0 });
+@@ -77,6 +102,11 @@ beforeEach(() => {
    mocks.stop.isPending = false;
    mocks.runnerOnline.mockReset();
    mocks.runnerOnline.mockReturnValue(undefined);
@@ -2389,7 +2432,7 @@ index e52d883..c3a8e25 100644
  });
  
  afterEach(() => {
-@@ -239,3 +250,70 @@ describe("sidebar Stop session item", () => {
+@@ -177,3 +207,70 @@ describe("sidebar Stop session item", () => {
      expect(item).toHaveAttribute("data-disabled");
    });
  });
@@ -2461,10 +2504,10 @@ index e52d883..c3a8e25 100644
 +  });
 +});
 diff --git a/web/src/shell/Sidebar.tsx b/web/src/shell/Sidebar.tsx
-index 84a7c46..a360971 100644
+index 053dae0..ef7e824 100644
 --- a/web/src/shell/Sidebar.tsx
 +++ b/web/src/shell/Sidebar.tsx
-@@ -164,7 +164,8 @@ import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
+@@ -186,7 +186,8 @@ import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
  import { ProjectRowIcon } from "./ProjectPicker";
  import { EmojiPicker } from "@/components/ProjectIconPicker";
  import { SessionStateBadge } from "@/components/SessionStateBadge";
@@ -2474,7 +2517,7 @@ index 84a7c46..a360971 100644
  import { useActiveRootSessionId } from "@/hooks/useSession";
  import { isSessionStoppable } from "@/lib/sessionStop";
  import { isImeCompositionKeyEvent } from "@/lib/ime";
-@@ -3297,6 +3298,7 @@ function ConversationMenuItems({
+@@ -3815,6 +3816,7 @@ function ConversationMenuItems({
    isOwner,
    isSingleUser,
    canStop,
@@ -2482,7 +2525,7 @@ index 84a7c46..a360971 100644
    canMarkUnread,
    currentProject,
    onTogglePinned,
-@@ -3321,6 +3323,8 @@ function ConversationMenuItems({
+@@ -3838,6 +3840,8 @@ function ConversationMenuItems({
    // Single-user mode: owners and viewers are the same user, so Delete stays.
    isSingleUser: boolean;
    canStop: boolean;
@@ -2491,8 +2534,8 @@ index 84a7c46..a360971 100644
    // Whether "Mark as unread" applies: any row not already showing the
    // unread dot (the active thread and running sessions included).
    canMarkUnread: boolean;
-@@ -3529,7 +3533,7 @@ function ConversationMenuItems({
-             }}
+@@ -4045,7 +4049,7 @@ function ConversationMenuItems({
+             onSelect={() => setStopOpen(true)}
            >
              <CircleStopIcon className="size-3.5" />
 -            Stop session
@@ -2500,7 +2543,7 @@ index 84a7c46..a360971 100644
            </C.Item>
          ) : (
            <Tooltip>
-@@ -3537,12 +3541,14 @@ function ConversationMenuItems({
+@@ -4053,12 +4057,14 @@ function ConversationMenuItems({
                <div>
                  <C.Item data-testid="stop-conversation" disabled>
                    <CircleStopIcon className="size-3.5" />
@@ -2517,7 +2560,7 @@ index 84a7c46..a360971 100644
              </TooltipContent>
            </Tooltip>
          ))}
-@@ -3768,12 +3774,19 @@ function ConversationRowImpl({
+@@ -4531,12 +4537,19 @@ function ConversationRowImpl({
    // observed, don't block. Non-sticky Stop: no "Resume" affordance — the
    // next message relaunches the runner on a live host.
    const runnerOnline = useSessionRunnerOnline(conversation.id);
@@ -2538,7 +2581,7 @@ index 84a7c46..a360971 100644
  
    // The session's current project NAME, or null when unfiled — drives the
    // kebab submenu label ("Add to project" vs "Move session") and the pinned
-@@ -4018,6 +4031,7 @@ function ConversationRowImpl({
+@@ -4823,6 +4836,7 @@ function ConversationRowImpl({
      isOwner,
      isSingleUser,
      canStop,
@@ -2546,7 +2589,7 @@ index 84a7c46..a360971 100644
      canMarkUnread,
      currentProject,
      onTogglePinned,
-@@ -4468,54 +4482,65 @@ function ConversationRowImpl({
+@@ -5320,51 +5334,61 @@ function ConversationRowImpl({
        </Dialog>
        {/* The stale-error reset lives on the kebab item's onSelect (the only
            open path) — onOpenChange only fires for Radix-initiated closes. */}
@@ -2560,36 +2603,33 @@ index 84a7c46..a360971 100644
 -            <DialogHeader>
 -              <DialogTitle>Stop session?</DialogTitle>
 -              <DialogDescription>
--                This terminates the running session for <span className="font-medium">{label}</span>{" "}
--                and stops its runner. The conversation and its history are kept.
+-                This terminates the running session for <span className="font-medium">{label}</span>
+-                {conversation.host_id
+-                  ? " and stops its runner, including side chats running on it."
+-                  : "."}{" "}
+-                Conversation histories are kept.
 -              </DialogDescription>
 -            </DialogHeader>
--            {stopSession.isError && (
--              <p className="text-ui text-destructive" role="alert">
--                Couldn't stop the session
--                {stopSession.error instanceof Error && stopSession.error.message
--                  ? `: ${stopSession.error.message}`
--                  : " — it may still be running"}
--                . Try again in a moment.
--              </p>
--            )}
 -            <DialogFooter>
--              <Button
--                type="button"
--                variant="ghost"
--                onClick={() => setStopOpen(false)}
--                disabled={stopSession.isPending}
--              >
+-              <Button type="button" variant="ghost" onClick={() => setStopOpen(false)}>
 -                Cancel
 -              </Button>
 -              <Button
 -                type="button"
 -                variant="destructive"
 -                data-testid="stop-session-confirm"
--                onClick={() =>
--                  stopSession.mutate(conversation.id, { onSuccess: () => setStopOpen(false) })
--                }
--                loading={stopSession.isPending}
+-                onClick={() => {
+-                  // Close now and stop in the background — keeping the modal open
+-                  // for the whole kill blocks the rest of the sidebar. A failure
+-                  // surfaces as a toast since the dialog is already gone.
+-                  setStopOpen(false);
+-                  stopSession.mutate(conversation.id, {
+-                    onError: (err) => {
+-                      const detail = err instanceof Error && err.message ? `: ${err.message}` : "";
+-                      showToast(`Couldn't stop the session${detail}`);
+-                    },
+-                  });
+-                }}
 -                componentId="sidebar.conversation.stop"
 -              >
 -                Stop session
@@ -2617,37 +2657,33 @@ index 84a7c46..a360971 100644
 +              <DialogHeader>
 +                <DialogTitle>Stop session?</DialogTitle>
 +                <DialogDescription>
-+                  This terminates the running session for{" "}
-+                  <span className="font-medium">{label}</span> and stops its runner. The
-+                  conversation and its history are kept.
++                  This terminates the running session for <span className="font-medium">{label}</span>
++                  {conversation.host_id
++                    ? " and stops its runner, including side chats running on it."
++                    : "."}{" "}
++                  Conversation histories are kept.
 +                </DialogDescription>
 +              </DialogHeader>
-+              {stopSession.isError && (
-+                <p className="text-ui text-destructive" role="alert">
-+                  Couldn't stop the session
-+                  {stopSession.error instanceof Error && stopSession.error.message
-+                    ? `: ${stopSession.error.message}`
-+                    : " — it may still be running"}
-+                  . Try again in a moment.
-+                </p>
-+              )}
 +              <DialogFooter>
-+                <Button
-+                  type="button"
-+                  variant="ghost"
-+                  onClick={() => setStopOpen(false)}
-+                  disabled={stopSession.isPending}
-+                >
++                <Button type="button" variant="ghost" onClick={() => setStopOpen(false)}>
 +                  Cancel
 +                </Button>
 +                <Button
 +                  type="button"
 +                  variant="destructive"
 +                  data-testid="stop-session-confirm"
-+                  onClick={() =>
-+                    stopSession.mutate(conversation.id, { onSuccess: () => setStopOpen(false) })
-+                  }
-+                  loading={stopSession.isPending}
++                  onClick={() => {
++                    // Close now and stop in the background — keeping the modal open
++                    // for the whole kill blocks the rest of the sidebar. A failure
++                    // surfaces as a toast since the dialog is already gone.
++                    setStopOpen(false);
++                    stopSession.mutate(conversation.id, {
++                      onError: (err) => {
++                        const detail = err instanceof Error && err.message ? `: ${err.message}` : "";
++                        showToast(`Couldn't stop the session${detail}`);
++                      },
++                    });
++                  }}
 +                  componentId="sidebar.conversation.stop"
 +                >
 +                  Stop session

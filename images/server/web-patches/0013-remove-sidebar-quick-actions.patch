@@ -6,14 +6,14 @@ the ⋯ button is left. Pin and Unpin, which upstream showed in the row's menu
 only on phones, are now in that menu (and the right-click menu) everywhere;
 Archive and Unarchive already were. Dragging a session onto Pinned still pins
 it. The title's reserved space on hover shrinks to fit the ⋯ button alone.
-Base: omnigent v0.15.0 (c8b9b85f822f).
-
+Upstream's tests of the quick buttons use the ⋯ menu instead.
+Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/web/src/shell/Sidebar.archive.test.tsx b/web/src/shell/Sidebar.archive.test.tsx
-index 9d969bf..3688253 100644
+index 3d66bf7..fd56cca 100644
 --- a/web/src/shell/Sidebar.archive.test.tsx
 +++ b/web/src/shell/Sidebar.archive.test.tsx
-@@ -192,28 +192,24 @@ describe("archive flow", () => {
-     );
+@@ -153,32 +153,24 @@ describe("archive flow", () => {
+     expect(screen.getByRole("button", { name: "View archived" })).toBeInTheDocument();
    });
  
 -  it("archives from the row's quick-archive hover button", () => {
@@ -26,7 +26,11 @@ index 9d969bf..3688253 100644
 -
 -    // Same single-PATCH contract as the kebab item, just a different affordance.
 -    expect(mocks.archive.mutate).toHaveBeenCalledTimes(1);
--    expect(mocks.archive.mutate).toHaveBeenCalledWith({ id: "conv_1", archived: true });
+-    expect(mocks.archive.mutate).toHaveBeenCalledWith({
+-      id: "conv_1",
+-      archived: true,
+-      deleteWorktree: false,
+-    });
 -    expect(mocks.stop.mutate).not.toHaveBeenCalled();
 +    expect(screen.queryByTestId("quick-archive-conversation")).toBeNull();
    });
@@ -49,10 +53,10 @@ index 9d969bf..3688253 100644
      expect(mocks.archive.mutate).toHaveBeenCalledWith({ id: "conv_1", archived: false });
    });
 diff --git a/web/src/shell/Sidebar.dragOverlayPortal.test.tsx b/web/src/shell/Sidebar.dragOverlayPortal.test.tsx
-index c23cf7b..bbf36f1 100644
+index 9068415..297cafc 100644
 --- a/web/src/shell/Sidebar.dragOverlayPortal.test.tsx
 +++ b/web/src/shell/Sidebar.dragOverlayPortal.test.tsx
-@@ -217,9 +217,11 @@ describe("session drag preview portal", () => {
+@@ -151,9 +151,11 @@ describe("session drag preview portal", () => {
  
    it("does not intercept Space on a session action as a keyboard drag", () => {
      renderSidebar();
@@ -66,8 +70,78 @@ index c23cf7b..bbf36f1 100644
      expect(document.body.querySelector('[class*="max-w-[16rem]"]')).toBeNull();
    });
  
+diff --git a/web/src/shell/Sidebar.pinReorder.test.tsx b/web/src/shell/Sidebar.pinReorder.test.tsx
+index be0ccea..927052c 100644
+--- a/web/src/shell/Sidebar.pinReorder.test.tsx
++++ b/web/src/shell/Sidebar.pinReorder.test.tsx
+@@ -165,7 +165,7 @@ describe("dropping an unpinned session onto a pinned row", () => {
+     expect(mocks.pinFn).not.toHaveBeenCalled();
+   });
+ 
+-  it("disables the other rows' pin buttons while a pin is saving", async () => {
++  it("disables the other rows' Pin items while a pin is saving", async () => {
+     let resolvePin!: () => void;
+     mocks.pinFn.mockImplementation(
+       () =>
+@@ -174,22 +174,33 @@ describe("dropping an unpinned session onto a pinned row", () => {
+         }),
+     );
+     renderSidebar();
+-    const pinButton = (id: string) =>
+-      screen
+-        .getByRole("link", { name: id })
+-        .closest("li")!
+-        .querySelector<HTMLElement>('[data-testid="quick-pin-conversation"]')!;
+-
+-    fireEvent.click(pinButton("conv_c"));
++    // This deployment drops the quick pin button; Pin is in the row's kebab.
++    const openKebab = (id: string) =>
++      // Radix DropdownMenu opens on pointerdown, not click.
++      fireEvent.pointerDown(
++        screen
++          .getByRole("link", { name: id })
++          .closest("li")!
++          .querySelector<HTMLElement>('[data-testid="conversation-actions"]')!,
++        { button: 0 },
++      );
++
++    openKebab("conv_c");
++    fireEvent.click(screen.getByTestId("pin-conversation"));
+     await waitFor(() => expect(mocks.pinFn).toHaveBeenCalledOnce());
+-    await waitFor(() => expect(pinButton("conv_d")).toHaveAttribute("aria-disabled", "true"));
+-    fireEvent.click(pinButton("conv_d"));
++    openKebab("conv_d");
++    await waitFor(() =>
++      expect(screen.getByTestId("pin-conversation")).toHaveAttribute("aria-disabled", "true"),
++    );
++    fireEvent.click(screen.getByTestId("pin-conversation"));
+     expect(mocks.pinFn).toHaveBeenCalledOnce();
+ 
+     await act(async () => {
+       resolvePin();
+     });
+-    await waitFor(() => expect(pinButton("conv_d")).toHaveAttribute("aria-disabled", "false"));
++    await waitFor(() =>
++      expect(screen.getByTestId("pin-conversation")).not.toHaveAttribute("aria-disabled"),
++    );
+   });
+ });
+ 
+@@ -201,11 +212,8 @@ describe("unpinning from a sidebar row", () => {
+     toast.dismiss();
+   });
+ 
++  // This deployment drops the quick pin button, so the kebab is the row's way.
+   it.each([
+-    [
+-      "quick-pin button",
+-      () => fireEvent.click(row("conv_a").querySelector('[data-testid="quick-pin-conversation"]')!),
+-    ],
+     [
+       "kebab Unpin item",
+       () => {
 diff --git a/web/src/shell/Sidebar.rowActions.test.tsx b/web/src/shell/Sidebar.rowActions.test.tsx
-index 4c1a414..7f01b47 100644
+index 5cffba6..29adf6b 100644
 --- a/web/src/shell/Sidebar.rowActions.test.tsx
 +++ b/web/src/shell/Sidebar.rowActions.test.tsx
 @@ -3,9 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -82,7 +156,15 @@ index 4c1a414..7f01b47 100644
  //   2. Double-clicking a row to enter inline rename (ConversationRow's
  //      `onDoubleClick`), gated on edit permission.
  // See ConversationRow / ConversationEditRow in Sidebar.tsx.
-@@ -26,7 +25,7 @@ import { USER_SESSION_TITLE_MAX_CHARS } from "@/lib/sessionTitles";
+@@ -13,7 +12,6 @@ import { SidebarDataProvider } from "@/hooks/useSidebarData";
+ import { useSyncExternalStore } from "react";
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+-import userEvent from "@testing-library/user-event";
+ import { MemoryRouter, Route, Routes } from "react-router-dom";
+ import { TooltipProvider } from "@/components/ui/tooltip";
+ import type { ServerInfo } from "@/lib/capabilities";
+@@ -33,7 +31,7 @@ vi.mock("@/hooks/useSessionActionRestrictions", () => ({
  // project flyout is disabled there). Declared via vi.hoisted so the vi.mock
  // factories (hoisted above imports) can reference them.
  const mocks = vi.hoisted(() => {
@@ -91,7 +173,7 @@ index 4c1a414..7f01b47 100644
    // click re-renders the sidebar (mirrors the real query's refetch). Holds ids;
    // the mocked hook maps them onto the loaded conversations.
    const pinnedListeners = new Set<() => void>();
-@@ -292,26 +291,22 @@ beforeEach(() => {
+@@ -279,26 +277,22 @@ beforeEach(() => {
  
  afterEach(cleanup);
  
@@ -128,7 +210,7 @@ index 4c1a414..7f01b47 100644
      expect(kebab).not.toHaveClass("-right-3", "absolute");
  
      const rowLink = screen.getByRole("link", { name: "My Session" });
-@@ -323,11 +318,11 @@ describe("quick pin/unpin hover button", () => {
+@@ -310,11 +304,11 @@ describe("quick pin/unpin hover button", () => {
      renderSidebar();
  
      const rowLink = screen.getByRole("link", { name: "My Session" });
@@ -142,7 +224,7 @@ index 4c1a414..7f01b47 100644
    });
  
    it("sizes the project-folder header controls to match the session-row kebab", () => {
-@@ -405,113 +400,63 @@ describe("quick pin/unpin hover button", () => {
+@@ -386,124 +380,63 @@ describe("quick pin/unpin hover button", () => {
      expect(screen.getByTestId("new-project")).toBeInTheDocument();
    });
  
@@ -184,6 +266,17 @@ index 4c1a414..7f01b47 100644
 -    expect(screen.queryByText("Pinned")).toBeNull();
    });
  
+-  it.each([
+-    ["quick-pin-conversation", "Pin"],
+-    ["quick-archive-conversation", "Archive"],
+-  ])("shows the %s action in a styled tooltip on hover", async (testId, label) => {
+-    const user = userEvent.setup();
+-    renderSidebar();
+-
+-    await user.hover(screen.getByTestId(testId));
+-    expect(await screen.findByRole("tooltip")).toHaveTextContent(label);
+-  });
+-
 -  it("also offers Pin in the kebab menu (mobile affordance) and toggles the same pin state", () => {
 +  it("pins and unpins from the kebab menu, moving the row under Pinned and back", () => {
      renderSidebar();
@@ -209,7 +302,7 @@ index 4c1a414..7f01b47 100644
 +    // user across devices.
      expect(mocks.pinnedStore.ids).toContain("conv_1");
 -  });
--
+ 
 -  it("splits the two pin affordances by viewport via Tailwind responsive classes", () => {
 -    // jsdom doesn't evaluate CSS media queries, so both affordances live in the
 -    // DOM regardless of viewport — the mobile/desktop split is purely the
@@ -218,7 +311,7 @@ index 4c1a414..7f01b47 100644
 -    // (mobile) but shown from `md` up. Together they guarantee exactly one pin
 -    // affordance is visible at any breakpoint.
 -    renderSidebar();
- 
+-
 -    // Desktop quick button: hidden on mobile, revealed from `md` up. The reveal
 -    // uses `md:inline-flex` (not `md:block`) so the button stays a flex
 -    // container — see the centering regression test below.
@@ -276,7 +369,7 @@ index 4c1a414..7f01b47 100644
      expect(kebab).not.toHaveClass("md:block");
    });
  });
-@@ -767,12 +712,11 @@ describe("leave a shared session", () => {
+@@ -836,12 +769,11 @@ describe("leave a shared session", () => {
    });
  });
  
@@ -293,7 +386,7 @@ index 4c1a414..7f01b47 100644
      mockConversations([{ ...CONV, owner: "other@example.com" }]);
      renderSidebar();
      // Non-owned rows live on the "Shared with me" tab (activates on mousedown).
-@@ -786,17 +730,18 @@ describe("quick-archive owner gate", () => {
+@@ -855,17 +787,18 @@ describe("quick-archive owner gate", () => {
      expect(screen.getByRole("link", { name: /My Session/ })).toBeInTheDocument();
      expect(screen.queryByTestId("quick-archive-conversation")).toBeNull();
  
@@ -316,20 +409,21 @@ index 4c1a414..7f01b47 100644
    });
  });
  
+@@ -1236,7 +1169,8 @@ describe("right-click context menu", () => {
+     );
+   });
+ 
+-  it.each(["quick-pin-conversation", "quick-archive-conversation", "conversation-actions"])(
++  // This deployment drops the quick pin and archive buttons; only the kebab is left.
++  it.each(["conversation-actions"])(
+     "opens the session menu when right-clicking the %s button",
+     (testId) => {
+       renderSidebar();
 diff --git a/web/src/shell/Sidebar.test.tsx b/web/src/shell/Sidebar.test.tsx
-index 200c453..03dcc83 100644
+index c015b28..fcb47bc 100644
 --- a/web/src/shell/Sidebar.test.tsx
 +++ b/web/src/shell/Sidebar.test.tsx
-@@ -106,7 +106,7 @@ vi.mock("@/hooks/useConversations", () => ({
-       isSuccess: true,
-     };
-   },
--  // Reflect the toggle into the seeded ref so a test that clicks quick-pin then
-+  // Reflect the toggle into the seeded ref so a test that clicks Pin then
-   // re-renders sees the updated Pinned set.
-   useTogglePinnedConversation: () => ({
-     mutate: ({ id, pinned }: { id: string; pinned: boolean }) => {
-@@ -634,17 +634,17 @@ describe("Sidebar session list", () => {
+@@ -626,17 +626,17 @@ describe("Sidebar session list", () => {
      renderSidebar();
  
      const row = screen.getByText("Balanced row title").closest("a")!;
@@ -353,7 +447,7 @@ index 200c453..03dcc83 100644
    });
  
    it("narrows the awaiting row's reserve on the same trigger that fades its tag", () => {
-@@ -667,7 +667,7 @@ describe("Sidebar session list", () => {
+@@ -659,7 +659,7 @@ describe("Sidebar session list", () => {
      // Every state that narrows the reserve must also fade the tag, and vice
      // versa, so the two can never disagree about whether the space is free.
      for (const trigger of ["md:group-hover:", "md:group-has-[:focus-visible]:"]) {
@@ -362,7 +456,7 @@ index 200c453..03dcc83 100644
        expect(tag.parentElement!.className).toContain(`${trigger}opacity-0`);
      }
      // `focus-within` fires for a plain mouse click, which the tag's fade does
-@@ -2889,31 +2889,25 @@ describe("Sidebar auto-expand Pinned on pin", () => {
+@@ -2819,31 +2819,25 @@ describe("Sidebar auto-expand Pinned on pin", () => {
    });
  });
  
@@ -402,19 +496,28 @@ index 200c453..03dcc83 100644
    });
  });
  
+@@ -3288,7 +3282,7 @@ describe("Sidebar view options", () => {
+     const row = screen.getByText("conv_meta").closest("li")!;
+     expect(within(row).queryByTestId("session-row-meta")).toBeNull();
+     expect(within(row).queryByTestId("session-row-updated")).toBeNull();
+-    const controls = () => within(row).getByTestId("quick-pin-conversation").closest(".absolute");
++    const controls = () => within(row).getByTestId("conversation-actions").closest(".absolute");
+     expect(controls()).toHaveClass("top-1/2");
+ 
+     openViewSubmenu("session-show-menu");
 diff --git a/web/src/shell/Sidebar.tsx b/web/src/shell/Sidebar.tsx
-index 2aee576..84a7c46 100644
+index ab356e7..053dae0 100644
 --- a/web/src/shell/Sidebar.tsx
 +++ b/web/src/shell/Sidebar.tsx
-@@ -224,7 +224,6 @@ import { ForkSessionDialog } from "./ForkSessionDialog";
- import { SessionRowSwipeAction, useSessionRowSwipe } from "./SessionRowSwipe";
- import { useIsTouchPrimary } from "./sidebarSwipe";
+@@ -287,7 +287,6 @@ import { useIsTouchPrimary } from "./sidebarSwipe";
  import { SIDEBAR_ROW } from "./sidebarStyles";
+ import { MAIN_CANVAS_ID } from "@/canvas/canvasLayout";
+ import { CANVAS_QUERY_PARAM, canvasLocation, isCanvasPathname } from "@/canvas/canvasNavigation";
 -import { TooltipArrow } from "radix-ui/tooltip";
  import { getEmbedRoot } from "../lib/host";
+ import { ALT_KEY, ARIA_MOD_KEY, CompactShortcutKeys, MOD_KEY } from "@/components/KeyboardShortcut";
  
- // Positioning for a row's trailing session-state badge. Anchored at the row's
-@@ -1893,8 +1892,8 @@ function ConversationList({
+@@ -2138,8 +2137,8 @@ function ConversationList({
    // A session row can be dragged onto a project folder (file it there), onto the
    // "Chats" list / a fallback strip (unfile it), or onto "Pinned" (pin it, which
    // floats it out of its project). "Shared with me" is deliberately not a drop
@@ -425,7 +528,7 @@ index 2aee576..84a7c46 100644
    const moveToProject = useMoveToProject();
    // The session currently being dragged (id + source project + pinned state), or
    // null. Set on drag start, cleared on end/cancel; drives the DragOverlay
-@@ -3401,14 +3400,13 @@ function ConversationMenuItems({
+@@ -3919,14 +3918,13 @@ function ConversationMenuItems({
  
    return (
      <>
@@ -436,32 +539,24 @@ index 2aee576..84a7c46 100644
        {!isArchived && (
          <C.Item
            data-testid="pin-conversation"
-           disabled={!isPinned && atPinCap}
+           disabled={pinSaving || (!isPinned && atPinCap)}
 -          className="md:hidden"
            onSelect={() => onTogglePinned(conversation.id)}
          >
            {isPinned ? <PinOffIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}
-@@ -3697,7 +3695,6 @@ function ConversationRowImpl({
+@@ -4459,11 +4457,6 @@ function ConversationRowImpl({
    onToggleSelected: (conversationId: string, shiftKey?: boolean) => void;
    onProjectAssigned?: (projectName: string) => void;
  }) {
 -  const atPinCap = useContext(PinCapacityContext);
+-  const pinSaving = useContext(PinSavingContext);
+-  let pinTooltip = isPinned ? "Unpin" : "Pin";
+-  if (pinSaving) pinTooltip = "Saving pins…";
+-  else if (!isPinned && atPinCap) pinTooltip = "Unpin a session first";
    const hostsById = useContext(HostsByIdContext);
    const navigate = useNavigate();
    // A client-only `temp:` row (navigate-first create window): no server session
-@@ -3985,11 +3982,6 @@ function ConversationRowImpl({
-     if (nextArchived) showArchiveUndoToast(queryClient, [conversation]);
-   }
- 
--  function runUnarchive() {
--    const nextArchived = !isArchived;
--    archive.mutate({ id: conversation.id, archived: nextArchived });
--  }
--
-   function confirmLeave() {
-     // Leave is a self-revoke, so it needs the viewer's own id. The menu item is
-     // gated on the row NOT being owned by the viewer, which is only decidable
-@@ -4055,9 +4047,9 @@ function ConversationRowImpl({
+@@ -4858,9 +4851,9 @@ function ConversationRowImpl({
          // Full width (not 100%+1rem) so the highlight stays inset from the
          // right edge, aligning with the project/folder rows above.
          "w-full",
@@ -473,7 +568,7 @@ index 2aee576..84a7c46 100644
          !selectionMode &&
            (sessionState?.kind === "awaiting"
              ? showSharedIndicator
-@@ -4073,8 +4065,8 @@ function ConversationRowImpl({
+@@ -4880,8 +4873,8 @@ function ConversationRowImpl({
          // `focus-within` also fires for a plain click, which shrank the reserve
          // on the selected row while the marker stayed put, sliding the title
          // under it.
@@ -484,7 +579,7 @@ index 2aee576..84a7c46 100644
          selectionMode && "pr-2 pl-8",
          !selectionMode && isActive && SIDEBAR_ACTIVE_HIGHLIGHT,
          selectionMode && isSelected && SIDEBAR_ACTIVE_HIGHLIGHT,
-@@ -4309,101 +4301,13 @@ function ConversationRowImpl({
+@@ -5143,12 +5136,11 @@ function ConversationRowImpl({
            <UsersIcon className="size-3.5" aria-hidden="true" />
          </span>
        )}
@@ -500,94 +595,107 @@ index 2aee576..84a7c46 100644
 +          right-click menus. Hidden entirely while selecting (bulk mode owns
 +          the row controls). */}
        {!selectionMode && (
-         <div className="-translate-y-1/2 absolute top-1/2 right-1 flex items-center gap-0.5">
--          {/* Archived rows omit the pin entirely: pinning is meaningless there
+         <ContextMenu>
+           <ContextMenuTrigger asChild>
+@@ -5158,101 +5150,6 @@ function ConversationRowImpl({
+                 overlayTop,
+               )}
+             >
+-              {/* Archived rows omit the pin entirely: pinning is meaningless there
 -              (archive outranks pin), so there's no pin action even on hover. */}
--          {!isArchived && (
--            <Button
--              type="button"
--              variant="ghost"
--              size="icon-xs"
--              aria-label={isPinned ? "Unpin conversation" : "Pin conversation"}
--              data-testid="quick-pin-conversation"
--              aria-disabled={!isPinned && atPinCap}
--              title={!isPinned && atPinCap ? "Unpin a session first" : undefined}
--              className={cn(
--                // Desktop-only quick affordance: hidden on mobile (the kebab's
--                // Pin item below covers that), hover/focus-revealed from `md`
--                // up. Pinned rows no longer keep a persistent pin marker, since
--                // the "Pinned" section header (and pinned-first ordering inside
--                // a project) already conveys the pinned state. Revealed glyph:
--                // unpin if pinned, pin otherwise.
--                //
--                // `md:inline-flex` (not `md:block`): the Button base is
--                // `inline-flex` and relies on it for `items-center
--                // justify-center` to center the icon. `md:block` would override
--                // that display and collapse the centering, leaving the glyph
--                // pinned to the top-left of the button — so keep the flex
--                // display when revealing it.
--                "text-muted-foreground transition-opacity",
--                "hidden md:inline-flex",
--                "md:opacity-0 md:group-hover:opacity-100",
--                "md:group-has-[:focus-visible]:opacity-100 md:group-has-[[aria-expanded=true]]:opacity-100",
+-              {!isArchived && (
+-                <Tooltip disableHoverableContent>
+-                  <TooltipContent>
+-                    <TooltipArrow />
+-                    {pinTooltip}
+-                  </TooltipContent>
+-                  <TooltipTrigger asChild>
+-                    <Button
+-                      type="button"
+-                      variant="ghost"
+-                      size="icon-xs"
+-                      aria-label={isPinned ? "Unpin conversation" : "Pin conversation"}
+-                      data-testid="quick-pin-conversation"
+-                      aria-disabled={pinSaving || (!isPinned && atPinCap)}
+-                      className={cn(
+-                        // Desktop-only quick affordance: hidden on mobile (the kebab's
+-                        // Pin item below covers that), hover/focus-revealed from `md`
+-                        // up. Pinned rows no longer keep a persistent pin marker, since
+-                        // the "Pinned" section header (and pinned-first ordering inside
+-                        // a project) already conveys the pinned state. Revealed glyph:
+-                        // unpin if pinned, pin otherwise.
+-                        //
+-                        // `md:inline-flex` (not `md:block`): the Button base is
+-                        // `inline-flex` and relies on it for `items-center
+-                        // justify-center` to center the icon. `md:block` would override
+-                        // that display and collapse the centering, leaving the glyph
+-                        // pinned to the top-left of the button — so keep the flex
+-                        // display when revealing it.
+-                        "text-muted-foreground transition-opacity",
+-                        "hidden md:inline-flex",
+-                        "md:opacity-0 md:group-hover:opacity-100",
+-                        "md:group-has-[:focus-visible]:opacity-100 md:group-has-[[aria-expanded=true]]:opacity-100",
+-                      )}
+-                      onClick={(e) => {
+-                        // Keep the toggle click off the surrounding Link (no navigation).
+-                        e.preventDefault();
+-                        e.stopPropagation();
+-                        if (pinSaving) return;
+-                        onTogglePinned(conversation.id);
+-                      }}
+-                    >
+-                      {isPinned ? (
+-                        <PinOffIcon className="size-3.5" data-icon-size="14" />
+-                      ) : (
+-                        <PinIcon className="size-3.5" data-icon-size="14" />
+-                      )}
+-                    </Button>
+-                  </TooltipTrigger>
+-                </Tooltip>
 -              )}
--              onClick={(e) => {
--                // Keep the toggle click off the surrounding Link (no navigation).
--                e.preventDefault();
--                e.stopPropagation();
--                onTogglePinned(conversation.id);
--              }}
--            >
--              {isPinned ? (
--                <PinOffIcon className="size-3.5" data-icon-size="14" />
--              ) : (
--                <PinIcon className="size-3.5" data-icon-size="14" />
--              )}
--            </Button>
--          )}
--          {/* Archive is owner-only, same as the kebab's Archive item; non-owners
+-              {/* Archive is owner-only, same as the kebab's Archive item; non-owners
 -              don't get the quick affordance and instead see that item disabled
 -              with an explanation. */}
--          {isOwner && (
--            <Tooltip disableHoverableContent>
--              <TooltipContent>
--                <TooltipArrow />
--                {isArchived ? "Unarchive conversation" : "Archive conversation"}
--              </TooltipContent>
--              <TooltipTrigger asChild>
--                <Button
--                  type="button"
--                  variant="ghost"
--                  size="icon-xs"
--                  aria-label={isArchived ? "Unarchive conversation" : "Archive conversation"}
--                  data-testid="quick-archive-conversation"
--                  className={cn(
--                    "text-muted-foreground transition-opacity",
--                    "hidden md:inline-flex",
--                    "md:opacity-0 md:group-hover:opacity-100",
--                    "md:group-has-[:focus-visible]:opacity-100 md:group-has-[[aria-expanded=true]]:opacity-100",
--                  )}
--                  onClick={(e) => {
--                    // Keep the toggle click off the surrounding Link (no navigation).
--                    e.preventDefault();
--                    e.stopPropagation();
--                    if (!isArchived) {
--                      runArchive();
--                    } else {
--                      runUnarchive();
--                    }
--                  }}
--                >
--                  {isArchived ? (
--                    <ArchiveRestoreIcon className="size-3.5" data-icon-size="14" />
--                  ) : (
--                    <ArchiveIcon className="size-3.5" data-icon-size="14" />
--                  )}
--                </Button>
--              </TooltipTrigger>
--            </Tooltip>
--          )}
+-              {isOwner && (
+-                <Tooltip disableHoverableContent>
+-                  <TooltipContent>
+-                    <TooltipArrow />
+-                    {isArchived ? "Unarchive" : "Archive"}
+-                  </TooltipContent>
+-                  <TooltipTrigger asChild>
+-                    <Button
+-                      type="button"
+-                      variant="ghost"
+-                      size="icon-xs"
+-                      aria-label={isArchived ? "Unarchive conversation" : "Archive conversation"}
+-                      data-testid="quick-archive-conversation"
+-                      className={cn(
+-                        "text-muted-foreground transition-opacity",
+-                        "hidden md:inline-flex",
+-                        "md:opacity-0 md:group-hover:opacity-100",
+-                        "md:group-has-[:focus-visible]:opacity-100 md:group-has-[[aria-expanded=true]]:opacity-100",
+-                      )}
+-                      onClick={(e) => {
+-                        // Keep the toggle click off the surrounding Link (no navigation).
+-                        e.preventDefault();
+-                        e.stopPropagation();
+-                        if (!isArchived) {
+-                          runArchive();
+-                        } else {
+-                          runUnarchive();
+-                        }
+-                      }}
+-                    >
+-                      {isArchived ? (
+-                        <ArchiveRestoreIcon className="size-3.5" data-icon-size="14" />
+-                      ) : (
+-                        <ArchiveIcon className="size-3.5" data-icon-size="14" />
+-                      )}
+-                    </Button>
+-                  </TooltipTrigger>
+-                </Tooltip>
+-              )}
 -
-           <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-             <DropdownMenuTrigger asChild>
-               <Button
+               <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+                 <DropdownMenuTrigger asChild>
+                   <Button

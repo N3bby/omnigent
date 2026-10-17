@@ -1,10 +1,10 @@
-ARG OMNIGENT_SERVER_IMAGE=ghcr.io/omnigent-ai/omnigent-server-kubernetes@sha256:ed3ae35d30572dcd929ba4e1edefdcec53ef178ab2f8147d11a8f2f33dded123
+ARG OMNIGENT_SERVER_IMAGE=ghcr.io/omnigent-ai/omnigent-server-kubernetes@sha256:eba3422ee55ef946bff7c895f458258fbaf4a5e4244ef38aa66caec8fefe9198
 ARG WEB_BUILDER_IMAGE=docker.io/library/node:22.23.3-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
 
 # The upstream image ships the web UI prebuilt, so a web patch needs a rebuild
 # from the pinned upstream source. The commit id pins the checkout's content.
 FROM ${WEB_BUILDER_IMAGE} AS web
-ARG OMNIGENT_COMMIT=c8b9b85f822f2c9203ff995c10f3cc49d064bbe5
+ARG OMNIGENT_COMMIT=a8676d23e88df7918f4f8ef1c7c4e3186e710354
 ARG PNPM_VERSION=11.15.1
 ARG JETBRAINS_IDEA_PATH=/opt/jetbrains/intellij
 ENV VITE_OMNIGENT_GATEWAY_IDEA_PATH=${JETBRAINS_IDEA_PATH}

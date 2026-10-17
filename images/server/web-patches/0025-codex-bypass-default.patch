@@ -1,0 +1,146 @@
+Start the new-session form on Codex bypass where the deployment does.
+
+With codex_bypass_default in GET /v1/info (patches/0017-codex-bypass-default.patch),
+a Codex harness with no remembered preset starts on "Bypass approvals &
+sandbox", and a remembered preset still wins. Because the server stamps
+bypass on any Codex session that says nothing, picking Default, Full access
+or Read only sends omnigent.codex_native.bypass_sandbox "0".
+Base: omnigent v0.18.0 (a8676d23e88d), after 0024-admin-settings-nav.patch.
+diff --git a/web/src/lib/capabilities.ts b/web/src/lib/capabilities.ts
+index d0f185c3d..4e8b90fdd 100644
+--- a/web/src/lib/capabilities.ts
++++ b/web/src/lib/capabilities.ts
+@@ -131,6 +131,12 @@ export interface ServerInfo {
+     string,
+     { multi_repo?: boolean; inference_models?: boolean; default_models?: boolean }
+   >;
++  /**
++   * Whether new Codex sessions bypass approvals and Codex's sandbox unless they
++   * ask otherwise: this deployment's ``codex_bypass_approvals``. The
++   * new-session form then starts on "Bypass approvals & sandbox".
++   */
++  codex_bypass_default?: boolean;
+   /**
+    * Connection providers this deploy has wired (config + store present),
+    * e.g. ``["github"]`` or ``["github", "databricks"]``. Non-empty shows the
+@@ -368,6 +374,7 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
+             !Array.isArray(data.sandbox_provider_capabilities)
+               ? (data.sandbox_provider_capabilities as ServerInfo["sandbox_provider_capabilities"])
+               : {},
++          codex_bypass_default: data.codex_bypass_default === true,
+           enabled_connections: Array.isArray(data.enabled_connections)
+             ? data.enabled_connections.filter((p): p is string => typeof p === "string")
+             : [],
+diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
+index 19ed513cd..1efa4d1da 100644
+--- a/web/src/shell/NewChatDialog.test.tsx
++++ b/web/src/shell/NewChatDialog.test.tsx
+@@ -6057,6 +6057,60 @@ describe("NewChatLandingScreen", () => {
+     expect(body.terminal_launch_args).toEqual(args);
+   });
+ 
++  it("starts Codex on bypass where the deployment makes it the default", async () => {
++    authenticatedFetchMock.mockResolvedValue({
++      ok: true,
++      json: async () => ({ id: "conv_new" }),
++    } as unknown as Response);
++    renderLanding({ codex_bypass_default: true });
++    selectAgent("a2");
++    expect(screen.getByTestId("new-chat-landing-permission-chip")).toHaveAccessibleName(
++      "Permission mode: Bypass approvals & sandbox",
++    );
++
++    const { body } = await submitAndReadBody();
++    expect(
++      (body.labels as Record<string, string>)["omnigent.codex_native.bypass_sandbox"],
++    ).toBe("1");
++  });
++
++  it.each([
++    ["default", "Default"],
++    ["full-access", "Full access"],
++    ["read-only", "Read only"],
++  ] as const)(
++    "tells the server %s is not bypass where bypass is the default",
++    async (mode, label) => {
++      authenticatedFetchMock.mockResolvedValue({
++        ok: true,
++        json: async () => ({ id: "conv_new" }),
++      } as unknown as Response);
++      renderLanding({ codex_bypass_default: true });
++      selectAgent("a2");
++      pickPermissionOption(mode);
++      expect(screen.getByTestId("new-chat-landing-permission-chip")).toHaveAccessibleName(
++        `Permission mode: ${label}`,
++      );
++
++      // Without the "0" the server would stamp bypass onto the session.
++      const { body } = await submitAndReadBody();
++      expect(
++        (body.labels as Record<string, string>)["omnigent.codex_native.bypass_sandbox"],
++      ).toBe("0");
++    },
++  );
++
++  it("keeps a remembered Codex preset over the deployment's bypass default", () => {
++    renderLanding({ codex_bypass_default: true });
++    selectAgent("a2");
++    pickPermissionOption("default");
++    remountLanding({ codex_bypass_default: true });
++    selectAgent("a2");
++    expect(screen.getByTestId("new-chat-landing-permission-chip")).toHaveAccessibleName(
++      "Permission mode: Default",
++    );
++  });
++
+   it("shows a conflict banner in the file browser for an occupied directory", async () => {
+     // A live session in the seeded workspace ("/Users/corey/repo") on the
+     // auto-selected host occupies the directory the picker opens at.
+diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
+index 6ea3ca5ac..f63e15191 100644
+--- a/web/src/shell/NewChatDialog.tsx
++++ b/web/src/shell/NewChatDialog.tsx
+@@ -2485,6 +2485,9 @@ export function NewChatLandingScreen() {
+   // fails closed (option hidden) until the boot probe resolves.
+   const info = useServerInfo();
+   const managedSandboxesEnabled = info !== "loading" && info.managed_sandboxes_enabled;
++  // This deployment bypasses Codex's approvals and sandbox unless a session
++  // asks otherwise, so the form starts on Bypass until the user picks another.
++  const codexBypassDefault = info !== "loading" && info.codex_bypass_default === true;
+   const smartRoutingEnabled = info !== "loading" && info.smart_routing_enabled;
+   // Which router can answer a pick. The external AI-Gateway router only covers
+   // a family the host runs through the gateway; the built-in judge covers any
+@@ -4385,7 +4388,8 @@ export function NewChatLandingScreen() {
+     } else if (supportsApprovalMode) {
+       setBypassSandbox(
+         selectedNativeHarness === "codex-native" &&
+-          stored.mode === CODEX_NATIVE_BYPASS_APPROVAL_VALUE,
++          (stored.mode === CODEX_NATIVE_BYPASS_APPROVAL_VALUE ||
++            (stored.mode == null && codexBypassDefault)),
+       );
+       setApprovalMode(resolve(CODEX_NATIVE_APPROVAL_MODES, CODEX_NATIVE_DEFAULT_APPROVAL_MODE));
+       // A remembered routing "on" outranks a remembered concrete model, and
+@@ -4432,6 +4436,7 @@ export function NewChatLandingScreen() {
+   }, [
+     sandboxInferenceConfigured,
+     selectedNativeHarness,
++    codexBypassDefault,
+     claudeModelOptions,
+     codexModelOptions,
+     piModelOptions,
+@@ -5671,10 +5676,14 @@ export function NewChatLandingScreen() {
+       // when the toggle is armed for a codex-native agent) so the runner
+       // launches with --dangerously-bypass-approvals-and-sandbox and the choice
+       // survives reload.
++      // Where bypass is this deployment's default, a Codex session the user
++      // set to another preset says so with "0", or the server would add it.
+       const baseLabels =
+         agentSupportsApprovalMode && bypassSandbox
+           ? { ...(nativeLabels ?? {}), [CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY]: "1" }
+-          : nativeLabels;
++          : codexBypassDefault && selectedNativeHarness === "codex-native"
++            ? { ...(nativeLabels ?? {}), [CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY]: "0" }
++            : nativeLabels;
+       // First-class project filing: a project-driven visit whose `?project=`
+       // name resolved to a real project id sends `project_id` so the server
+       // files the session atomically at create (born filed, no follow-up

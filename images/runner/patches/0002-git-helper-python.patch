@@ -6,13 +6,13 @@ login shells put mise's shims first on PATH, so in a project that pins Python
 no omnigent module, and git push/fetch to github.com failed. The helper now
 names sys.executable, e.g. /opt/venv/bin/python3. The host rewrites the helper
 on every start, so existing sessions pick it up when they wake.
-Base: omnigent v0.15.0 (c8b9b85f822f).
+Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/git_credential_github.py b/omnigent/git_credential_github.py
-index 8d7ca07..472e337 100644
+index 1deee75..14849c5 100644
 --- a/omnigent/git_credential_github.py
 +++ b/omnigent/git_credential_github.py
-@@ -146,8 +146,11 @@ def _install_broker_helper(server_url: str, host_id: str, token: str) -> None:
+@@ -154,8 +154,11 @@ def _install_broker_helper(server_url: str, host_id: str, token: str) -> None:
      re-runs on every resume). A plain set can't overwrite the 2+ values that
      leaves, so without ``--replace-all`` broker entries would pile up.
      """

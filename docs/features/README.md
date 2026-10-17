@@ -1,6 +1,6 @@
 # Custom features
 
-This deployment runs upstream Omnigent `v0.15.0`, pinned as
+This deployment runs upstream Omnigent `v0.18.0`, pinned as
 `omnigent_commit` in `versions.yaml`, with a few extras on top. Each page
 explains what the feature does, what you'll notice, and how to turn it off
 where you can.
@@ -88,12 +88,11 @@ applies to the pinned `omnigent_commit`, both the image build and
 `mise run test` fail.
 
 - **When upstream ships the same behaviour**, delete the patch.
-- **Backported upstream fixes** come out when you upgrade past the release
-  that has them:
+- **Upstream bugs this deployment fixes** come out once upstream ships a fix:
 
-  | Patch | Upstream fix | Delete from |
+  | Patch | Upstream bug | Delete when |
   | --- | --- | --- |
-  | `images/runner/patches/0007-native-turn-idle-watchdog.patch` | [#8058](https://github.com/omnigent-ai/omnigent/pull/8058): a Claude or Codex turn that runs longer than `runner_agent_idle_seconds` is no longer stopped as idle | `v0.16.0` |
+  | `images/server/web-patches/0024-admin-settings-nav.patch` | Since [#8634](https://github.com/omnigent-ai/omnigent/pull/8634) (`v0.17.0`), Settings has no Admin group (Members, Policies, Sharing, Subscriptions, Repository variables) after a page load | upstream's `web/src/hooks/useIsAdmin.ts` no longer seeds `initialData` |
 - **When no web patches are left**, the server image can stop rebuilding the
   web UI.
 

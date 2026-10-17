@@ -45,10 +45,9 @@ Errors that used to look generic:
   the host's online timeout plus the launcher's Pod budget, not 240 seconds.
 
 Cancel start marks the record cancelled before it publishes "ready".
-Base: omnigent v0.15.0 (c8b9b85f822f), after 0015-environment-menu.patch.
-
+Base: omnigent v0.18.0 (a8676d23e88d), after 0015-environment-menu.patch.
 diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
-index 0f2960e3b..eec675d2b 100644
+index 8f54a00..0059024 100644
 --- a/omnigent/onboarding/sandboxes/kubernetes.py
 +++ b/omnigent/onboarding/sandboxes/kubernetes.py
 @@ -55,9 +55,10 @@ import shlex
@@ -63,7 +62,7 @@ index 0f2960e3b..eec675d2b 100644
  from omnigent_repo_env import checkouts_env as _repo_env_checkouts
  from omnigent_repo_env import clone_command as _repo_env_clone_command
  from omnigent_repo_env import pod_volumes as _repo_env_volumes
-@@ -631,6 +632,13 @@ def _render_workspace_prep_command(
+@@ -636,6 +637,13 @@ def _render_workspace_prep_command(
              script += "      exit 1\n    fi\n  fi\n"
              script += f"  mkdir -- {target}\n  mkdir -- {temporary}\n  touch -- {marker}\n"
              script += '  if [ -z "$wired" ]; then wire_credentials; wired=1; fi\n'
@@ -76,8 +75,8 @@ index 0f2960e3b..eec675d2b 100644
 +            script += f"  echo {progress['cloning']}\n"
              # A repository with its own GIT_TOKEN variable clones with it.
              clone = _repo_env_clone_command(
-                 repo.url, f"{branch}-- {shlex.quote(repo.url)} {staged_clone}", staged_clone
-@@ -639,9 +647,12 @@ def _render_workspace_prep_command(
+                 repo.url,
+@@ -653,9 +661,12 @@ def _render_workspace_prep_command(
                  f"  ({clone} "
                  f"&& replace_empty_dir {staged_clone} {target} "
                  f"&& rm -f -- {marker} && rmdir -- {temporary} "
@@ -91,7 +90,7 @@ index 0f2960e3b..eec675d2b 100644
              script += "fi\n"
          script += 'rc=0\nfor p in $pids; do wait "$p" || rc=1; done\n'
          script += '[ "$rc" -eq 0 ]\n'
-@@ -989,6 +1000,14 @@ def build_job_manifest(
+@@ -1003,6 +1014,14 @@ def build_job_manifest(
      )
      if repo_checkouts is not None:
          host_env.append(repo_checkouts)
@@ -106,7 +105,7 @@ index 0f2960e3b..eec675d2b 100644
  
      host_container: dict[str, object] = {
          "name": _CONTAINER_NAME,
-@@ -1074,6 +1093,42 @@ def build_job_manifest(
+@@ -1088,6 +1107,42 @@ def build_job_manifest(
      }
  
  
@@ -149,7 +148,7 @@ index 0f2960e3b..eec675d2b 100644
  def _api_reason(exc: Exception) -> str:
      """
      Short human reason for an ``ApiException`` / urllib3 ``HTTPError``.
-@@ -1156,6 +1211,8 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
+@@ -1170,6 +1225,8 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
      - The host container is in ``CrashLoopBackOff`` (the kubelet is still
        retrying, but the container is crash-looping and unlikely to self-heal
        during the launch window).
@@ -158,7 +157,7 @@ index 0f2960e3b..eec675d2b 100644
  
      :param pod: A ``V1Pod`` read from the API.
      :returns: The failed container name + summary, or ``None``.
-@@ -1185,6 +1242,23 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
+@@ -1199,6 +1256,23 @@ def _terminal_failure(pod: object) -> tuple[str, str] | None:
                  )
          return _CONTAINER_NAME, "entered terminal phase 'Failed'"
  
@@ -182,7 +181,7 @@ index 0f2960e3b..eec675d2b 100644
      # Host container in CrashLoopBackOff while the Pod is still Running —
      # the kubelet is retrying but the host is crash-looping.
      for cs in getattr(status, "container_statuses", None) or []:
-@@ -1593,6 +1667,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+@@ -1608,6 +1682,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
          workspace = f"{_HOME_DIR}/workspace"
          if on_stage is not None:
              on_stage("starting")
@@ -191,7 +190,7 @@ index 0f2960e3b..eec675d2b 100644
          core = self._load_core()
          click.echo(
              f"▸ Creating Kubernetes {self.workload_kind} '{sandbox_id}' in "
-@@ -1735,18 +1811,28 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+@@ -1750,18 +1826,28 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
  
          core = self._load_core()
          timeout_s = _resolve_pod_ready_timeout_s(self._pod_ready_timeout_s)
@@ -220,7 +219,7 @@ index 0f2960e3b..eec675d2b 100644
                          )
                      time.sleep(_POD_READY_POLL_S)
                      continue
-@@ -1800,6 +1886,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+@@ -1815,6 +1901,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                  time.sleep(_POD_READY_POLL_S)
                  continue
  
@@ -229,7 +228,7 @@ index 0f2960e3b..eec675d2b 100644
              # Check for terminal failure BEFORE accepting Running — a
              # crash-looping host container stays in phase Running under
              # OnFailure, so phase alone is not proof of liveness.
-@@ -1834,6 +1922,107 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+@@ -1849,6 +1937,107 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                  )
              time.sleep(_POD_READY_POLL_S)
  
@@ -337,7 +336,7 @@ index 0f2960e3b..eec675d2b 100644
      def _pod_failure_message(
          self,
          namespace: str,
-@@ -1910,19 +2099,11 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
+@@ -1925,19 +2114,11 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
          from urllib3.exceptions import HTTPError
  
          try:
@@ -360,10 +359,10 @@ index 0f2960e3b..eec675d2b 100644
      def _best_effort_delete(self, namespace: str, job_name: str, secret_name: str) -> None:
          """
 diff --git a/omnigent/server/app.py b/omnigent/server/app.py
-index fefbdda98..23ae95882 100644
+index 67b7261..198b03a 100644
 --- a/omnigent/server/app.py
 +++ b/omnigent/server/app.py
-@@ -117,6 +117,8 @@ from omnigent.server.routes.sessions import (
+@@ -125,6 +125,8 @@ from omnigent.server.routes.sessions import (
  )
  from omnigent.server.routes.sharing import create_sharing_router
  from omnigent_repo_env_api import create_repo_env_router
@@ -372,16 +371,16 @@ index fefbdda98..23ae95882 100644
  from omnigent_subscriptions_api import create_subscriptions_router
  from omnigent.server.routes.terminal_attach import create_terminal_attach_router
  from omnigent.server.routes.usage import create_usage_router
-@@ -3424,6 +3426,8 @@ def create_app(
+@@ -3651,6 +3653,8 @@ def create_app(
          # cancel any pending disconnect-grace timer so it can't re-run the
          # disconnect reconciliation on top of it.
          _cancel_disconnect_grace(runner_id)
 +        # A sandbox start waiting for this runner stops waiting (omnigent_startup).
 +        _startup.runner_exited(runner_id, error)
-         affected = await asyncio.to_thread(
-             conversation_store.list_conversations_by_runner_id, runner_id
-         )
-@@ -3703,6 +3707,31 @@ def create_app(
+         # Host connection evidence survives tunnel moves between replicas. Older
+         # hosts fall back to this replica's observed liveness.
+         runner_ran = (
+@@ -4024,6 +4028,31 @@ def create_app(
              prefix="/v1",
              tags=["hosts"],
          )
@@ -414,7 +413,7 @@ index fefbdda98..23ae95882 100644
      # Per-user connection routes (/v1/connections/{provider}/*): connect /
      # callback / status / disconnect. One registry entry per provider; each is
 diff --git a/omnigent/server/managed_hosts.py b/omnigent/server/managed_hosts.py
-index 8b6ee6dde..9cd7deab5 100644
+index 225c5fe..fb49376 100644
 --- a/omnigent/server/managed_hosts.py
 +++ b/omnigent/server/managed_hosts.py
 @@ -180,6 +180,7 @@ from functools import partial
@@ -441,7 +440,7 @@ index 8b6ee6dde..9cd7deab5 100644
  # How long a message POST waits for an in-flight managed launch to
  # settle before giving up (see ManagedLaunchTracker). Covers the full
  # launch/wake pipeline ON TOP OF the host-registration wait
-@@ -3878,7 +3884,7 @@ async def _register_and_start_host(
+@@ -3928,7 +3934,7 @@ async def _register_and_start_host(
              agent_name=agent_name,
              on_stage=on_stage,
          )
@@ -450,7 +449,7 @@ index 8b6ee6dde..9cd7deab5 100644
      except Exception as exc:
          # The provider allocated the sandbox before registration or startup
          # could fail, so both failures must attempt cleanup.
-@@ -3927,28 +3933,62 @@ async def _register_and_start_host(
+@@ -3977,28 +3983,62 @@ async def _register_and_start_host(
      return workspace
  
  
@@ -519,7 +518,7 @@ index 8b6ee6dde..9cd7deab5 100644
  
  
  def _launcher_for_teardown(
-@@ -4221,7 +4261,9 @@ async def resume_managed_host(
+@@ -4272,7 +4312,9 @@ async def resume_managed_host(
                  on_stage=on_stage,
                  agent_name=agent_name,
              )
@@ -531,7 +530,7 @@ index 8b6ee6dde..9cd7deab5 100644
              raise
          except Exception as exc:
 diff --git a/omnigent/server/routes/_sessions/helpers.py b/omnigent/server/routes/_sessions/helpers.py
-index 54e06a475..0a596cfc4 100644
+index 3550225..448e58a 100644
 --- a/omnigent/server/routes/_sessions/helpers.py
 +++ b/omnigent/server/routes/_sessions/helpers.py
 @@ -31,6 +31,7 @@ from pathlib import PurePath
@@ -542,7 +541,7 @@ index 54e06a475..0a596cfc4 100644
  from fastapi import (
      HTTPException,
      Request,
-@@ -5047,6 +5048,11 @@ def _publish_sandbox_status_impl(session_id: str, stage: str, error: str | None
+@@ -5287,6 +5288,11 @@ def _publish_sandbox_status_impl(session_id: str, stage: str, error: str | None
      # cleanup publishes the outcome once it has stopped.
      if settle_cancelled_start(session_id, stage):
          return
@@ -554,7 +553,7 @@ index 54e06a475..0a596cfc4 100644
      # "ready" evicts: from then on the session looks like any
      # host-bound session and the snapshot carries no launch state.
      # Failures stay cached (mirroring ManagedLaunchTracker retention)
-@@ -5910,6 +5916,9 @@ async def _provision_managed_sandbox(
+@@ -6280,6 +6286,9 @@ async def _provision_managed_sandbox(
      """
      from omnigent.server.managed_hosts import launch_managed_host, relaunch_managed_host
  
@@ -564,7 +563,7 @@ index 54e06a475..0a596cfc4 100644
      def _on_stage(stage: str) -> None:
          """
          Relay a launch-pipeline stage to the session's progress surface.
-@@ -5986,12 +5995,43 @@ async def _wait_for_managed_runner_tunnel(
+@@ -6356,12 +6365,43 @@ async def _wait_for_managed_runner_tunnel(
      """
      from omnigent.server.routes import sessions as _facade
  
@@ -611,7 +610,7 @@ index 54e06a475..0a596cfc4 100644
      _logger.error(
          "Managed runner connection timed out",
          extra=debug_event(
-@@ -6024,16 +6064,21 @@ async def _await_settled_managed_launch(launch: ManagedLaunch) -> None:
+@@ -6394,16 +6434,21 @@ async def _await_settled_managed_launch(launch: ManagedLaunch) -> None:
      """
      from omnigent.server.managed_hosts import MANAGED_LAUNCH_RENDEZVOUS_TIMEOUT_S
  
@@ -644,7 +643,7 @@ index 54e06a475..0a596cfc4 100644
          raise OmnigentError(
              f"The session's managed sandbox failed to launch: {launch.error}",
 diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
-index a65d17cee..ac2dfc39e 100644
+index 4889616..17ed195 100644
 --- a/omnigent/server/routes/_sessions/orchestration.py
 +++ b/omnigent/server/routes/_sessions/orchestration.py
 @@ -21,6 +21,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -655,7 +654,7 @@ index a65d17cee..ac2dfc39e 100644
  from fastapi import (
      HTTPException,
      Request,
-@@ -1232,6 +1233,7 @@ def _build_session_response(
+@@ -1498,6 +1499,7 @@ def _build_session_response(
          # once the launch succeeds; a failed launch is retained with
          # its reason. Populated by _publish_sandbox_status.
          sandbox_status=_session_sandbox_status_cache.get(conv.id),
@@ -663,7 +662,7 @@ index a65d17cee..ac2dfc39e 100644
          # Replay harness MCP-server startup state (codex-native) so a
          # client opening the session mid-startup sees the startup band.
          mcp_startup=_session_mcp_startup_cache.get(conv.id),
-@@ -4172,6 +4174,7 @@ def _kick_managed_wake_impl(
+@@ -5095,6 +5097,7 @@ def _kick_managed_wake_impl(
      # Seed the progress indicator immediately — the user is watching the
      # session page when the wake fires (the composer let them send into a
      # host_asleep session).
@@ -671,7 +670,7 @@ index a65d17cee..ac2dfc39e 100644
      _publish_sandbox_status(session_id, "provisioning")
      wake_agent_store = getattr(app_state, "agent_store", None)
      if wake_agent_store is None:
-@@ -4253,6 +4256,8 @@ async def _run_managed_wake(
+@@ -5176,6 +5179,8 @@ async def _run_managed_wake(
      from omnigent.server.routes import sessions as _facade
  
      sandbox_config = deployment_with_inference_snapshot(sandbox_config, conv.inference_snapshot)
@@ -681,10 +680,10 @@ index a65d17cee..ac2dfc39e 100644
      if host_id is None:
          reason = "managed session has no host binding"
 diff --git a/omnigent/server/routes/sessions/routes_events.py b/omnigent/server/routes/sessions/routes_events.py
-index 09cd06c17..8416df842 100644
+index 5ca0c12..dc5541e 100644
 --- a/omnigent/server/routes/sessions/routes_events.py
 +++ b/omnigent/server/routes/sessions/routes_events.py
-@@ -11,6 +11,7 @@ from collections.abc import Callable
+@@ -13,6 +13,7 @@ from dataclasses import dataclass
  from typing import Any, Literal, cast
  
  import httpx
@@ -692,7 +691,7 @@ index 09cd06c17..8416df842 100644
  from fastapi import (
      APIRouter,
      HTTPException,
-@@ -1247,6 +1248,7 @@ def register_events_routes(
+@@ -1693,6 +1694,7 @@ def register_events_routes(
                      and stop_host is not None
                      and host_resume_supported(stop_host, stop_sandbox_config)
                  ):
@@ -701,10 +700,10 @@ index 09cd06c17..8416df842 100644
                      cancel_managed_start(session_id, stop_tracker, _after_cancelled_start)
                  await suspend_managed_host(stop_host_id, host_store_for_stop, stop_sandbox_config)
 diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
-index 5b2c5873b..2628c652c 100644
+index 864fedb..6fb41be 100644
 --- a/omnigent/server/schemas.py
 +++ b/omnigent/server/schemas.py
-@@ -2226,6 +2226,10 @@ class SessionResponse(BaseModel):
+@@ -2248,6 +2248,10 @@ class SessionResponse(BaseModel):
      inference_error: str | None = None
      terminal_pending: bool = False
      sandbox_status: SandboxStatus | None = None
@@ -715,7 +714,7 @@ index 5b2c5873b..2628c652c 100644
      # Per-MCP-server startup state for native harness sessions
      # (codex-native), present while the harness boots its MCP servers or
      # when servers were cancelled/failed. ``None`` otherwise. Sourced from
-@@ -3183,6 +3187,23 @@ class SessionUsageEvent(_SSEEventBase):
+@@ -3192,6 +3196,23 @@ class SessionUsageEvent(_SSEEventBase):
      subscription: str | None = None
  
  
@@ -748,7 +747,7 @@ index 5b2c5873b..2628c652c 100644
      | SessionMcpStartupEvent
      | SessionModelOptionsEvent
 diff --git a/tests/onboarding/sandboxes/test_kubernetes.py b/tests/onboarding/sandboxes/test_kubernetes.py
-index c75a21165..977e3bab7 100644
+index c75a211..977e3ba 100644
 --- a/tests/onboarding/sandboxes/test_kubernetes.py
 +++ b/tests/onboarding/sandboxes/test_kubernetes.py
 @@ -1360,9 +1360,19 @@ class _FakeCore:
@@ -775,7 +774,7 @@ index c75a21165..977e3bab7 100644
  class _FakeBatch:
 diff --git a/tests/onboarding/sandboxes/test_startup_progress_k8s.py b/tests/onboarding/sandboxes/test_startup_progress_k8s.py
 new file mode 100644
-index 000000000..a9731db84
+index 0000000..a9731db
 --- /dev/null
 +++ b/tests/onboarding/sandboxes/test_startup_progress_k8s.py
 @@ -0,0 +1,252 @@
@@ -1033,7 +1032,7 @@ index 000000000..a9731db84
 +    ]
 diff --git a/tests/server/test_startup_progress.py b/tests/server/test_startup_progress.py
 new file mode 100644
-index 000000000..752f82eed
+index 0000000..752f82e
 --- /dev/null
 +++ b/tests/server/test_startup_progress.py
 @@ -0,0 +1,241 @@

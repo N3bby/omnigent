@@ -2,10 +2,10 @@
 # Upgrading Omnigent? Rebase or delete the patches in images/*/patches/ and
 # images/server/web-patches/; docs/features/README.md lists the backported
 # upstream fixes to delete.
-omnigent: "v0.15.0"
-omnigent_commit: "c8b9b85f822f2c9203ff995c10f3cc49d064bbe5"
-omnigent_host_base_digest: "sha256:f3dee09609ccecbebd6841c30b33f0160eaf3d2758d535b2e3993c1a3df5664a"
-omnigent_server_base_digest: "sha256:ed3ae35d30572dcd929ba4e1edefdcec53ef178ab2f8147d11a8f2f33dded123"
+omnigent: "v0.18.0"
+omnigent_commit: "a8676d23e88df7918f4f8ef1c7c4e3186e710354"
+omnigent_host_base_digest: "sha256:b26ef84dc0c02f9a95412a0050237279bb03bfaa6dfabe471ab7385530edf7e9"
+omnigent_server_base_digest: "sha256:eba3422ee55ef946bff7c895f458258fbaf4a5e4244ef38aa66caec8fefe9198"
 k3s: "v1.36.4+k3s1"
 k3s_installer_sha256: "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad"
 cert_manager: "v1.21.2"

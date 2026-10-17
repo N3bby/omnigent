@@ -1,10 +1,12 @@
 Handle /fast before native message buffers and turn dispatch.
 
 Acknowledge settings commands with HTTP 204; never start or finish a turn.
-Applies after 0004-fast-mode.patch. Base: omnigent v0.15.0 (c8b9b85f822f).
-
+The handler lives with the other native controls in
+omnigent/runner/native_controls.py.
+Applies after 0004-fast-mode.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 diff --git a/omnigent/native/fast_mode.py b/omnigent/native/fast_mode.py
 new file mode 100644
+index 0000000..4ad5076
 --- /dev/null
 +++ b/omnigent/native/fast_mode.py
 @@ -0,0 +1,24 @@
@@ -33,12 +35,48 @@ new file mode 100644
 +        return "toggle"
 +    return words[1] if words[1] in {"on", "off"} else None
 diff --git a/omnigent/runner/app.py b/omnigent/runner/app.py
+index b54365e..5d0e9c5 100644
 --- a/omnigent/runner/app.py
 +++ b/omnigent/runner/app.py
-@@ -6276,6 +6276,62 @@
+@@ -6290,6 +6290,14 @@ def create_runner_app(
+                 await _side_client.close()
+             return Response(status_code=202)
+         if body_type == "message" and isinstance(body, dict):
++            from omnigent.native.fast_mode import fast_mode_command
++
++            fast_command = fast_mode_command(body.get("content"))
++            fast_harness = _session_harness_name(conversation_id)
++            if fast_command is not None and fast_harness in {"claude-native", "codex-native"}:
++                return await _handle_native_fast_mode_command(
++                    conversation_id, fast_harness, fast_command
++                )
+             # A codex /side command opens a side chat; it must not run a turn
+             # here. Starting one publishes a "running" edge for this session,
+             # and the fork's settling edges belong to the child — idle is
+@@ -7192,6 +7200,7 @@ def create_runner_app(
+     )
+     _handle_hermes_native_compact = _native_controls.handle_hermes_native_compact
+     _handle_kiro_native_model_change = _native_controls.handle_kiro_native_model_change
++    _handle_native_fast_mode_command = _native_controls.handle_native_fast_mode_command
+     _handle_opencode_native_blocked_notice = _native_controls.handle_opencode_native_blocked_notice
+     _handle_opencode_native_clear = _native_controls.handle_opencode_native_clear
+     _handle_opencode_native_compact = _native_controls.handle_opencode_native_compact
+diff --git a/omnigent/runner/native_controls.py b/omnigent/runner/native_controls.py
+index 76de40c..7066b97 100644
+--- a/omnigent/runner/native_controls.py
++++ b/omnigent/runner/native_controls.py
+@@ -206,6 +206,7 @@ class NativeControls:
+     ]
+     handle_hermes_native_compact: Callable[[str], Coroutine[Any, Any, Response]]
+     handle_kiro_native_model_change: Callable[[str, str | None], Coroutine[Any, Any, Response]]
++    handle_native_fast_mode_command: Callable[[str, str, str], Coroutine[Any, Any, Response]]
+     handle_opencode_native_blocked_notice: _HandleOpencodeNativeBlockedNoticeFn
+     handle_opencode_native_clear: Callable[[str], Coroutine[Any, Any, Response]]
+     handle_opencode_native_compact: Callable[[str], Coroutine[Any, Any, Response]]
+@@ -987,6 +988,63 @@ def build_native_controls(
              extra={"session_id": conv_id},
          )
-
+ 
 +    async def _handle_native_fast_mode_command(
 +        conv_id: str, harness: str, command: str
 +    ) -> Response:
@@ -46,6 +84,7 @@ diff --git a/omnigent/runner/app.py b/omnigent/runner/app.py
 +        try:
 +            if harness == "codex-native":
 +                from omnigent.harnesses.codex_native.app_server import client_for_transport
++                from omnigent.harnesses.codex_native.bridge import bridge_dir_for_codex_home
 +                from omnigent.inner.codex_native_executor import _set_codex_fast_mode
 +
 +                state = await _codex_native_bridge_state_for_session(conv_id, action="fast mode")
@@ -57,7 +96,7 @@ diff --git a/omnigent/runner/app.py b/omnigent/runner/app.py
 +                            "detail": "Codex bridge is not ready.",
 +                        },
 +                    )
-+                bridge_dir = await _codex_native_bridge_dir_for_session(conv_id)
++                bridge_dir = bridge_dir_for_codex_home(Path(state.codex_home))
 +                client = client_for_transport(state.socket_path, client_name="omnigent-fast-mode")
 +                try:
 +                    await client.connect()
@@ -98,23 +137,17 @@ diff --git a/omnigent/runner/app.py b/omnigent/runner/app.py
      async def _handle_claude_native_effort_change(
          conv_id: str,
          effort: str | None,
-@@ -9745,6 +9801,14 @@
-                 await _side_client.close()
-             return Response(status_code=202)
-         if body_type == "message" and isinstance(body, dict):
-+            from omnigent.native.fast_mode import fast_mode_command
-+
-+            fast_command = fast_mode_command(body.get("content"))
-+            fast_harness = _session_harness_name(conversation_id)
-+            if fast_command is not None and fast_harness in {"claude-native", "codex-native"}:
-+                return await _handle_native_fast_mode_command(
-+                    conversation_id, fast_harness, fast_command
-+                )
-             # A codex /side command opens a side chat; it must not run a turn
-             # here. Starting one publishes a "running" edge for this session,
-             # and the fork's settling edges belong to the child — idle is
+@@ -2122,6 +2180,7 @@ def build_native_controls(
+         handle_devin_native_permission_mode_change=_handle_devin_native_permission_mode_change,
+         handle_hermes_native_compact=_handle_hermes_native_compact,
+         handle_kiro_native_model_change=_handle_kiro_native_model_change,
++        handle_native_fast_mode_command=_handle_native_fast_mode_command,
+         handle_opencode_native_blocked_notice=_handle_opencode_native_blocked_notice,
+         handle_opencode_native_clear=_handle_opencode_native_clear,
+         handle_opencode_native_compact=_handle_opencode_native_compact,
 diff --git a/tests/runner/test_fast_mode_command.py b/tests/runner/test_fast_mode_command.py
 new file mode 100644
+index 0000000..9eae336
 --- /dev/null
 +++ b/tests/runner/test_fast_mode_command.py
 @@ -0,0 +1,107 @@

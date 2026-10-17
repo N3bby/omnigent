@@ -6,10 +6,10 @@ container under /run/omnigent/repo-env/<Secret name>. The volume is optional,
 so a repository without a Secret starts as before. The server image installs
 omnigent_repo_env from images/server/omnigent_repo_env.py.
 A wake re-renders the Pod template with the recorded repositories, so the
-mount survives a suspend. Base: omnigent v0.15.0 (c8b9b85f822f).
+mount survives a suspend. Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
-index 2b3b3f4..ba61249 100644
+index 456b2f5..f6e1975 100644
 --- a/omnigent/onboarding/sandboxes/kubernetes.py
 +++ b/omnigent/onboarding/sandboxes/kubernetes.py
 @@ -58,6 +58,7 @@ from collections.abc import Mapping, Sequence
@@ -20,7 +20,7 @@ index 2b3b3f4..ba61249 100644
  
  from omnigent.host.identity import (
      HOST_ID_ENV_VAR,
-@@ -898,6 +899,10 @@ def build_job_manifest(
+@@ -903,6 +904,10 @@ def build_job_manifest(
              {"name": f"secret-{i}", "mountPath": mount["mount_path"], "readOnly": True}
          )
  
@@ -31,7 +31,7 @@ index 2b3b3f4..ba61249 100644
      init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
      if repos:
          # The clone wires the per-user broker when the owner has connected GitHub
-@@ -976,7 +981,12 @@ def build_job_manifest(
+@@ -981,7 +986,12 @@ def build_job_manifest(
          "env": host_env,
          "resources": pod_resources,
          "securityContext": container_security,
@@ -45,7 +45,7 @@ index 2b3b3f4..ba61249 100644
      }
      if harness_secret:
          host_container["envFrom"] = [{"secretRef": {"name": harness_secret}}]
-@@ -997,7 +1007,7 @@ def build_job_manifest(
+@@ -1002,7 +1012,7 @@ def build_job_manifest(
              "fsGroupChangePolicy": "OnRootMismatch",
              "seccompProfile": {"type": "RuntimeDefault"},
          },

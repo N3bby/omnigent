@@ -4,10 +4,41 @@ The composer's picker listed Manual, Auto, Accept edits and Plan only, so a
 session in bypass showed no selected mode, and one that left bypass couldn't
 be switched back from the web UI. Needs images/server/patches/0007 and
 images/runner/patches/0003.
-Base: omnigent v0.15.0 (c8b9b85f822f).
+Base: omnigent v0.18.0 (a8676d23e88d).
 
+diff --git a/web/src/lib/claudePermissionMode.test.ts b/web/src/lib/claudePermissionMode.test.ts
+index 25e02b5..ec8fcf2 100644
+--- a/web/src/lib/claudePermissionMode.test.ts
++++ b/web/src/lib/claudePermissionMode.test.ts
+@@ -11,14 +11,14 @@ import {
+ 
+ describe("claudePermissionMode", () => {
+   it("offers only shift+tab-reachable modes for a running session", () => {
+-    // dontAsk is never in Claude's cycle and bypassPermissions only joins it
+-    // when the session launched into it — offering either would produce a
+-    // switch the server rejects or the cycler can't reach.
++    // dontAsk is never in Claude's cycle. This deployment launches Claude with
++    // --allow-dangerously-skip-permissions, so bypassPermissions is in it.
+     expect(CLAUDE_NATIVE_SWITCHABLE_PERMISSION_MODES.map((m) => m.value)).toEqual([
+       "default",
+       "auto",
+       "acceptEdits",
+       "plan",
++      "bypassPermissions",
+     ]);
+   });
+ 
+@@ -45,7 +45,7 @@ describe("claudePermissionMode", () => {
+   it("accepts only switchable modes", () => {
+     expect(isSwitchableClaudePermissionMode("auto")).toBe(true);
+     expect(isSwitchableClaudePermissionMode("dontAsk")).toBe(false);
+-    expect(isSwitchableClaudePermissionMode("bypassPermissions")).toBe(false);
++    expect(isSwitchableClaudePermissionMode("bypassPermissions")).toBe(true);
+     expect(isSwitchableClaudePermissionMode(undefined)).toBe(false);
+   });
+ 
 diff --git a/web/src/lib/claudePermissionMode.ts b/web/src/lib/claudePermissionMode.ts
-index 28dd1df..8566f07 100644
+index 28dd1df..c962cc9 100644
 --- a/web/src/lib/claudePermissionMode.ts
 +++ b/web/src/lib/claudePermissionMode.ts
 @@ -49,10 +49,14 @@ export const CLAUDE_NATIVE_PERMISSION_MODES: ClaudePermissionModeOption[] = [
