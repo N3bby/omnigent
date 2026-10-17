@@ -1,0 +1,51 @@
+Keep keyboard shortcut hints from running into each other.
+
+The compact key caps next to sidebar rows and in tooltips (New session,
+Search and the others) were a fixed 16px square, sized for ⌘ and ⌥. On
+Windows and Linux the hint says Ctrl and Alt, which spilled out of their caps
+and overlapped ("CtrlAlt N"). Their text-10 class also isn't a Tailwind
+utility, so the keys took the row's 13px instead of 10px, and the Codex
+theme's monospace made them wider still. The caps now have a minimum width
+and a real 10px size.
+Upstream fix to backport; delete this patch once upstream ships one.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0026-workspace-rail-shift.patch.
+diff --git a/web/src/components/ui/kbd.test.tsx b/web/src/components/ui/kbd.test.tsx
+new file mode 100644
+index 000000000..de56b37d7
+--- /dev/null
++++ b/web/src/components/ui/kbd.test.tsx
+@@ -0,0 +1,17 @@
++import { render, screen } from "@testing-library/react";
++import { describe, expect, it } from "vitest";
++
++import { CompactShortcutKeys } from "./kbd";
++
++describe("CompactShortcutKeys", () => {
++  it("lets a key name wider than one symbol widen its key", () => {
++    // A fixed 16px key fits ⌘ but not "Ctrl", which then ran into "Alt".
++    render(<CompactShortcutKeys keys={["Ctrl", "Alt", "N"]} />);
++
++    for (const key of ["Ctrl", "Alt", "N"]) {
++      const kbd = screen.getByText(key);
++      expect(kbd).toHaveClass("h-4", "min-w-4", "text-[10px]");
++      expect(kbd).not.toHaveClass("size-4");
++    }
++  });
++});
+diff --git a/web/src/components/ui/kbd.tsx b/web/src/components/ui/kbd.tsx
+index 38cd67e07..755b9ce0e 100644
+--- a/web/src/components/ui/kbd.tsx
++++ b/web/src/components/ui/kbd.tsx
+@@ -6,7 +6,11 @@ export function CompactKbd({ children }: { children: ReactNode }) {
+   return (
+     <kbd
+       data-slot="kbd"
+-      className="inline-flex size-4 items-center justify-center rounded border border-border/80 bg-muted px-1 text-10 font-medium text-muted-foreground"
++      // A minimum width, not a fixed one: ⌘ and ⌥ stay square, while the
++      // Ctrl and Alt that Windows and Linux show widen to fit instead of
++      // spilling into the next key. `text-10` isn't a utility, so the keys
++      // took the row's text size; spell out the 10px.
++      className="inline-flex h-4 min-w-4 items-center justify-center rounded border border-border/80 bg-muted px-1 text-[10px] font-medium text-muted-foreground"
+     >
+       {children}
+     </kbd>
