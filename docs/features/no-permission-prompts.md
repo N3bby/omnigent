@@ -14,9 +14,10 @@ session keeps that choice across restarts too.
 
 A new Codex session starts on **Bypass approvals & sandbox** in the same
 menu, unless you picked another preset last time; the New session screen
-remembers it. **Default** and **Read only** keep Codex's own sandbox, which
-has no network: no `curl`, no package downloads and no tailnet, so
-`tailscale status` fails. Use them only when you want that.
+remembers it. **Full access** runs without the sandbox too. **Default** and
+**Read only** keep Codex's own sandbox, which has no network: no `curl`, no
+package downloads and no tailnet, so `tailscale status` fails. Use them only
+when you want that.
 
 ## Turning it off
 
