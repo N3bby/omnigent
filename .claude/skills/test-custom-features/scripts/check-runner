@@ -101,7 +101,9 @@ else
   fail "running Claude has --allow-dangerously-skip-permissions" "$claude_args"
 fi
 check "codex is the deployment wrapper" grep -q -- '--dangerously-bypass-approvals-and-sandbox' /usr/local/bin/codex
-codex_args="$(pgrep -a codex-real 2>/dev/null | head -n1)"
+# Codex runs as node, so match its command line. The app-server and the TUI
+# are separate processes, and only the ones that were given the flag show it.
+codex_args="$(pgrep -af codex-real 2>/dev/null || true)"
 if [[ -z "$codex_args" ]]; then
   skip "running Codex has --dangerously-bypass-approvals-and-sandbox" "no Codex running in this Pod"
 elif [[ "$codex_args" == *--dangerously-bypass-approvals-and-sandbox* ]]; then

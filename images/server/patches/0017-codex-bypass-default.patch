@@ -1,0 +1,218 @@
+Start new Codex sessions with approvals and the sandbox bypassed.
+
+codex_bypass_approvals (OMNIGENT_CODEX_BYPASS_APPROVALS=1) was meant to do
+this through codex-wrapper.sh, but upstream's codex-native host starts the
+app-server with a cleaned environment that drops the variable, and its TUI
+asks for workspace-write with auto review. Codex then ran inside its own
+seccomp sandbox: no network, no DNS, no tailnet. Upstream's switch for this
+is the omnigent.codex_native.bypass_sandbox session label (#657), opt-in
+from the new-session form.
+
+Where the deployment turns bypass on, a new codex-native session that gave
+no bypass label and no approval or sandbox launch flags gets the label "1".
+A client that sets the label, "0" included, or passes --sandbox,
+--ask-for-approval or --full-auto keeps its choice. GET /v1/info says
+codex_bypass_default, so the web form can start on Bypass and send "0" for
+another preset (web-patches/0025-codex-bypass-default.patch).
+Base: omnigent v0.18.0 (a8676d23e88d), after 0016-startup-progress.patch.
+diff --git a/omnigent/server/app.py b/omnigent/server/app.py
+index 198b03a7d..bd886a96b 100644
+--- a/omnigent/server/app.py
++++ b/omnigent/server/app.py
+@@ -191,6 +191,9 @@ class ServerInfoResponse(BaseModel):
+     # ``{"agent_sandbox": {"multi_repo": true}}``. The web branches on these
+     # (multi-repo picker vs single). Providers absent from the map default off.
+     sandbox_provider_capabilities: dict[str, dict[str, bool]] = {}
++    # Whether new Codex sessions bypass approvals and Codex's sandbox unless
++    # they ask otherwise (this deployment's ``codex_bypass_approvals``).
++    codex_bypass_default: bool = False
+     enabled_connections: list[str]
+     sharing_mode: Literal["on", "read_only", "restricted_read_only", "off"]
+     public_sharing_enabled: bool
+@@ -3085,6 +3088,7 @@ def create_app(
+                 "sandbox_provider": sandbox_provider,
+                 "sandbox_providers": sandbox_providers,
+                 "sandbox_provider_capabilities": sandbox_provider_capabilities,
++                "codex_bypass_default": os.environ.get("OMNIGENT_CODEX_BYPASS_APPROVALS") == "1",
+                 "enabled_connections": enabled_connections,
+                 "sharing_mode": sharing_mode.value,
+                 "public_sharing_enabled": public_sharing_enabled,
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index 17ed19593..f57971eaf 100644
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -389,6 +389,7 @@ from omnigent.spec.types import (
+ from omnigent.stores import AgentStore, ConversationStore
+ from omnigent.stores.artifact_store import ArtifactStore
+ from omnigent.stores.conversation_store import (
++    CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
+     PINNED_LABEL_KEY,
+     RUNNER_LIVENESS_TTL_S,
+     ConversationNotFoundError,
+@@ -1081,6 +1082,41 @@ def _cancel_pending_archive_stop(session_id: str) -> None:
+         task.cancel()
+ 
+ 
++# Codex flags that pick an approval or sandbox stance of their own.
++_CODEX_PERMISSION_FLAGS = ("--sandbox", "-s", "--ask-for-approval", "-a", "--full-auto")
++
++
++def _codex_bypass_by_default(
++    harness: str, labels: dict[str, str], launch_args: list[str] | None
++) -> bool:
++    """
++    Whether a new Codex session gets this deployment's bypass stance.
++
++    ``OMNIGENT_CODEX_BYPASS_APPROVALS=1`` (``codex_bypass_approvals``) makes
++    full bypass the default, as for Claude: the session's Pod is what
++    contains the agent, and Codex's own command sandbox would cut it off from
++    the network and the tailnet. Codex's app-server never sees the wrapper's
++    flag, so the session carries upstream's bypass label instead. A session
++    that already says what it wants keeps it: the label set to anything, or
++    launch args with their own approval or sandbox flags.
++
++    :param harness: The session's native harness, e.g. ``"codex-native"``.
++    :param labels: The labels the session is created with.
++    :param launch_args: The session's validated terminal launch args, e.g.
++        ``["--sandbox", "read-only"]``, or ``None``.
++    :returns: ``True`` when the bypass label should be added.
++    """
++    if harness != "codex-native" or os.environ.get("OMNIGENT_CODEX_BYPASS_APPROVALS") != "1":
++        return False
++    if CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY in labels:
++        return False
++    return not any(
++        arg == flag or arg.startswith(f"{flag}=")
++        for arg in launch_args or ()
++        for flag in _CODEX_PERMISSION_FLAGS
++    )
++
++
+ def _labels_for_viewer(labels: dict[str, str], user_id: str | None) -> dict[str, str]:
+     """
+     Collapse the dynamic-suffix label families to their canonical bare keys.
+@@ -11216,6 +11252,8 @@ async def _create_session_from_existing_agent(
+         initial_labels[WORKTREE_ROOT_LABEL_KEY] = worktree_root_fingerprint(created_worktree_path)
+     if native_agent is not None:
+         initial_labels.update(native_agent.presentation_labels)
++        if _codex_bypass_by_default(native_agent.harness, initial_labels, validated_launch_args):
++            initial_labels[CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY] = "1"
+     elif (
+         body.sub_agent_name
+         and sub_spec is not None
+diff --git a/tests/server/routes/test_codex_bypass_default.py b/tests/server/routes/test_codex_bypass_default.py
+new file mode 100644
+index 000000000..9eda00293
+--- /dev/null
++++ b/tests/server/routes/test_codex_bypass_default.py
+@@ -0,0 +1,110 @@
++"""Tests for this deployment's default Codex bypass on new sessions.
++
++With ``OMNIGENT_CODEX_BYPASS_APPROVALS=1`` a new codex-native session gets
++upstream's ``omnigent.codex_native.bypass_sandbox`` label, unless it already
++chose an approval or sandbox stance itself.
++"""
++
++from __future__ import annotations
++
++import httpx
++import pytest
++
++from omnigent.server.routes._sessions.orchestration import _codex_bypass_by_default
++from omnigent.stores.conversation_store import CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY
++
++
++@pytest.fixture
++def bypass_on(monkeypatch: pytest.MonkeyPatch) -> None:
++    """Turn on ``codex_bypass_approvals`` for the test."""
++    monkeypatch.setenv("OMNIGENT_CODEX_BYPASS_APPROVALS", "1")
++
++
++@pytest.mark.usefixtures("bypass_on")
++def test_new_codex_session_gets_bypass() -> None:
++    """
++    A Codex session that says nothing about its stance gets bypass.
++
++    A failure here means Codex sessions run inside Codex's own sandbox, with
++    no network or tailnet, although the deployment turned bypass on.
++    """
++    assert _codex_bypass_by_default("codex-native", {}, None) is True
++    assert _codex_bypass_by_default("codex-native", {}, ["--model", "gpt-5.5"]) is True
++
++
++@pytest.mark.usefixtures("bypass_on")
++@pytest.mark.parametrize("value", ["0", "1"])
++def test_a_session_label_wins(value: str) -> None:
++    """
++    A bypass label the client set, on or off, is kept as it is.
++
++    A failure here means a user who picked Default, Full access or Read only
++    in the new-session form still gets bypass.
++    """
++    labels = {CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY: value}
++    assert _codex_bypass_by_default("codex-native", labels, None) is False
++
++
++@pytest.mark.usefixtures("bypass_on")
++@pytest.mark.parametrize(
++    "args",
++    [
++        ["--sandbox", "read-only", "--ask-for-approval", "on-request"],
++        ["--sandbox=workspace-write"],
++        ["-a", "never"],
++        ["--full-auto"],
++    ],
++)
++def test_launch_args_with_their_own_stance_win(args: list[str]) -> None:
++    """
++    Launch args that pick an approval or sandbox stance keep it.
++
++    A failure here means bypass would strip an API client's explicit
++    ``--sandbox`` / ``--ask-for-approval`` flags.
++    """
++    assert _codex_bypass_by_default("codex-native", {}, args) is False
++
++
++@pytest.mark.usefixtures("bypass_on")
++def test_other_harnesses_are_left_alone() -> None:
++    """Only Codex gets the label; Claude's bypass works another way."""
++    assert _codex_bypass_by_default("claude-native", {}, None) is False
++
++
++@pytest.mark.parametrize("value", [None, "0", ""])
++def test_off_when_the_deployment_turns_it_off(
++    monkeypatch: pytest.MonkeyPatch, value: str | None
++) -> None:
++    """
++    Without ``codex_bypass_approvals`` new sessions keep Codex's own default.
++
++    A failure here means turning the setting off in the environment file
++    doesn't stop new Codex sessions from bypassing.
++    """
++    if value is None:
++        monkeypatch.delenv("OMNIGENT_CODEX_BYPASS_APPROVALS", raising=False)
++    else:
++        monkeypatch.setenv("OMNIGENT_CODEX_BYPASS_APPROVALS", value)
++    assert _codex_bypass_by_default("codex-native", {}, None) is False
++
++
++@pytest.mark.parametrize(("value", "expected"), [("1", True), ("0", False), (None, False)])
++async def test_info_tells_the_web_ui_the_default(
++    client: httpx.AsyncClient,
++    monkeypatch: pytest.MonkeyPatch,
++    value: str | None,
++    expected: bool,
++) -> None:
++    """
++    ``/v1/info`` says whether bypass is the default, so the form can show it.
++
++    A failure here means the new-session form shows Default for Codex while the
++    server stamps bypass on, or never says "0" when the user picks Default.
++    """
++    if value is None:
++        monkeypatch.delenv("OMNIGENT_CODEX_BYPASS_APPROVALS", raising=False)
++    else:
++        monkeypatch.setenv("OMNIGENT_CODEX_BYPASS_APPROVALS", value)
++    resp = await client.get("/v1/info")
++    assert resp.status_code == 200
++    assert resp.json()["codex_bypass_default"] is expected

@@ -12,8 +12,11 @@ when the session restarts after being idle. To go back, pick
 **Bypass permissions** in the composer's permission menu (the hand icon). The
 session keeps that choice across restarts too.
 
-Codex has no separate bypass entry. Its **Full Access** preset is the same
-stance: no approval prompts and no sandbox.
+A new Codex session starts on **Bypass approvals & sandbox** in the same
+menu, unless you picked another preset last time; the New session screen
+remembers it. **Default** and **Read only** keep Codex's own sandbox, which
+has no network: no `curl`, no package downloads and no tailnet, so
+`tailscale status` fails. Use them only when you want that.
 
 ## Turning it off
 
@@ -57,6 +60,15 @@ its Pod, so it could change the setting back itself.
   become ready". Upstream hasn't fixed this
   ([#8010](https://github.com/omnigent-ai/omnigent/pull/8010) was closed
   unmerged).
-- **Codex** (`images/runner/codex-wrapper.sh`): adds
-  `--dangerously-bypass-approvals-and-sandbox`. It also links the shared Codex
-  login into each session.
+- **Codex**: upstream starts a session without its sandbox only when the
+  session has the `omnigent.codex_native.bypass_sandbox` label set to `1`,
+  which its New session screen sets when you pick bypass. With
+  `codex_bypass_approvals` on, `images/server/patches/0017` gives that label
+  to every new Codex session that didn't choose: no label, and no
+  `--sandbox`, `--ask-for-approval` or `--full-auto` among its launch
+  arguments. `images/server/web-patches/0025` makes bypass the screen's
+  first choice for Codex, and sends `0` when you pick another preset so the
+  server leaves it. `images/runner/codex-wrapper.sh` also adds
+  `--dangerously-bypass-approvals-and-sandbox`, but Omnigent starts Codex's
+  app-server without the variable it checks, so that alone isn't enough. The
+  wrapper also links the shared Codex login into each session.
