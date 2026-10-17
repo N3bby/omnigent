@@ -131,6 +131,13 @@ whether upstream now ships the behaviour itself (then the patch can go, see
 "Keeping the patches up to date" in `docs/features/README.md`) or needs
 rebasing. Name the feature it belongs to in the report.
 
+A `PASS` doesn't mean upstream still has the bug a patch fixes. Upstream can
+fix it somewhere the patch doesn't touch. For each row of "Upstream bugs this
+deployment fixes" in `docs/features/README.md`, check its "Delete when" against
+the upstream version under test, e.g. with
+`git show <upstream commit>:web/src/components/ui/kbd.tsx` in an upstream
+clone. Report the patches that can go.
+
 For reference, the `v0.15.0` patches failed on upstream `v0.18.0` in runner
 0004, server 0001 and web 0001, with most of each set's later patches failing
 after them; they were rebased onto `v0.18.0` on 2026-10-15.
