@@ -1,0 +1,86 @@
+Keep the app from shifting sideways when the closed workspace rail gets focus.
+
+Since v0.16 the closed workspace rail stays mounted, parked 12px past the
+window's right edge (translateX in index.css). AppShell passes it
+inert={!workspacePanelVisible}, but React 18 drops a boolean inert prop, so
+its 14 controls stayed in the Tab order. Tabbing into one, or anything else
+scrolling it into view, scrolled the body 12px (18px at a larger zoom) and
+the whole app, sidebar included, stayed shifted left until a reload. The rail
+now sets the attribute on its node, as ExecutionLogsPanel does, and
+.app-shell clips its horizontal overflow so nothing can scroll it sideways.
+Upstream fix to backport; delete this patch once upstream ships one.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0025-codex-bypass-default.patch.
+diff --git a/web/src/index.css b/web/src/index.css
+index 338b9ee0f..82f66f504 100644
+--- a/web/src/index.css
++++ b/web/src/index.css
+@@ -620,6 +620,14 @@
+   }
+ }
+ 
++/* Nothing may scroll the app sideways. The closed workspace rail sits 12px
++   past the right edge (translateX above), and anything scrolled into view
++   there shifted the whole app, sidebar included, to the left. `clip`, unlike
++   `hidden`, can't be scrolled by script or focus. */
++.app-shell {
++  overflow-x: clip;
++}
++
+ /* The transparent <main> shows the palette canvas through. */
+ .app-shell {
+   background: var(--background);
+diff --git a/web/src/shell/WorkspacePanel.test.tsx b/web/src/shell/WorkspacePanel.test.tsx
+index 5b89104f6..42a0df9d4 100644
+--- a/web/src/shell/WorkspacePanel.test.tsx
++++ b/web/src/shell/WorkspacePanel.test.tsx
+@@ -208,6 +208,17 @@ describe("WorkspacePanel surface presentation", () => {
+     expect(panel).toHaveAttribute("aria-hidden", "true");
+   });
+ 
++  it("takes a closed rail out of the Tab order", () => {
++    // React 18 drops a boolean `inert` prop, so the attribute is only there if
++    // the panel sets it on the node itself.
++    const { view } = renderWorkspace({ open: false, inert: true });
++    expect(document.querySelector('aside[aria-label="Workspace"]')).toHaveAttribute("inert");
++    view.unmount();
++
++    renderWorkspace({ open: true, inert: false });
++    expect(screen.getByRole("complementary", { name: "Workspace" })).not.toHaveAttribute("inert");
++  });
++
+   it("presents the fixed pane tabs as compact icon controls with accessible labels", () => {
+     renderWorkspace();
+ 
+diff --git a/web/src/shell/WorkspacePanel.tsx b/web/src/shell/WorkspacePanel.tsx
+index 47e655320..e64037993 100644
+--- a/web/src/shell/WorkspacePanel.tsx
++++ b/web/src/shell/WorkspacePanel.tsx
+@@ -27,6 +27,7 @@ import {
+   Suspense,
+   useCallback,
+   useEffect,
++  useLayoutEffect,
+   useRef,
+   useState,
+ } from "react";
+@@ -1195,11 +1196,19 @@ function WorkspacePanelImpl({
+       </WorkspaceTabTooltip>
+     ),
+   };
++  // React 18 drops a boolean `inert` prop, so set the attribute on the node,
++  // as ExecutionLogsPanel does. Without it a closed rail kept its controls in
++  // the Tab order, and focusing one scrolled the whole app sideways towards
++  // the rail parked past the window's right edge.
++  const railRef = useRef<HTMLElement>(null);
++  useLayoutEffect(() => {
++    railRef.current?.toggleAttribute("inert", Boolean(inert));
++  }, [inert]);
+   const rail = (
+     <aside
++      ref={railRef}
+       aria-label="Workspace"
+       aria-hidden={!open}
+-      inert={inert}
+       // The resize hook can starve the rail to width 0 while it stays mounted;
+       // marking it collapsed keeps index.css's safe-area padding off it so a
+       // zero-width rail can't paint a ghost bg-card strip on native shells.

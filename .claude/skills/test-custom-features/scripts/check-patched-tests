@@ -108,7 +108,7 @@ PY
       src/components/chat/SandboxStartupCard.test.tsx src/lib/sandboxStartup.test.ts \
       src/shell/MainTerminalView.startup.test.tsx \
       src/shell/NewChatDialog.test.tsx src/shell/NewChatDialog.flow.test.tsx \
-      src/hooks/useIsAdmin.test.tsx \
+      src/hooks/useIsAdmin.test.tsx src/shell/WorkspacePanel.test.tsx \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 
