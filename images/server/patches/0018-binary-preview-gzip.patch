@@ -1,0 +1,209 @@
+Send a binary file's response headers before its body when gzip is skipped.
+
+Image and PDF previews in the file viewer, and file downloads, answered
+"Error loading file: 500" (omnigent-ai/omnigent#10481). The server image
+resolves Starlette 1.8.0, not the 1.3.1 in uv.lock. For a binary read or a
+download the handler calls skip_gzip(), and _StateAwareGZipResponder set
+Starlette's content_type_is_excluded on the first body message. Starlette
+1.8.0 no longer sends the start message it held back on that path, so the
+body went out first and a request with Accept-Encoding: gzip, as every
+browser sends, failed with "Received http.response.body without
+http.response.start".
+
+Backports the _gzip_route.py change from upstream PR #10585: the responder
+reads the flag on http.response.start and passes the start and every body
+message through unchanged. Takes three of that PR's tests; the responder
+test fails without the fix on Starlette 1.3.1 too. The PR's download proxy
+hardening is left out.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0017-codex-bypass-default.patch.
+diff --git a/omnigent/server/routes/_gzip_route.py b/omnigent/server/routes/_gzip_route.py
+index 71477a6..bda962d 100644
+--- a/omnigent/server/routes/_gzip_route.py
++++ b/omnigent/server/routes/_gzip_route.py
+@@ -96,19 +96,16 @@ class _StateAwareGZipResponder(GZipResponder):
+     """
+     Gzip responder that honours a handler's :func:`skip_gzip` opt-out.
+ 
+-    The flag can only be read at send time: the handler sets it while running,
+-    which is after ``handle`` dispatches but before the response body is
+-    emitted. Reuses Starlette's own ``content_type_is_excluded`` opt-out — the
+-    flag it already sets for ``text/event-stream`` — so an excluded response
+-    takes the library's untouched pass-through path rather than a parallel one
+-    here.
++    The handler sets the flag before response headers are sent. This responder
++    reads it on ``http.response.start`` and passes the start and every body
++    message through unchanged, so Starlette's buffered start is never stranded.
+ 
+     :param app: The wrapped ASGI app (the route's own ``handle``).
+     :param minimum_size: Minimum body size to compress, e.g. ``1024``.
+     :param compresslevel: gzip level passed through to Starlette.
+     :param state: The request's ``scope["state"]`` dict — the same mapping
+-        ``request.state`` writes to, so the handler's later opt-out is visible
+-        through this reference.
++        ``request.state`` writes to, so the handler's opt-out is visible when
++        the response starts.
+     """
+ 
+     def __init__(
+@@ -120,22 +117,20 @@ class _StateAwareGZipResponder(GZipResponder):
+     ) -> None:
+         super().__init__(app, minimum_size, compresslevel=compresslevel)
+         self._state = state
++        self._skip = False
+ 
+     async def send_with_compression(self, message: Message) -> None:
+         """
+-        Widen Starlette's exclusion set when the handler opted out.
++        Pass an opted-out response through from its start message.
+ 
+         :param message: The outgoing ASGI message.
+         :returns: None.
+         """
+-        if (
+-            message["type"] == "http.response.body"
+-            and not self.started
+-            and self._state.get(SKIP_GZIP_STATE_KEY)
+-        ):
+-            # Starlette reads this flag on the first body message, then emits
+-            # the start message it buffered — untouched.
+-            self.content_type_is_excluded = True
++        if message["type"] == "http.response.start" and self._state.get(SKIP_GZIP_STATE_KEY):
++            self._skip = True
++        if self._skip:
++            await self.send(message)
++            return
+         await super().send_with_compression(message)
+ 
+ 
+diff --git a/tests/server/routes/test_session_resources.py b/tests/server/routes/test_session_resources.py
+index 70fecfa..2c3a6b3 100644
+--- a/tests/server/routes/test_session_resources.py
++++ b/tests/server/routes/test_session_resources.py
+@@ -3576,6 +3576,45 @@ async def test_filesystem_download_streams_runner_attachment(
+     assert seen == [("data/big.bin", True, "reach")]
+ 
+ 
++@pytest.mark.asyncio
++async def test_filesystem_download_with_http_middleware_preserves_bytes(
++    app: FastAPI,
++    client: httpx.AsyncClient,
++    tmp_path: Path,
++) -> None:
++    payload = bytes(range(256)) * 64
++    (tmp_path / "big.bin").write_bytes(payload)
++
++    @app.middleware("http")
++    async def pass_through(request: Request, call_next: Callable[..., Any]) -> Any:
++        return await call_next(request)
++
++    runner = FastAPI()
++
++    @runner.get(_FS_ROUTE)
++    async def _serve(
++        session_id: str,
++        environment_id: str,
++        relative_path: str,
++        download: bool = False,
++        scope: str | None = None,
++    ) -> FileResponse:
++        del session_id, environment_id, relative_path, download, scope
++        return FileResponse(tmp_path / "big.bin", filename="big.bin")
++
++    async with _runner_app_client(runner):
++        resp = await client.get(
++            _DOWNLOAD_URL,
++            headers={"Accept-Encoding": "gzip, deflate, br"},
++        )
++
++    assert resp.status_code == 200, resp.text
++    assert resp.content == payload
++    assert resp.headers["content-disposition"] == 'attachment; filename="big.bin"'
++    assert resp.headers["content-length"] == str(len(payload))
++    assert "content-encoding" not in resp.headers
++
++
+ @pytest.mark.asyncio
+ async def test_filesystem_download_rejects_runner_without_download_support(
+     client: httpx.AsyncClient,
+@@ -8834,6 +8873,52 @@ def _fs_binary_read_payload(size: int = 256 * 1024) -> dict[str, object]:
+ _FS_BASE = "/v1/sessions/79b22ebd2309e48fdeb450c65611d51b/resources/environments/default"
+ 
+ 
++@pytest.mark.asyncio
++async def test_skip_gzip_responder_forwards_start_before_bodies() -> None:
++    from starlette.types import Message, Receive, Scope, Send
++
++    from omnigent.server.routes._gzip_route import (
++        GZIP_COMPRESSLEVEL,
++        GZIP_MINIMUM_SIZE,
++        SKIP_GZIP_STATE_KEY,
++        _StateAwareGZipResponder,
++    )
++
++    start: Message = {
++        "type": "http.response.start",
++        "status": 200,
++        "headers": [(b"content-type", b"application/json")],
++    }
++    first_body: Message = {"type": "http.response.body", "body": b"first chunk", "more_body": True}
++    final_body: Message = {"type": "http.response.body", "body": b"last chunk", "more_body": False}
++    sent: list[Message] = []
++
++    async def app(scope: Scope, receive: Receive, send: Send) -> None:
++        del scope, receive
++        await send(start)
++        assert sent == [start]
++        await send(first_body)
++        await send(final_body)
++
++    async def receive() -> Message:
++        return {"type": "http.disconnect"}
++
++    async def send(message: Message) -> None:
++        sent.append(message)
++
++    responder = _StateAwareGZipResponder(
++        app,
++        GZIP_MINIMUM_SIZE,
++        GZIP_COMPRESSLEVEL,
++        {SKIP_GZIP_STATE_KEY: True},
++    )
++    await responder({"type": "http"}, receive, send)
++
++    assert sent == [start, first_body, final_body]
++    assert b"content-encoding" not in dict(sent[0]["headers"])
++    assert b"vary" not in dict(sent[0]["headers"])
++
++
+ @pytest.mark.asyncio
+ async def test_file_read_is_gzipped(client: httpx.AsyncClient) -> None:
+     """A text file read is compressed, and the body survives the round-trip.
+@@ -8890,6 +8975,28 @@ async def test_binary_file_read_is_not_gzipped(client: httpx.AsyncClient) -> Non
+     assert resp.json() == payload
+ 
+ 
++@pytest.mark.asyncio
++async def test_binary_file_read_with_http_middleware_skips_gzip(
++    app: FastAPI,
++    client: httpx.AsyncClient,
++) -> None:
++    payload = _fs_binary_read_payload()
++    set_runner_router(_FakeRunnerRouter(_FakeRunnerClient(payload=payload)))  # type: ignore[arg-type]
++
++    @app.middleware("http")
++    async def pass_through(request: Request, call_next: Callable[..., Any]) -> Any:
++        return await call_next(request)
++
++    resp = await client.get(
++        f"{_FS_BASE}/filesystem/docs/logo.png",
++        headers={"Accept-Encoding": "gzip, deflate, br"},
++    )
++
++    assert resp.status_code == 200, resp.text
++    assert resp.json() == payload
++    assert "content-encoding" not in resp.headers
++
++
+ @pytest.mark.asyncio
+ async def test_deeply_nested_binary_read_is_not_gzipped(client: httpx.AsyncClient) -> None:
+     """A long ``path`` must not push the ``encoding`` field out of range.
