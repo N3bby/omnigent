@@ -93,6 +93,7 @@ applies to the pinned `omnigent_commit`, both the image build and
   | Patch | Upstream bug | Delete when |
   | --- | --- | --- |
   | `images/server/web-patches/0024-admin-settings-nav.patch` | Since [#8634](https://github.com/omnigent-ai/omnigent/pull/8634) (`v0.17.0`), Settings has no Admin group (Members, Policies, Sharing, Subscriptions, Repository variables) after a page load | upstream's `web/src/hooks/useIsAdmin.ts` no longer seeds `initialData` |
+  | `images/server/web-patches/0026-workspace-rail-shift.patch` | Since v0.16 the closed workspace rail sits past the window's right edge and, because React 18 drops its boolean `inert`, stays in the Tab order; focusing it shifts the whole app, sidebar included, 12px to the left | upstream's `web/src/shell/WorkspacePanel.tsx` sets `inert` on the rail's node, or upstream moves to React 19 |
 - **When no web patches are left**, the server image can stop rebuilding the
   web UI.
 
