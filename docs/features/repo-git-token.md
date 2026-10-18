@@ -10,12 +10,12 @@ other. Its sessions clone, fetch and push it with that token.
 The repository is in the new-session repository picker, between your own
 repositories, newest push first:
 
-![The repository picker listing Kunlabora/RoadPass between the GitHub App's repositories](../images/repo-token-picker.webp)
+![The repository picker's Repositories tab listing Kunlabora/RoadPass between the GitHub App's repositories, and the repositories configured in Settings below them](../images/repo-token-picker.webp)
 
 Once picked, its branch menu lists its branches, read with its token, and it
 shows its [variables](repo-env.md), the token among them:
 
-![Kunlabora/RoadPass picked, with 3 variables and its branches in the branch menu](../images/repo-token-branches.webp)
+![Kunlabora/RoadPass picked, with 2 variables and its branches in the branch menu](../images/repo-token-branches.webp)
 
 ## Set it up
 
@@ -33,6 +33,10 @@ shows its [variables](repo-env.md), the token among them:
    Like a variable's value, the token can be replaced but not shown again.
    Leave its field blank to keep it.
 
+   Or, on the **New session** screen, open the repository chip, choose
+   **Custom**, paste the repository's HTTPS URL, pick **Git token** and paste
+   the token: see [a repository by its URL](custom-repository.md).
+
 The repository's card then lists **Git token** above its variables:
 
 ![Settings → Repository variables, with a Git token and two variables for kunlabora/roadpass](../images/repo-token-settings.webp)
@@ -47,8 +51,9 @@ Start a new session and pick the repository.
   [threat model](../threat-model.md#trade-offs-worth-knowing).
 - **Only that repository uses the token.** Every other repository in the
   session keeps using your own GitHub access.
-- **Pasting its URL works too**, instead of picking it. Use an HTTPS URL; an
-  SSH URL ignores the token.
+- **Adding its URL under Custom works too**, instead of picking it. Use an
+  HTTPS URL; an SSH URL ignores the token, and uses the repository's
+  [SSH key](custom-repository.md) instead.
 - **The token stays out of the checkout.** Git reads it from the Secret each
   time, so a new token reaches running sessions, idle ones included once they
   wake.

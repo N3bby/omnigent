@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, and the sandbox picker under the composer. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, and the sandbox picker under the composer. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -126,6 +126,7 @@ PASS  images/server/web-patches/0027-shortcut-key-width.patch
 PASS  images/server/web-patches/0028-mcp-servers.patch
 PASS  images/server/web-patches/0029-first-message-while-starting.patch
 PASS  images/server/web-patches/0030-inline-file-mentions.patch
+PASS  images/server/web-patches/0031-repo-picker-tabs.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -169,7 +170,7 @@ python -m unittest discover -s tests
 ```
 
 **Expected:** `configuration and manifests for <env> are valid` for both, and
-the unit tests end in `OK` (174 tests, 16 skipped, on 2026-10-18). Warnings that
+the unit tests end in `OK` (184 tests, 18 skipped, on 2026-10-18). Warnings that
 `ansible-playbook` or `shellcheck` isn't installed are fine. The tests cover
 the rendered settings behind several features, such as idle-session timing and
 the per-session home volume. They are the local part of the `Validate`
@@ -185,7 +186,7 @@ compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
 `@` file search, a project's repositories, the environment menu, the
-startup card, the New session screen, MCP servers or a first message waiting for its sandbox, or changing their native message, composer, file-index, project
+startup card, the New session screen, MCP servers, a first message waiting for its sandbox or the repository picker's tabs, or changing their native message, composer, file-index, project
 settings, Stop, sandbox lifecycle, sandbox start or runner idle paths:
 
 ```bash
@@ -197,7 +198,7 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx` | 1950 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx` | 1962 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py` | 352 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
@@ -214,7 +215,10 @@ is skipped, because these suites don't install it); the New session screen's
 two files cover starting without a message and the sandbox picker under the
 composer (691 cases, most of them earlier ones); a first message that
 survives closing the app adds 2 frontend cases to `chatStore.test.ts` and the
-last backend file (2 cases). These are
+last backend file (2 cases); the repository picker's tabs add
+`RepoCustomForm.test.tsx` (7 cases), three New session cases (the tabs and
+the configured repositories) and two Repository variables page cases for the
+SSH key. These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -516,7 +520,9 @@ settings.
 | A project's repositories | Open a project's ⋯ menu in the sidebar and choose **Project settings**. With **Host** on the Kubernetes sandbox or no default, the dialog has a **Repositories** field, with a **Choose a repository…** picker when GitHub is connected and a field to paste a URL; with the sandbox there's no **Working directory**. Close it with **Cancel**, without saving. No project: record SKIP. |
 | Environment menu | In this session's composer, the monitor icon left of the permission picker has a solid green dot while you work. Its menu is headed **Agent Sandbox** with `omnigent-<8 hex>` (the `joined as` short name from step 4) and a green **Running** badge, then `Agent  Working · Claude Code` (or `· Codex`), `Pod  Up <time> · <n> CPU, <n> GB` (within a few seconds of opening; compare `cat /sys/fs/cgroup/memory.current`), `VM disk  <used> of <total> GB` with a bar (`df -h /` in this Pod shows the same disk), `Idle stop  Not while the agent is working`, **Copy SSH command**, **Keep running** with a `›`, **Restart agent** (`keeps the Pod`) and **Stop sandbox** (`keeps files`) in red. Choose **Copy SSH command**: a check replaces the copy icon, and the clipboard holds `ssh root@omnigent-<8 hex>`, the short name without `.ts.net`. Hover **Keep running**: its submenu says `Don't stop this Pod when it's idle, so dev servers keep running.` and lists **Usual idle timeout** (ticked, unless someone chose otherwise), **For 2 hours**, **For 8 hours** and **Until I stop it**. Close the menus with Escape; don't choose anything in them, or Restart agent or Stop sandbox. Without Tailscale there's no Copy SSH command, and the header shows the host's name. |
 | Sandbox picker under the composer | Open the **New session** screen and don't send anything. In the bar with the repository, the first chip is labelled `Host: Agent Sandbox, Offline` and shows **Agent Sandbox** (or `Host: <machine>, Online` with the machine's name, if the last session ran on one). The composer has no monitor icon left of the permission picker. Opening the chip lists the sandbox and **Connect new host**; close it with Escape. Then make the window phone-sized (about 400px wide) and open the repository chip: its popover keeps its full width, ending about 8px from the window's right edge, instead of being squeezed into the room right of the chip. Then leave the screen. |
-| GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository picker lists repositories. If it isn't connected, record SKIP (optional setup). |
+| GitHub repository picker | In Settings → Sandbox Integrations, GitHub is listed. If it shows as connected, the new-session repository chip opens on a **Repositories** tab whose picker lists them under **GitHub**. If it isn't connected, record SKIP (optional setup). |
+| The repository picker's configured repositories | On the **New session** screen, open the repository chip and, on the **Repositories** tab, the repository field. Under **Configured in Settings** it lists the repositories Settings → Repository variables has (step 4 lists them for this session's repositories; an admin sees them all on the page), any host, except github.com ones already under **GitHub**; those with a token or SSH key have a key icon. Without any, there's no such group. Close it with Escape without picking anything. |
+| The repository picker's Custom tab | On the **New session** screen, open the repository chip and choose **Custom** (without the GitHub App and configured repositories, there are no tabs and the form shows directly). It has **Repository URL** and **Branch**, and **Add** stays disabled for `org/repo`. If you're an admin, **Credential** offers **None**, **Git token** and **SSH key**; with a `git@github.com:a/b.git` URL and **Git token** chosen, it says `A Git token works with an HTTPS URL`. Not an admin: no Credential, and a line saying an admin can add one. Don't add or save anything; leave the screen. |
 
 Also check that `feature-check claude` from 5a now shows usage numbers in its
 own composer. They belong to the login, so they match this session's.
@@ -607,6 +613,18 @@ Hand these to the user; they need their own devices or VM access:
     `git fetch` and `git push --dry-run` in the checkout, while `.git/config`
     holds no token. Then edit it and turn **Git token** off: the repository
     leaves the picker.
+
+    Then the SSH key, with a deploy key for a repository the GitHub App can't
+    reach (`ssh-keygen -t ed25519 -N '' -f /tmp/feature-check-key`, and add
+    `/tmp/feature-check-key.pub` to the repository with write access). On the
+    New session screen, open the repository chip, choose **Custom**, paste its
+    `git@…` URL, pick **SSH key**, paste the private key and choose **Save and
+    add**. Settings → Repository variables lists **SSH key** on its card, and
+    a session on it starts. Its agent can `git fetch` and
+    `git push --dry-run` in the checkout, `.git/config` holds a
+    `sshCommand` but no key, and `env | grep -c PRIVATE` prints `0`. Pasting
+    the `.pub` file instead is refused as a public key. Then edit the
+    repository, turn **SSH key** off, and remove the deploy key.
 
 12. **A repository's agent instructions and setup script:** in Settings →
     Repository variables, add a repository with no variables yet, turn on

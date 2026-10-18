@@ -27,7 +27,7 @@ except ImportError:  # CI's Python
     create_repo_env_router = None
 
 import omnigent_repo_env as repo_env  # noqa: E402
-from test_repo_env import FakeApiException, FakeCore, decoded  # noqa: E402
+from test_repo_env import FakeApiException, FakeCore, decoded, openssh_key  # noqa: E402
 
 ROADPASS = "github.com/kunlabora/roadpass"
 
@@ -94,12 +94,12 @@ class RouteTests(unittest.TestCase):
                           params={"repository": "https://github.com/kunlabora/roadpass.git"})
         self.assertEqual(names.json(), {
             "repository": ROADPASS, "names": ["TOKEN"], "instructions": False, "setup_script": False,
-            "mcp_servers": [],
+            "mcp_servers": [], "ssh_key": False,
         })
         self.assertEqual(self.call("GET", "/v1/repo-env/names", user=None, params={"repository": ROADPASS}).status_code, 401)
         bad = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": "nope"})
         self.assertEqual(bad.json(), {"repository": None, "names": [], "instructions": False, "setup_script": False,
-                                      "mcp_servers": []})
+                                      "mcp_servers": [], "ssh_key": False})
 
     def test_instructions_and_script_come_back_to_admins_only(self) -> None:
         saved = self.call("PUT", "/v1/repo-env", json={
@@ -112,7 +112,7 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((listed["names"], listed["instructions"]), ([], "Use pnpm."))
         names = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": ROADPASS})
         self.assertEqual(names.json(), {"repository": ROADPASS, "names": [], "instructions": True, "setup_script": True,
-                                        "mcp_servers": []})
+                                        "mcp_servers": [], "ssh_key": False})
         self.assertNotIn("pnpm", names.text)
         # A page that doesn't send them keeps them; null removes one.
         self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"A": "1"}})
@@ -123,6 +123,46 @@ class RouteTests(unittest.TestCase):
             "repository": ROADPASS, "variables": {}, "instructions": "", "setup_script": None,
         })
         self.assertEqual(empty.status_code, 400)
+
+    def test_the_new_session_form_gives_a_repository_its_credentials(self) -> None:
+        self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"NPM": "n"}})
+        token = self.call("PUT", "/v1/repo-env/credentials", json={
+            "repository": "https://github.com/Kunlabora/RoadPass.git", "git_token": "github_pat_1",
+        })
+        self.assertEqual(token.status_code, 200, token.text)
+        self.assertEqual((token.json()["names"], token.json()["ssh_key"]), (["GIT_TOKEN", "NPM"], False))
+        self.assertNotIn("github_pat_1", token.text)
+        key = self.call("PUT", "/v1/repo-env/credentials", json={
+            "repository": "git@gitlab.com:acme/api.git", "ssh_key": openssh_key(),
+        })
+        self.assertEqual(key.status_code, 200, key.text)
+        self.assertEqual((key.json()["repository"], key.json()["ssh_key"]), ("gitlab.com/acme/api", True))
+        self.assertNotIn("PRIVATE", key.text)
+        names = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": "git@gitlab.com:acme/api.git"})
+        self.assertEqual((names.json()["names"], names.json()["ssh_key"]), ([], True))
+        member = self.call("PUT", "/v1/repo-env/credentials", user="member",
+                           json={"repository": ROADPASS, "git_token": "x"})
+        self.assertEqual(member.status_code, 403)
+        public = self.call("PUT", "/v1/repo-env/credentials", json={"repository": ROADPASS, "ssh_key": "ssh-rsa AAAA x"})
+        self.assertEqual(public.status_code, 400)
+        self.assertIn("public key", public.json()["error"]["message"])
+        # The Settings page keeps the key unless it sends one, and null removes it.
+        self.call("PUT", "/v1/repo-env", json={"repository": "gitlab.com/acme/api", "variables": {"A": "1"}})
+        self.assertEqual(set(decoded(self.core, "gitlab.com/acme/api")), {"A", "git-ssh-key"})
+        self.call("PUT", "/v1/repo-env", json={"repository": "gitlab.com/acme/api", "variables": {"A": None},
+                                               "ssh_key": None})
+        self.assertEqual(set(decoded(self.core, "gitlab.com/acme/api")), {"A"})
+
+    def test_anyone_signed_in_lists_the_repositories_for_the_picker(self) -> None:
+        self.call("PUT", "/v1/repo-env/credentials", json={"repository": "git@gitlab.com:acme/api.git",
+                                                         "ssh_key": openssh_key()})
+        listed = self.call("GET", "/v1/repo-env/repositories", user="member")
+        self.assertEqual(listed.status_code, 200, listed.text)
+        self.assertEqual(listed.json()["data"], [{"repository": "gitlab.com/acme/api",
+                                                  "clone_url": "git@gitlab.com:acme/api.git",
+                                                  "git_token": False, "ssh_key": True}])
+        self.assertNotIn("PRIVATE", listed.text)
+        self.assertEqual(self.call("GET", "/v1/repo-env/repositories", user=None).status_code, 401)
 
     def test_errors_are_messages_the_page_can_show(self) -> None:
         reserved = self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"PATH": "/x"}})

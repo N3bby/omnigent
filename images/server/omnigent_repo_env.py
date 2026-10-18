@@ -19,11 +19,16 @@ checkout (``images/runner/repo-env/``). It finds the checkout from
 
 It can also hold the repository's own MCP servers, which Settings → MCP
 servers edits (``omnigent_mcp_servers``). Saving the variables keeps them.
+
+A repository's own Git credentials are its ``GIT_TOKEN`` variable, for HTTPS
+URLs, and an SSH private key under ``git-ssh-key``, for SSH URLs.
+:func:`clone_command` clones with them, and the checkout keeps using them.
 """
 
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -56,9 +61,15 @@ _TEXT_KEYS = (INSTRUCTIONS_KEY, SETUP_SCRIPT_KEY)
 # The repository's MCP servers, as JSON. Settings → MCP servers edits them,
 # not this module, so saving the variables keeps them as they are.
 MCP_SERVERS_KEY = "mcp-servers.json"
-_NOT_VARIABLES = (*_TEXT_KEYS, MCP_SERVERS_KEY)
+# A private key that clones, fetches and pushes the repository's SSH URLs,
+# such as a deploy key. Write-only, like a variable's value, but not a
+# variable name, so the agent doesn't get it in its environment.
+SSH_KEY_KEY = "git-ssh-key"
+_NOT_VARIABLES = (*_TEXT_KEYS, MCP_SERVERS_KEY, SSH_KEY_KEY)
 # Agents read the instructions at the start of every session.
 TEXT_LIMIT = 64 * 1024
+# An RSA key of 16384 bits is under 13 KB.
+SSH_KEY_LIMIT = 16 * 1024
 # On the runner Pod's host container: one line per repository the session
 # starts with, "<Secret name>\t<repository>\t<checkout>".
 CHECKOUTS_ENV = "OMNIGENT_REPO_CHECKOUTS"
@@ -71,6 +82,11 @@ _HASH_LENGTH = 8
 _SLUG_LENGTH = 63 - len(_PREFIX) - 1 - _HASH_LENGTH
 _SEGMENT = re.compile(r"^[a-z0-9._-]+$")
 _SCP_URL = re.compile(r"^(?:[^@/]+@)?(?P<host>[^:/]+):(?P<path>[^/].*)$")
+_PRIVATE_KEY = re.compile(
+    r"^-----BEGIN (?P<kind>[A-Z0-9 ]*)PRIVATE KEY-----\n(?P<body>.*)\n-----END (?P=kind)PRIVATE KEY-----$",
+    re.DOTALL,
+)
+_OPENSSH_MAGIC = b"openssh-key-v1\0"
 VARIABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # The runner and its agents rely on these, so a repository can't override them.
 _RESERVED_NAMES = {"HOME", "PATH", "SHELL", "USER", "LOGNAME", "PWD", "TMPDIR"}
@@ -184,6 +200,44 @@ def parse_env(text: str) -> dict[str, str]:
     return variables
 
 
+def check_ssh_key(text: str) -> str:
+    """
+    A pasted SSH private key, as ``ssh`` reads it.
+
+    ``ssh`` can't ask for a passphrase in a session, so a key with one is
+    refused here instead of failing the clone.
+
+    :param text: e.g. ``"-----BEGIN OPENSSH PRIVATE KEY-----\\n…"``.
+    :returns: The key with Unix line ends and the final newline ``ssh`` needs.
+    :raises ValueError: For a public key, anything that isn't a private key,
+        a key with a passphrase, or more than :data:`SSH_KEY_LIMIT` bytes.
+    """
+    key = text.replace("\r\n", "\n").strip()
+    if len(key.encode()) > SSH_KEY_LIMIT:
+        raise ValueError(f"an SSH key can be at most {SSH_KEY_LIMIT // 1024} KB")
+    if re.match(r"^(ssh|ecdsa|sk)-[a-z0-9@.-]+ ", key):
+        raise ValueError("that's a public key: paste the private key, which starts with -----BEGIN")
+    match = _PRIVATE_KEY.match(key)
+    if match is None:
+        raise ValueError("an SSH key starts with -----BEGIN … PRIVATE KEY----- and ends with -----END … PRIVATE KEY-----")
+    body = match["body"]
+    if match["kind"] == "ENCRYPTED " or "Proc-Type: 4,ENCRYPTED" in body:
+        raise ValueError("that key has a passphrase: sessions can't type it, so use a key without one")
+    if match["kind"] == "OPENSSH ":
+        try:
+            blob = base64.b64decode("".join(body.split()), validate=True)
+        except binascii.Error as exc:
+            raise ValueError("that SSH key is damaged: copy it again") from exc
+        # The cipher follows the magic as a length-prefixed string.
+        if not blob.startswith(_OPENSSH_MAGIC) or len(blob) < len(_OPENSSH_MAGIC) + 4:
+            raise ValueError("that SSH key is damaged: copy it again")
+        length = int.from_bytes(blob[len(_OPENSSH_MAGIC) : len(_OPENSSH_MAGIC) + 4], "big")
+        start = len(_OPENSSH_MAGIC) + 4
+        if blob[start : start + length] != b"none":
+            raise ValueError("that key has a passphrase: sessions can't type it, so use a key without one")
+    return key + "\n"
+
+
 def pod_volumes(urls: Iterable[str]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """
     The volumes and mounts that give a runner Pod its repositories' variables.
@@ -261,6 +315,48 @@ def token_file(url: str) -> str | None:
     return f"{MOUNT_ROOT}/{name}/{TOKEN_VARIABLE}"
 
 
+def ssh_key_file(url: str) -> str | None:
+    """
+    Where a runner Pod finds a repository's SSH key, if it has one.
+
+    Only SSH clone URLs use a key; an HTTPS URL uses a token.
+
+    :param url: e.g. ``"git@github.com:kunlabora/roadpass.git"``.
+    :returns: e.g. ``"/run/omnigent/repo-env/omnigent-repo-env-kunlabora-roadpass-1a2b3c4d/git-ssh-key"``,
+        or ``None`` for an HTTPS or unusable URL.
+    """
+    text = url.strip()
+    if "://" in text:
+        if not text.lower().startswith("ssh://"):
+            return None
+    elif not _SCP_URL.match(text):
+        return None
+    try:
+        name = secret_name(repo_key(text))
+    except ValueError:
+        return None
+    return f"{MOUNT_ROOT}/{name}/{SSH_KEY_KEY}"
+
+
+def ssh_command(path: str) -> str:
+    """
+    A ``core.sshCommand`` that connects with the SSH key in ``path``.
+
+    ``ssh`` refuses a key that others may read, and a mounted Secret's files
+    are readable by their group, so each connection copies the key to a
+    private temporary file and removes it afterwards. Without the file, it's
+    plain ``ssh``. A new host's key is accepted the first time.
+
+    :param path: A path from :func:`ssh_key_file`.
+    :returns: The ``core.sshCommand`` value, for git to run with a shell.
+    """
+    options = "-o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+    return (
+        f'f() {{ if [ -r {path} ]; then k=$(mktemp) && cat {path} > "$k" '
+        f'&& ssh -i "$k" {options} "$@"; r=$?; rm -f "$k"; return $r; fi; ssh "$@"; }}; f'
+    )
+
+
 def credential_helper(path: str) -> str:
     """
     A git credential helper that answers with the token in ``path``.
@@ -279,13 +375,15 @@ def credential_helper(path: str) -> str:
 
 def clone_command(url: str, args: str, directory: str) -> str:
     """
-    The shell command that clones a repository, with its ``GIT_TOKEN`` if it has one.
+    The shell command that clones a repository, with its own credentials if it has them.
 
     With a token, the clone uses only that token, not the user's GitHub App
     token, and the checkout keeps using it: its own config clears the
     helpers inherited from the global config and adds one that reads the
-    token. Without one, it's a plain ``git clone``. The token file is checked
-    when the command runs, because the Secret is mounted optionally.
+    token. An SSH URL with an SSH key clones with that key, and the
+    checkout's own ``core.sshCommand`` keeps using it. Without either, it's a
+    plain ``git clone``. The files are checked when the command runs, because
+    the Secret is mounted optionally.
 
     :param url: The clone URL.
     :param args: What follows ``git clone``, quoted for the shell, e.g.
@@ -293,6 +391,17 @@ def clone_command(url: str, args: str, directory: str) -> str:
     :param directory: The checkout ``args`` clones into, quoted for the shell.
     :returns: A shell command.
     """
+    key = ssh_key_file(url)
+    if key is not None:
+        # ssh.variant skips git's probe of what kind of ssh the function is.
+        command = shlex.quote(ssh_command(key))
+        return (
+            f"if [ -r {shlex.quote(key)} ]; then "
+            f"git -c core.sshCommand={command} -c ssh.variant=ssh clone {args} "
+            f"&& git -C {directory} config core.sshCommand {command} "
+            f"&& git -C {directory} config ssh.variant ssh; "
+            f"else git clone {args}; fi"
+        )
     path = token_file(url)
     if path is None:
         return f"git clone {args}"
@@ -369,6 +478,7 @@ def _entry(secret: Any) -> dict[str, Any]:
         "instructions": _text(secret, INSTRUCTIONS_KEY),
         "setup_script": _text(secret, SETUP_SCRIPT_KEY),
         "mcp_servers": mcp_server_names(secret),
+        "ssh_key": SSH_KEY_KEY in (secret.data or {}),
         "updated_at": _updated_at(secret),
         "updated_by": annotations.get(UPDATED_BY_ANNOTATION),
     }
@@ -381,9 +491,10 @@ def list_repositories(core: Any) -> list[dict[str, Any]]:
     :param core: A Kubernetes ``CoreV1Api``.
     :returns: e.g. ``[{"repository": "github.com/kunlabora/roadpass",
         "names": ["GOVFLANDERS_NPM_TOKEN"], "instructions": "Use pnpm…",
-        "setup_script": None, "mcp_servers": ["figma"], "updated_at": "2026-10-08T…",
-        "updated_by": "levi"}]``, sorted by repository. Never a variable's
-        value; the instructions and the script come back to be edited.
+        "setup_script": None, "mcp_servers": ["figma"], "ssh_key": False,
+        "updated_at": "2026-10-08T…", "updated_by": "levi"}]``, sorted by
+        repository. Never a variable's value or the SSH key; the instructions
+        and the script come back to be edited.
     """
     secrets = core.list_namespaced_secret(NAMESPACE, label_selector=LABEL).items
     return sorted((_entry(s) for s in secrets), key=lambda entry: entry["repository"])
@@ -393,6 +504,36 @@ def _token(secret: Any) -> str | None:
     value = (secret.data or {}).get(TOKEN_VARIABLE)
     token = base64.b64decode(value).decode().strip() if value else ""
     return token or None
+
+
+def picker_repositories(core: Any) -> list[dict[str, Any]]:
+    """
+    Every repository with variables, on any host, for the repository picker.
+
+    Anyone signed in may start a session on these, so they get the
+    repository and how it's cloned, never a value.
+
+    :param core: A Kubernetes ``CoreV1Api``.
+    :returns: e.g. ``[{"repository": "gitlab.com/acme/api",
+        "clone_url": "git@gitlab.com:acme/api.git", "git_token": False,
+        "ssh_key": True}]``, sorted by repository. A repository with only an
+        SSH key gets its SSH URL; every other one its HTTPS URL.
+    """
+    entries = []
+    for secret in core.list_namespaced_secret(NAMESPACE, label_selector=LABEL).items:
+        key = (secret.metadata.annotations or {}).get(ANNOTATION, "")
+        # Only the Secret a Pod would mount for it.
+        try:
+            if secret.metadata.name != secret_name(key):
+                continue
+        except (IndexError, ValueError):
+            continue
+        data = secret.data or {}
+        host, path = key.split("/", 1)
+        token, ssh_key = _token(secret) is not None, SSH_KEY_KEY in data
+        clone_url = f"git@{host}:{path}.git" if ssh_key and not token else f"https://{host}/{path}.git"
+        entries.append({"repository": key, "clone_url": clone_url, "git_token": token, "ssh_key": ssh_key})
+    return sorted(entries, key=lambda entry: entry["repository"])
 
 
 def token_repositories(core: Any) -> dict[str, str]:
@@ -452,13 +593,14 @@ def repository_summary(core: Any, key: str) -> dict[str, Any]:
     :param key: A key from :func:`repo_key`.
     :returns: e.g. ``{"names": ["GOVFLANDERS_NPM_TOKEN"], "instructions": True,
         "setup_script": False, "mcp_servers": [{"name": "figma",
-        "agents": ["claude", "codex"], "host": "mcp.figma.com"}]}``.
+        "agents": ["claude", "codex"], "host": "mcp.figma.com"}], "ssh_key": False}``.
     """
     try:
         secret = core.read_namespaced_secret(secret_name(key), NAMESPACE)
     except Exception as exc:
         if _not_found(exc):
-            return {"names": [], "instructions": False, "setup_script": False, "mcp_servers": []}
+            return {"names": [], "instructions": False, "setup_script": False, "mcp_servers": [],
+                    "ssh_key": False}
         raise
     data = secret.data or {}
     return {
@@ -466,6 +608,7 @@ def repository_summary(core: Any, key: str) -> dict[str, Any]:
         "instructions": INSTRUCTIONS_KEY in data,
         "setup_script": SETUP_SCRIPT_KEY in data,
         "mcp_servers": mcp_server_badges(secret),
+        "ssh_key": SSH_KEY_KEY in data,
     }
 
 
@@ -487,6 +630,7 @@ def save_repository(
     *,
     instructions: str | None = KEEP,
     setup_script: str | None = KEEP,
+    ssh_key: str | None = KEEP,
 ) -> dict[str, Any]:
     """
     Store a repository's variables, replacing the ones it had.
@@ -502,14 +646,19 @@ def save_repository(
     :param instructions: The repository's agent instructions; ``None`` or
         blank removes them, and :data:`KEEP` leaves them as they are.
     :param setup_script: The repository's setup script, likewise.
+    :param ssh_key: The repository's SSH private key; ``None`` removes it, and
+        :data:`KEEP` leaves it as it is.
     :returns: The repository's entry, as in :func:`list_repositories`.
     :raises ValueError: When there'd be nothing left to store (the
         repository's MCP servers count), on a name
         :func:`check_variable_name` rejects, ``None`` for a variable the
-        repository doesn't have, or text over :data:`TEXT_LIMIT` bytes.
+        repository doesn't have, text over :data:`TEXT_LIMIT` bytes, or an
+        SSH key :func:`check_ssh_key` rejects.
     """
     for name in variables:
         check_variable_name(name)
+    if ssh_key is not KEEP and ssh_key is not None:
+        ssh_key = check_ssh_key(ssh_key)
     texts = {
         INSTRUCTIONS_KEY: instructions if instructions is KEEP else _clean_text(instructions, "agent instructions"),
         SETUP_SCRIPT_KEY: setup_script if setup_script is KEEP else _clean_text(setup_script, "setup script"),
@@ -532,6 +681,11 @@ def save_repository(
             raise ValueError(f"{variable} has no value yet")
     if MCP_SERVERS_KEY in current_data:
         data[MCP_SERVERS_KEY] = current_data[MCP_SERVERS_KEY]
+    if ssh_key is KEEP:
+        if SSH_KEY_KEY in current_data:
+            data[SSH_KEY_KEY] = current_data[SSH_KEY_KEY]
+    elif ssh_key is not None:
+        data[SSH_KEY_KEY] = base64.b64encode(ssh_key.encode()).decode()
     for text_key, text in texts.items():
         if text is KEEP:
             if text_key in current_data:
@@ -543,6 +697,56 @@ def save_repository(
             "give at least one variable, agent instructions or a setup script, "
             "or remove the repository"
         )
+    return _write(core, key, current, data, updated_by)
+
+
+def save_credentials(
+    core: Any,
+    key: str,
+    *,
+    token: str | None = None,
+    ssh_key: str | None = None,
+    updated_by: str | None = None,
+) -> dict[str, Any]:
+    """
+    Give a repository its own Git token or SSH key, keeping everything else.
+
+    For the new-session form, which adds a repository with its credentials
+    without knowing what else it has. A token or key it had is replaced.
+
+    :param core: A Kubernetes ``CoreV1Api``.
+    :param key: A key from :func:`repo_key`.
+    :param token: The new ``GIT_TOKEN``, or ``None`` to leave it.
+    :param ssh_key: The new SSH private key, or ``None`` to leave it.
+    :param updated_by: The user saving them, kept as an annotation.
+    :returns: The repository's entry, as in :func:`list_repositories`.
+    :raises ValueError: Without a token or key, for a blank token, or for an
+        SSH key :func:`check_ssh_key` rejects.
+    """
+    if token is None and ssh_key is None:
+        raise ValueError("give a Git token or an SSH key")
+    if token is not None and not token.strip():
+        raise ValueError("the Git token is blank")
+    if ssh_key is not None:
+        ssh_key = check_ssh_key(ssh_key)
+    name = secret_name(key)
+    try:
+        current = core.read_namespaced_secret(name, NAMESPACE)
+    except Exception as exc:
+        if not _not_found(exc):
+            raise
+        current = None
+    data = dict((current.data or {}) if current is not None else {})
+    if token is not None:
+        data[TOKEN_VARIABLE] = base64.b64encode(token.strip().encode()).decode()
+    if ssh_key is not None:
+        data[SSH_KEY_KEY] = base64.b64encode(ssh_key.encode()).decode()
+    return _write(core, key, current, data, updated_by)
+
+
+def _write(core: Any, key: str, current: Any, data: dict[str, str], updated_by: str | None) -> dict[str, Any]:
+    """Create the repository's Secret, or replace ``current`` unless someone changed it since."""
+    name = secret_name(key)
     annotations = {ANNOTATION: key}
     if updated_by:
         annotations[UPDATED_BY_ANNOTATION] = updated_by

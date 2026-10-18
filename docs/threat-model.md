@@ -89,7 +89,10 @@ the runner namespace, which limits what a compromised server could do there.
   [`GIT_TOKEN` variable](features/repo-git-token.md)
   is in everyone's repository picker, and anyone who starts a session on it
   can use the token, with whatever access the token has. Give it a
-  fine-grained token for that one repository.
+  fine-grained token for that one repository. The same goes for a
+  repository's [SSH key](features/custom-repository.md): it isn't in the
+  agent's environment, but the agent can read its file. Use a deploy key for
+  that one repository.
 - **The server can read the runner namespace's Secrets.** Settings →
   Repository variables needs to list and update them, and Kubernetes can't
   limit that to the repository variables, so the server can also read the

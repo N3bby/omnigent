@@ -48,6 +48,7 @@ Getting your repositories into a session, with what they need to build.
 | [GitHub repository picker](github-repo-picker.md) | Choose repositories from a list | Optional setup step |
 | [Repository variables](repo-env.md) | A repository's own environment variables, such as an npm token, in its sessions | Optional setup step |
 | [A repository's own Git token](repo-git-token.md) | Pick, clone and push a repository the GitHub App can't reach, with its own token | Optional setup step |
+| [A repository by its URL](custom-repository.md) | The repository picker's **Repositories** and **Custom** tabs: pick repositories configured in Settings on any host, such as GitLab, or add any repository by its URL, and as an admin give it a Git token or SSH key | A repository without a token or key clones as before |
 | [A repository's own agent instructions](repo-instructions.md) | Your own instructions for a repository's agents, kept out of its `CLAUDE.md` | Optional setup step |
 | [A repository's setup script](repo-setup-script.md) | A script that sets up each new session on a repository before the agent starts | Optional setup step |
 | [A project's repositories](project-repositories.md) | A new session in a project picks that project's repositories, not the last ones you used | A project without repositories keeps the old behaviour |

@@ -2,11 +2,14 @@
 
 Admins list, save and remove repositories' variables. Values only go from the
 browser to the Secret, never back: listing returns names, and saving a name
-without a value keeps the value it has. A repository's agent instructions and
+without a value keeps the value it has. The same goes for a repository's SSH
+key, which the new-session form can also set, with a Git token, when an admin
+adds a repository by its URL. A repository's agent instructions and
 setup script aren't secret, so admins read them back to edit them. Anyone
-signed in can see the names of a repository's variables, whether it has
-instructions or a script, and its MCP servers' names, which the new-session
-form shows next to the repository.
+signed in can list the repositories with variables, which the repository
+picker offers on any host, and see the names of a repository's variables,
+whether it has instructions or a script, and its MCP servers' names, which the
+new-session form shows next to the repository.
 
 A repository with a ``GIT_TOKEN`` variable is also in the repository picker,
 for everyone who has connected GitHub, and its branches are listed with that
@@ -48,13 +51,23 @@ class SaveRepositoryRequest(BaseModel):
     ``variables`` maps each name to its new value, or to ``null`` to keep the
     current one. Names left out are removed. ``instructions`` and
     ``setup_script`` are the whole text, or ``null`` or blank to remove it;
-    left out, they stay as they are.
+    left out, they stay as they are. ``ssh_key`` is a new private key, or
+    ``null`` to remove it; left out, it stays.
     """
 
     repository: str
     variables: dict[str, str | None]
     instructions: str | None = None
     setup_script: str | None = None
+    ssh_key: str | None = None
+
+
+class SaveCredentialsRequest(BaseModel):
+    """Body for ``PUT /v1/repo-env/credentials``: a new Git token, SSH key, or both."""
+
+    repository: str
+    git_token: str | None = None
+    ssh_key: str | None = None
 
 
 @functools.cache
@@ -155,32 +168,53 @@ def create_repo_env_router(
     async def variable_names(request: Request, repository: str) -> dict[str, Any]:
         """
         The names of one repository's variables, whether it has agent
-        instructions or a setup script, and its MCP servers, for anyone signed
-        in. Never a value, the text or a server's keys.
+        instructions, a setup script or an SSH key, and its MCP servers, for
+        anyone signed in. Never a value, the text, the key or a server's keys.
         """
         await signed_in(request)
         try:
             key = repo_env.repo_key(repository)
         except ValueError:
             return {"repository": None, "names": [], "instructions": False, "setup_script": False,
-                    "mcp_servers": []}
+                    "mcp_servers": [], "ssh_key": False}
         summary = await _kubernetes(lambda: repo_env.repository_summary(core(), key))
         return {"repository": key, **summary}
+
+    @router.get("/repo-env/repositories")
+    async def picker_repositories(request: Request) -> dict[str, Any]:
+        """
+        Every repository with variables and how it's cloned, for the
+        repository picker, for anyone signed in. Never a value.
+        """
+        await signed_in(request)
+        data = await _kubernetes(lambda: repo_env.picker_repositories(core()))
+        return {"object": "list", "data": data}
 
     @router.put("/repo-env")
     async def save_repository(request: Request, body: SaveRepositoryRequest) -> dict[str, Any]:
         """Store a repository's variables, replacing what it had (admin only)."""
         user_id = await admin(request)
         key = _key(body.repository)
-        # A page from before the instructions and the script keeps them.
+        # A page from before the instructions, the script or the SSH key keeps them.
         sent = body.model_fields_set
         texts = {
             field: getattr(body, field) if field in sent else repo_env.KEEP
-            for field in ("instructions", "setup_script")
+            for field in ("instructions", "setup_script", "ssh_key")
         }
         return await _kubernetes(
             lambda: repo_env.save_repository(
                 core(), key, body.variables, updated_by=user_id, **texts
+            )
+        )
+
+    @router.put("/repo-env/credentials")
+    async def save_credentials(request: Request, body: SaveCredentialsRequest) -> dict[str, Any]:
+        """Give a repository its own Git token or SSH key, keeping the rest (admin only)."""
+        user_id = await admin(request)
+        key = _key(body.repository)
+        return await _kubernetes(
+            lambda: repo_env.save_credentials(
+                core(), key, token=body.git_token, ssh_key=body.ssh_key, updated_by=user_id
             )
         )
 

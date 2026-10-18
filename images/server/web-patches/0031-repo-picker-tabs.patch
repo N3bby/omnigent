@@ -1,0 +1,1638 @@
+Split the new-session repository picker into a Repositories tab and a Custom
+tab, list the repositories configured in Settings on any host, and let admins
+give a custom repository its own Git token or SSH key.
+
+The repository popover keeps the picked repositories on top. Below them, the
+Repositories tab has one combobox with two groups: the connected GitHub
+account's repositories, and the repositories configured in Settings ->
+Repository variables (GET /v1/repo-env/repositories, any host, fetched once
+the popover first opens). A configured repository the GitHub list already has
+appears there only, with its branches; the others get a typed branch. The tab
+says when the GitHub list is loading, failed to load or GitHub isn't
+connected. The Custom tab (components/RepoCustomForm.tsx) takes any HTTPS or
+git@ URL and a branch. Without the GitHub App and configured repositories
+there are no tabs, only the Custom form.
+
+For admins, the Custom form also picks a credential: none, a Git token or an
+SSH key. Choosing one saves it on the repository with
+PUT /v1/repo-env/credentials (images/server/omnigent_repo_env_api.py) before
+adding the repository, keeping its other variables. The form refuses a token
+for an SSH URL and a key for an HTTPS URL, and says when a new one replaces
+the stored one. Non-admins see that an admin can add one.
+
+Settings -> Repository variables gets an SSH key switch beside the Git token
+switch, with a write-only field: blank keeps the stored key, and switching it
+off removes it. The card lists "SSH key".
+
+The icons next to text in the popover and on the Settings card sit in a
+.cap-icon holder (index.css), which centres them on the text's capitals in any
+font, instead of 1-2px below them.Base: omnigent v0.18.0 (a8676d23e88d).
+
+diff --git a/web/src/components/RepoCustomForm.test.tsx b/web/src/components/RepoCustomForm.test.tsx
+new file mode 100644
+index 0000000..21ce72a
+--- /dev/null
++++ b/web/src/components/RepoCustomForm.test.tsx
+@@ -0,0 +1,171 @@
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { RepoCustomForm } from "./RepoCustomForm";
++import * as identity from "@/lib/identity";
++
++vi.mock("@/lib/identity", () => ({
++  authenticatedFetch: vi.fn(),
++  getCurrentIsAdmin: vi.fn(() => false),
++  resolveIdentity: vi.fn(async () => null),
++}));
++vi.mock("@/components/ui/toast", () => ({ showToast: vi.fn() }));
++
++const KEY =
++  "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=\n-----END OPENSSH PRIVATE KEY-----";
++
++/** The server's answers: the credentials route, and the names lookup. */
++function mockServer(credentials: () => Response, names: string[] = [], sshKey = false) {
++  vi.mocked(identity.authenticatedFetch).mockImplementation((async (input: RequestInfo | URL) => {
++    const url = input.toString();
++    if (url === "/v1/repo-env/credentials") return credentials();
++    return new Response(
++      JSON.stringify({ names, instructions: false, setup_script: false, ssh_key: sshKey }),
++    );
++  }) as typeof identity.authenticatedFetch);
++}
++
++function renderForm({ admin = true, picked = [] as string[] } = {}) {
++  vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(admin);
++  const onAdd = vi.fn();
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  render(
++    <QueryClientProvider client={client}>
++      <RepoCustomForm onAdd={onAdd} isPicked={(url) => picked.includes(url)} />
++    </QueryClientProvider>,
++  );
++  return onAdd;
++}
++
++function type(testId: string, value: string) {
++  fireEvent.change(screen.getByTestId(testId), { target: { value } });
++}
++
++function addButton(): HTMLButtonElement {
++  return screen.getByTestId("new-chat-landing-repo-add") as HTMLButtonElement;
++}
++
++const credentialCalls = () =>
++  vi
++    .mocked(identity.authenticatedFetch)
++    .mock.calls.filter(([url]) => url === "/v1/repo-env/credentials");
++
++afterEach(() => {
++  cleanup();
++  vi.mocked(identity.authenticatedFetch).mockReset();
++});
++
++describe("RepoCustomForm", () => {
++  it("adds any URL with its branch, without saving anything", () => {
++    mockServer(() => new Response("{}"));
++    const onAdd = renderForm();
++    type("new-chat-landing-repo-input", "org/repo");
++    expect(addButton().disabled).toBe(true);
++    type("new-chat-landing-repo-input", " https://gitlab.com/acme/api ");
++    type("new-chat-landing-repo-branch-input", "dev");
++    fireEvent.click(addButton());
++    expect(onAdd).toHaveBeenCalledWith("https://gitlab.com/acme/api", "dev");
++    expect(credentialCalls()).toHaveLength(0);
++    expect((screen.getByTestId("new-chat-landing-repo-input") as HTMLInputElement).value).toBe("");
++  });
++
++  it("saves a Git token on the repository before adding it", async () => {
++    mockServer(
++      () =>
++        new Response(
++          JSON.stringify({
++            repository: "gitlab.com/acme/api",
++            names: ["GIT_TOKEN"],
++            ssh_key: false,
++          }),
++        ),
++    );
++    const onAdd = renderForm();
++    type("new-chat-landing-repo-input", "https://gitlab.com/acme/api.git");
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-credential-token"));
++    expect(addButton().disabled).toBe(true);
++    type("new-chat-landing-repo-token", "glpat-123");
++    expect(addButton().textContent).toBe("Save and add");
++    fireEvent.click(addButton());
++    await waitFor(() => expect(onAdd).toHaveBeenCalledWith("https://gitlab.com/acme/api.git", ""));
++    const [[, init]] = credentialCalls();
++    expect(init?.method).toBe("PUT");
++    expect(JSON.parse(init?.body as string)).toEqual({
++      repository: "https://gitlab.com/acme/api.git",
++      git_token: "glpat-123",
++    });
++  });
++
++  it("saves an SSH key for an SSH URL, and says it replaces the current one", async () => {
++    mockServer(() => new Response(JSON.stringify({ repository: "github.com/a/b" })), [], true);
++    const onAdd = renderForm();
++    type("new-chat-landing-repo-input", "git@github.com:a/b.git");
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-credential-ssh"));
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-repo-ssh-key").getAttribute("placeholder")).toBe(
++        "A new key replaces the current one",
++      ),
++    );
++    type("new-chat-landing-repo-ssh-key", KEY);
++    fireEvent.click(addButton());
++    await waitFor(() => expect(onAdd).toHaveBeenCalledWith("git@github.com:a/b.git", ""));
++    expect(JSON.parse(credentialCalls()[0][1]?.body as string)).toEqual({
++      repository: "git@github.com:a/b.git",
++      ssh_key: KEY,
++    });
++  });
++
++  it("matches the credential to the URL", () => {
++    mockServer(() => new Response("{}"));
++    renderForm();
++    type("new-chat-landing-repo-input", "git@github.com:a/b.git");
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-credential-token"));
++    type("new-chat-landing-repo-token", "github_pat_1");
++    expect(screen.getByText(/A Git token works with an HTTPS URL/)).toBeInTheDocument();
++    expect(addButton().disabled).toBe(true);
++    type("new-chat-landing-repo-input", "https://github.com/a/b");
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-credential-ssh"));
++    type("new-chat-landing-repo-ssh-key", KEY);
++    expect(screen.getByText(/An SSH key works with an SSH URL/)).toBeInTheDocument();
++    expect(addButton().disabled).toBe(true);
++  });
++
++  it("shows the server's error and doesn't add the repository", async () => {
++    mockServer(
++      () =>
++        new Response(
++          JSON.stringify({
++            error: { message: "that key has a passphrase: use a key without one" },
++          }),
++          { status: 400 },
++        ),
++    );
++    const onAdd = renderForm();
++    type("new-chat-landing-repo-input", "git@github.com:a/b.git");
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-credential-ssh"));
++    type("new-chat-landing-repo-ssh-key", KEY);
++    fireEvent.click(addButton());
++    expect(await screen.findByTestId("new-chat-landing-repo-custom-error")).toHaveTextContent(
++      "that key has a passphrase",
++    );
++    expect(onAdd).not.toHaveBeenCalled();
++    expect((screen.getByTestId("new-chat-landing-repo-input") as HTMLInputElement).value).toBe(
++      "git@github.com:a/b.git",
++    );
++  });
++
++  it("offers credentials to admins only", async () => {
++    mockServer(() => new Response("{}"));
++    renderForm({ admin: false });
++    await waitFor(() => expect(screen.getByText(/an admin can add/)).toBeInTheDocument());
++    expect(screen.queryByTestId("new-chat-landing-repo-credential-token")).toBeNull();
++  });
++
++  it("won't add a repository twice", () => {
++    mockServer(() => new Response("{}"));
++    renderForm({ picked: ["https://github.com/a/b"] });
++    type("new-chat-landing-repo-input", "https://github.com/a/b");
++    expect(screen.getByText("Already picked.")).toBeInTheDocument();
++    expect(addButton().disabled).toBe(true);
++  });
++});
+diff --git a/web/src/components/RepoCustomForm.tsx b/web/src/components/RepoCustomForm.tsx
+new file mode 100644
+index 0000000..2d9bf29
+--- /dev/null
++++ b/web/src/components/RepoCustomForm.tsx
+@@ -0,0 +1,266 @@
++/**
++ * The "Custom" tab of the new-session repository picker (added by this
++ * deployment): any repository by its URL, with an optional branch and, for
++ * admins, its own Git token or SSH key.
++ *
++ * A credential is saved on the repository (``PUT /v1/repo-env/credentials``)
++ * before the repository is added, so every session on it uses it, as when an
++ * admin sets it in Settings → Repository variables. It's write-only: the
++ * form only says whether the repository already has one.
++ */
++
++import { useState } from "react";
++import { KeyRoundIcon, PlusIcon } from "lucide-react";
++import { showToast } from "@/components/ui/toast";
++import { useIsAdmin } from "@/hooks/useIsAdmin";
++import { useRepoEnvNames, useSaveRepoCredentials } from "@/hooks/useRepoEnv";
++import { GIT_TOKEN, repoKey } from "@/lib/repoEnv";
++import { cn } from "@/lib/utils";
++
++type Credential = "none" | "token" | "ssh";
++
++const CREDENTIALS: { value: Credential; label: string }[] = [
++  { value: "none", label: "None" },
++  { value: "token", label: "Git token" },
++  { value: "ssh", label: "SSH key" },
++];
++
++const FIELD =
++  "min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition-colors focus-visible:border-ring";
++
++/** ``https://…`` or ``git@host:path``, as the server accepts (``isValidSandboxRepoUrl``). */
++function urlKind(url: string): "https" | "ssh" | null {
++  const t = url.trim();
++  if (/^https:\/\/[^\s#/]+\/[^\s#]+$/.test(t)) return "https";
++  if (/^git@[^\s#:]+:[^\s#]+$/.test(t)) return "ssh";
++  return null;
++}
++
++export function RepoCustomForm({
++  onAdd,
++  isPicked,
++}: {
++  /** Adds the repository to the session, with its branch ("" = default). */
++  onAdd: (url: string, branch: string) => void;
++  /** Whether the session already has this URL. */
++  isPicked: (url: string) => boolean;
++}) {
++  const isAdmin = useIsAdmin();
++  const save = useSaveRepoCredentials();
++  const [url, setUrl] = useState("");
++  const [branch, setBranch] = useState("");
++  const [credential, setCredential] = useState<Credential>("none");
++  const [token, setToken] = useState("");
++  const [sshKey, setSshKey] = useState("");
++  const [error, setError] = useState<string | null>(null);
++
++  const kind = urlKind(url);
++  const key = kind ? repoKey(url) : null;
++  // Only asked once a credential is chosen, to say it replaces one.
++  const { data: existing } = useRepoEnvNames(credential !== "none" && key ? url : "");
++  const hasToken = existing?.names.includes(GIT_TOKEN) ?? false;
++  const hasKey = existing?.ssh_key ?? false;
++
++  const mismatch =
++    kind === "ssh" && credential === "token"
++      ? "A Git token works with an HTTPS URL, like https://github.com/org/repo."
++      : kind === "https" && credential === "ssh"
++        ? "An SSH key works with an SSH URL, like git@github.com:org/repo.git."
++        : null;
++  const secret = credential === "token" ? token.trim() : credential === "ssh" ? sshKey.trim() : "";
++  const picked = kind !== null && isPicked(url.trim());
++  const canAdd =
++    kind !== null &&
++    !picked &&
++    mismatch === null &&
++    (credential === "none" || secret !== "") &&
++    !save.isPending;
++
++  function reset() {
++    setUrl("");
++    setBranch("");
++    setCredential("none");
++    setToken("");
++    setSshKey("");
++    setError(null);
++  }
++
++  function add() {
++    if (!canAdd) return;
++    const u = url.trim();
++    if (credential === "none") {
++      onAdd(u, branch);
++      reset();
++      return;
++    }
++    setError(null);
++    save.mutate(
++      {
++        repository: u,
++        credentials: credential === "token" ? { git_token: token } : { ssh_key: sshKey },
++      },
++      {
++        onSuccess: (saved) => {
++          onAdd(u, branch);
++          showToast(
++            `Saved the ${credential === "token" ? "Git token" : "SSH key"} for ${saved.repository}. Every session on it uses it, and it's listed under Repositories.`,
++          );
++          reset();
++        },
++        onError: (err) => setError(err.message),
++      },
++    );
++  }
++
++  return (
++    <form
++      className="flex flex-col gap-2.5"
++      onSubmit={(e) => {
++        // The composer around it must never submit.
++        e.preventDefault();
++        e.stopPropagation();
++        add();
++      }}
++      data-testid="new-chat-landing-repo-custom"
++    >
++      <div className="flex flex-col gap-1">
++        <label htmlFor="landing-repo-url" className="text-sm text-muted-foreground">
++          Repository URL
++        </label>
++        <input
++          id="landing-repo-url"
++          type="text"
++          value={url}
++          onChange={(e) => setUrl(e.target.value)}
++          placeholder="https://github.com/org/repo or git@…"
++          autoComplete="off"
++          autoCapitalize="off"
++          spellCheck={false}
++          className={FIELD}
++          data-testid="new-chat-landing-repo-input"
++        />
++        {picked && <p className="text-sm text-muted-foreground">Already picked.</p>}
++      </div>
++      <div className="flex flex-col gap-1">
++        <label htmlFor="landing-repo-branch" className="text-sm text-muted-foreground">
++          Branch
++        </label>
++        <input
++          id="landing-repo-branch"
++          type="text"
++          value={branch}
++          onChange={(e) => setBranch(e.target.value)}
++          placeholder="Default branch"
++          autoComplete="off"
++          autoCapitalize="off"
++          spellCheck={false}
++          className={FIELD}
++          data-testid="new-chat-landing-repo-branch-input"
++        />
++      </div>
++      {isAdmin ? (
++        <div className="flex flex-col gap-1.5">
++          <span id="landing-repo-credential" className="text-sm text-muted-foreground">
++            Credential
++          </span>
++          <div
++            role="radiogroup"
++            aria-labelledby="landing-repo-credential"
++            className="grid grid-cols-3 gap-0.5 rounded-lg bg-muted p-[3px]"
++          >
++            {CREDENTIALS.map((c) => (
++              <button
++                key={c.value}
++                type="button"
++                role="radio"
++                aria-checked={credential === c.value}
++                onClick={() => {
++                  setCredential(c.value);
++                  setError(null);
++                }}
++                className={cn(
++                  "rounded-md px-2 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground",
++                  credential === c.value && "bg-background text-foreground shadow-sm",
++                )}
++                data-testid={`new-chat-landing-repo-credential-${c.value}`}
++              >
++                {c.label}
++              </button>
++            ))}
++          </div>
++          {credential === "none" && (
++            <p className="text-sm text-muted-foreground">
++              Public repositories, and those your GitHub connection reaches, need none.
++            </p>
++          )}
++          {credential === "token" && (
++            <input
++              type="password"
++              value={token}
++              onChange={(e) => setToken(e.target.value)}
++              placeholder={hasToken ? "A new token replaces the current one" : "github_pat_…"}
++              aria-label="Git token"
++              autoComplete="new-password"
++              className={FIELD}
++              data-testid="new-chat-landing-repo-token"
++            />
++          )}
++          {credential === "ssh" && (
++            <textarea
++              value={sshKey}
++              onChange={(e) => setSshKey(e.target.value)}
++              rows={4}
++              placeholder={
++                hasKey
++                  ? "A new key replaces the current one"
++                  : "-----BEGIN OPENSSH PRIVATE KEY-----"
++              }
++              aria-label="SSH private key"
++              autoComplete="off"
++              spellCheck={false}
++              className={cn(FIELD, "resize-none font-mono text-xs")}
++              data-testid="new-chat-landing-repo-ssh-key"
++            />
++          )}
++          {mismatch ? (
++            <p className="text-sm text-warning">{mismatch}</p>
++          ) : (
++            credential !== "none" && (
++              <p className="flex items-start gap-1.5 text-sm text-muted-foreground">
++                <span className="cap-icon">
++                  <KeyRoundIcon className="size-3.5 shrink-0" />
++                </span>
++                <span>
++                  {credential === "ssh" ? "A key without a passphrase, such as a deploy key. " : ""}
++                  Saved with the repository for every session on it. Change it in Settings →
++                  Repository variables.
++                </span>
++              </p>
++            )
++          )}
++        </div>
++      ) : (
++        <p className="text-sm text-muted-foreground">
++          A private repository outside your GitHub connection needs a Git token or SSH key, which an
++          admin can add.
++        </p>
++      )}
++      {error && (
++        <p className="text-sm text-destructive" data-testid="new-chat-landing-repo-custom-error">
++          {error}
++        </p>
++      )}
++      <button
++        type="submit"
++        disabled={!canAdd}
++        className="flex items-center justify-center gap-1 self-end rounded-md border border-input px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
++        data-testid="new-chat-landing-repo-add"
++      >
++        <span className="cap-icon">
++          <PlusIcon className="size-3.5" />
++        </span>
++        {credential === "none" ? "Add" : save.isPending ? "Saving…" : "Save and add"}
++      </button>
++    </form>
++  );
++}
+diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
+index bbabb0b..2524d4d 100644
+--- a/web/src/components/RepoEnvBadge.tsx
++++ b/web/src/components/RepoEnvBadge.tsx
+@@ -42,16 +42,30 @@ export function RepoEnvBadge({ url }: { url: string }) {
+         >
+           {names.length > 0 && (
+             <>
+-              <FolderKeyIcon className="size-3.5" />
++              <span className="cap-icon">
++                <FolderKeyIcon className="size-3.5" />
++              </span>
+               {/* Phones show only the count, leaving the row's room to the
+               repository's name. */}
+               <span className="max-sm:hidden">{label}</span>
+               <span className="sm:hidden">{names.length}</span>
+             </>
+           )}
+-          {instructions && <ScrollTextIcon className="size-3.5" />}
+-          {setupScript && <SquareTerminalIcon className="size-3.5" />}
+-          {servers.length > 0 && <PlugIcon className="size-3.5" />}
++          {instructions && (
++            <span className="cap-icon">
++              <ScrollTextIcon className="size-3.5" />
++            </span>
++          )}
++          {setupScript && (
++            <span className="cap-icon">
++              <SquareTerminalIcon className="size-3.5" />
++            </span>
++          )}
++          {servers.length > 0 && (
++            <span className="cap-icon">
++              <PlugIcon className="size-3.5" />
++            </span>
++          )}
+         </button>
+       </PopoverTrigger>
+       <PopoverContent
+diff --git a/web/src/hooks/useRepoEnv.ts b/web/src/hooks/useRepoEnv.ts
+index 115f9d9..34ead4c 100644
+--- a/web/src/hooks/useRepoEnv.ts
++++ b/web/src/hooks/useRepoEnv.ts
+@@ -1,20 +1,37 @@
+ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+ import {
+   deleteRepoEnv,
++  fetchConfiguredRepos,
+   fetchRepoEnv,
+   fetchRepoEnvNames,
+   repoKey,
++  saveRepoCredentials,
+   saveRepoEnv,
+ } from "@/lib/repoEnv";
+ 
+ const LIST_KEY = ["repo-env"];
+ const NAMES_KEY = "repo-env-names";
++const CONFIGURED_KEY = ["repo-env-repositories"];
+ 
+ /** Every repository with variables (admin only). */
+ export function useRepoEnv() {
+   return useQuery({ queryKey: LIST_KEY, queryFn: fetchRepoEnv, staleTime: 5_000 });
+ }
+ 
++/**
++ * Every repository with variables, on any host, for the repository picker.
++ * Empty, rather than an error, where the server can't list them.
++ */
++export function useConfiguredRepos(enabled = true) {
++  return useQuery({
++    queryKey: CONFIGURED_KEY,
++    queryFn: fetchConfiguredRepos,
++    enabled,
++    staleTime: 60_000,
++    retry: false,
++  });
++}
++
+ /**
+  * The names of the variables sessions on ``url`` get, and whether it has
+  * agent instructions or a setup script, for the new-session form. Disabled
+@@ -37,6 +54,7 @@ function useInvalidate() {
+     // Removing a repository removes its MCP servers too.
+     void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+     void queryClient.invalidateQueries({ queryKey: [NAMES_KEY] });
++    void queryClient.invalidateQueries({ queryKey: CONFIGURED_KEY });
+   };
+ }
+ 
+@@ -52,15 +70,37 @@ export function useSaveRepoEnv() {
+       variables: Record<string, string | null>;
+       instructions: string | null;
+       setup_script: string | null;
++      /** A new SSH key, null to remove it, or left out to keep it. */
++      ssh_key?: string | null;
+     }) =>
+       saveRepoEnv(args.repository, args.variables, {
+         instructions: args.instructions,
+         setup_script: args.setup_script,
++        ssh_key: args.ssh_key,
+       }),
+     onSuccess: invalidate,
+   });
+ }
+ 
++/**
++ * Give a repository its own Git token or SSH key from the new-session form.
++ * A github.com repository with a token joins the repository picker.
++ */
++export function useSaveRepoCredentials() {
++  const invalidate = useInvalidate();
++  const queryClient = useQueryClient();
++  return useMutation({
++    mutationFn: (args: {
++      repository: string;
++      credentials: { git_token: string } | { ssh_key: string };
++    }) => saveRepoCredentials(args.repository, args.credentials),
++    onSuccess: () => {
++      invalidate();
++      void queryClient.invalidateQueries({ queryKey: ["github-repos"] });
++    },
++  });
++}
++
+ /** Remove a repository's variables. */
+ export function useDeleteRepoEnv() {
+   const invalidate = useInvalidate();
+diff --git a/web/src/index.css b/web/src/index.css
+index 82f66f5..370ad4a 100644
+--- a/web/src/index.css
++++ b/web/src/index.css
+@@ -555,6 +555,23 @@
+   flex-shrink: 0;
+ }
+ 
++/* Centres an icon on the capitals of the text beside it, in any font. One
++   line tall with the text's baseline; the icon sits on it, then moves down.
++   Its negative margin keeps a tall icon from pushing that baseline down. */
++.cap-icon {
++  display: inline-flex;
++  flex-shrink: 0;
++  align-items: baseline;
++  height: 1lh;
++}
++.cap-icon::before {
++  content: "\200b";
++}
++.cap-icon > svg {
++  margin-top: -1lh;
++  translate: 0 calc(50% - 0.5cap);
++}
++
+ /* Shared buttons standardize every unescaped SVG to the same fixed icon
+  * geometry. Set data-icon-size on a deliberately exceptional icon. */
+ .button-standard-icons svg:not([data-icon-size]) {
+diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
+index 57b2594..a3c6401 100644
+--- a/web/src/lib/repoEnv.ts
++++ b/web/src/lib/repoEnv.ts
+@@ -4,7 +4,8 @@
+  * repository's own agent instructions and setup script.
+  *
+  * Values only go to the server. Listing returns names, and saving a name
+- * with ``null`` keeps its current value. ``repoKey`` and ``checkVariableName``
++ * with ``null`` keeps its current value. The same goes for a repository's
++ * SSH key, which clones its SSH URLs. ``repoKey`` and ``checkVariableName``
+  * mirror ``omnigent_repo_env.py`` so the page can preview the key a URL
+  * matches and flag names before saving; the server checks again.
+  */
+@@ -27,6 +28,11 @@ export interface RepoEnvEntry {
+    * servers edits; missing from servers before that page existed.
+    */
+   mcp_servers?: string[];
++  /**
++   * Whether it has an SSH key for its SSH URLs; never the key. Missing from
++   * servers before SSH keys.
++   */
++  ssh_key?: boolean;
+   /** ISO-8601 time of the last change, or null. */
+   updated_at: string | null;
+   /** Who last saved them from this page, or null (e.g. the CLI). */
+@@ -160,6 +166,8 @@ export interface RepoEnvSummary {
+   setup_script: boolean;
+   /** The repository's own MCP servers, by name; empty from older servers. */
+   mcp_servers: RepoMcpServer[];
++  /** Whether it has an SSH key; false from older servers. */
++  ssh_key: boolean;
+ }
+ 
+ /** A repository's MCP server as anyone signed in sees it: never its keys. */
+@@ -186,6 +194,7 @@ export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSumm
+     instructions: body.instructions ?? false,
+     setup_script: body.setup_script ?? false,
+     mcp_servers: body.mcp_servers ?? [],
++    ssh_key: body.ssh_key ?? false,
+   };
+ }
+ 
+@@ -195,12 +204,13 @@ export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSumm
+  * @param variables Each name's new value, or null to keep the current one.
+  *   Names left out are removed.
+  * @param texts The agent instructions and setup script, each the whole text
+- *   or null to remove it.
++ *   or null to remove it, and the SSH key: a new key, null to remove it, or
++ *   left out to keep it.
+  */
+ export async function saveRepoEnv(
+   repository: string,
+   variables: Record<string, string | null>,
+-  texts: { instructions: string | null; setup_script: string | null },
++  texts: { instructions: string | null; setup_script: string | null; ssh_key?: string | null },
+ ): Promise<RepoEnvEntry> {
+   const res = await authenticatedFetch("/v1/repo-env", {
+     method: "PUT",
+@@ -211,6 +221,49 @@ export async function saveRepoEnv(
+   return (await res.json()) as RepoEnvEntry;
+ }
+ 
++/** A repository with variables, as the repository picker lists it. */
++export interface ConfiguredRepo {
++  /** ``host/owner/repo``, e.g. ``"gitlab.com/acme/api"``. */
++  repository: string;
++  /** Its SSH URL with only an SSH key, otherwise its HTTPS URL. */
++  clone_url: string;
++  git_token: boolean;
++  ssh_key: boolean;
++}
++
++/** How the picker names one: ``owner/repo`` on github.com, else with its host. */
++export function configuredRepoName(repo: ConfiguredRepo): string {
++  const prefix = `${DEFAULT_HOST}/`;
++  return repo.repository.startsWith(prefix)
++    ? repo.repository.slice(prefix.length)
++    : repo.repository;
++}
++
++/** Every repository with variables, on any host, for anyone signed in. */
++export async function fetchConfiguredRepos(): Promise<ConfiguredRepo[]> {
++  const res = await authenticatedFetch("/v1/repo-env/repositories");
++  if (!res.ok) throw new Error(await errorMessage(res));
++  const body = (await res.json()) as { data?: unknown };
++  return Array.isArray(body.data) ? (body.data as ConfiguredRepo[]) : [];
++}
++
++/**
++ * Give a repository its own Git token or SSH key, keeping everything else it
++ * has (admin only). For a repository added by its URL in the new-session form.
++ */
++export async function saveRepoCredentials(
++  repository: string,
++  credentials: { git_token: string } | { ssh_key: string },
++): Promise<RepoEnvEntry> {
++  const res = await authenticatedFetch("/v1/repo-env/credentials", {
++    method: "PUT",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify({ repository, ...credentials }),
++  });
++  if (!res.ok) throw new Error(await errorMessage(res));
++  return (await res.json()) as RepoEnvEntry;
++}
++
+ /** Remove a repository's variables (admin only). */
+ export async function deleteRepoEnv(repository: string): Promise<void> {
+   const res = await authenticatedFetch(
+diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
+index 7ab9b8e..efb4719 100644
+--- a/web/src/pages/RepoVariablesPage.test.tsx
++++ b/web/src/pages/RepoVariablesPage.test.tsx
+@@ -27,6 +27,8 @@ let texts: Record<string, { instructions: string | null; setup_script: string |
+ let requests: { method: string; url: string; body?: unknown }[];
+ // Each repository's MCP server names, which Settings → MCP servers edits.
+ let mcpServers: Record<string, string[]>;
++// Each repository's SSH key, which the page never gets back.
++let sshKeys: Record<string, string>;
+ 
+ function json(status: number, body: unknown): Response {
+   return new Response(JSON.stringify(body), {
+@@ -42,6 +44,7 @@ function entry(repository: string) {
+     instructions: texts[repository]?.instructions ?? null,
+     setup_script: texts[repository]?.setup_script ?? null,
+     mcp_servers: mcpServers[repository] ?? [],
++    ssh_key: repository in sshKeys,
+     updated_at: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+     updated_by: "levi",
+   };
+@@ -69,9 +72,22 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
+     for (const field of ["instructions", "setup_script"] as const) {
+       if (field in body) nextTexts[field] = body[field]?.trim() ? body[field] : null;
+     }
+-    if (!Object.keys(next).length && !nextTexts.instructions && !nextTexts.setup_script) {
++    const sshKey: string | null | undefined =
++      "ssh_key" in body ? body.ssh_key : sshKeys[body.repository];
++    if (
++      !Object.keys(next).length &&
++      !nextTexts.instructions &&
++      !nextTexts.setup_script &&
++      !sshKey
++    ) {
+       return json(400, { error: { message: "give at least one variable" } });
+     }
++    const keys: Record<string, string> = {};
++    for (const [repository, key] of Object.entries(sshKeys)) {
++      if (repository !== body.repository) keys[repository] = key;
++    }
++    if (sshKey) keys[body.repository] = sshKey;
++    sshKeys = keys;
+     stored[body.repository] = next;
+     texts[body.repository] = nextTexts;
+     return json(200, entry(body.repository));
+@@ -99,6 +115,7 @@ beforeEach(() => {
+   };
+   texts = {};
+   mcpServers = {};
++  sshKeys = {};
+   requests = [];
+   vi.mocked(identity.resolveIdentity).mockResolvedValue("levi");
+   vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(true);
+@@ -305,6 +322,77 @@ describe("RepoVariablesPage", () => {
+     expect(stored["github.com/kunlabora/other"]).toEqual({ GIT_TOKEN: "github_pat_other" });
+   });
+ 
++  it("keeps a stored SSH key left blank, replaces a pasted one and removes it when off", async () => {
++    sshKeys[ROADPASS] = "-----BEGIN OPENSSH PRIVATE KEY-----\nold\n";
++    renderPage();
++    let card = await screen.findByRole("article", { name: ROADPASS });
++    expect(within(card).getByText(/2 variables · SSH key · updated 3d ago/)).toBeInTheDocument();
++    expect(within(card).getByText("SSH key")).toBeInTheDocument();
++    expect(document.body.textContent).not.toContain("PRIVATE KEY");
++    const edit = () =>
++      fireEvent.click(
++        within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++      );
++    edit();
++    const editor = within(card).getByTestId("repo-env-editor");
++    expect(within(editor).getByRole("switch", { name: "SSH key" })).toBeChecked();
++    expect(within(editor).getByLabelText("SSH private key")).toHaveAttribute(
++      "placeholder",
++      "Leave blank to keep the current key",
++    );
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true));
++    expect(requests.find((r) => r.method === "PUT")!.body).not.toHaveProperty("ssh_key");
++    expect(sshKeys[ROADPASS]).toContain("old");
++
++    card = await screen.findByRole("article", { name: ROADPASS });
++    await waitFor(() =>
++      expect(
++        within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++      ).toBeInTheDocument(),
++    );
++    edit();
++    fireEvent.change(within(card).getByLabelText("SSH private key"), {
++      target: { value: "-----BEGIN OPENSSH PRIVATE KEY-----\nnew\n" },
++    });
++    fireEvent.click(within(card).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(sshKeys[ROADPASS]).toContain("new"));
++
++    card = await screen.findByRole("article", { name: ROADPASS });
++    await waitFor(() =>
++      expect(
++        within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++      ).toBeInTheDocument(),
++    );
++    edit();
++    fireEvent.click(within(card).getByRole("switch", { name: "SSH key" }));
++    expect(within(card).getByText("Saving removes the current key.")).toBeInTheDocument();
++    fireEvent.click(within(card).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(sshKeys[ROADPASS]).toBeUndefined());
++    expect(requests.filter((r) => r.method === "PUT").at(-1)!.body).toMatchObject({
++      ssh_key: null,
++    });
++  });
++
++  it("adds a repository with only an SSH key, once it's pasted", async () => {
++    renderPage();
++    await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
++    const editor = screen.getByTestId("repo-env-editor");
++    fireEvent.change(within(editor).getByLabelText("Repository"), {
++      target: { value: "git@gitlab.com:acme/api.git" },
++    });
++    fireEvent.click(within(editor).getByRole("switch", { name: "SSH key" }));
++    expect(within(editor).getByText("Paste the SSH key.")).toBeInTheDocument();
++    expect(within(editor).getByRole("button", { name: "Save" })).toBeDisabled();
++    fireEvent.change(within(editor).getByLabelText("SSH private key"), {
++      target: { value: "-----BEGIN OPENSSH PRIVATE KEY-----\nk\n" },
++    });
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(sshKeys["gitlab.com/acme/api"]).toContain("BEGIN"));
++    expect(stored["gitlab.com/acme/api"]).toEqual({});
++  });
++
+   it("shows a repository's instructions and setup script on its card", async () => {
+     texts[ROADPASS] = {
+       instructions: "Use pnpm, never npm.\n\nAsk before touching infra/.\n",
+diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
+index afc22e0..bbb69e0 100644
+--- a/web/src/pages/RepoVariablesPage.tsx
++++ b/web/src/pages/RepoVariablesPage.tsx
+@@ -8,7 +8,8 @@
+  * keeps a value whose field is left blank. The server stores each repository
+  * as a Kubernetes Secret, which the runner Pod mounts. A repository's Git
+  * token is its ``GIT_TOKEN`` variable, shown and edited apart from the
+- * others, behind its own switch.
++ * others, behind its own switch. Its SSH key, for its SSH URLs, has a switch
++ * too, and is write-only like a value.
+  *
+  * A repository can also have its own agent instructions, which the runner
+  * appends to its own, and a setup script, which runs in the checkout before
+@@ -71,16 +72,18 @@ function mcpServerCount(entry: RepoEnvEntry): number {
+   return entry.mcp_servers?.length ?? 0;
+ }
+ 
+-/** ``"2 variables · Git token · instructions · setup script · 1 MCP server"``, for a repository's card. */
++/** ``"2 variables · Git token · SSH key · instructions · setup script · 1 MCP server"``, for a repository's card. */
+ function summary(entry: RepoEnvEntry): string {
+   const { variables, token } = splitToken(entry.names);
+   const others =
+     token ||
++    entry.ssh_key ||
+     entry.instructions !== null ||
+     entry.setup_script !== null ||
+     mcpServerCount(entry) > 0;
+   const parts = variables.length || !others ? [plural(variables.length, "variable")] : [];
+   if (token) parts.push("Git token");
++  if (entry.ssh_key) parts.push("SSH key");
+   if (entry.instructions !== null) parts.push("instructions");
+   if (entry.setup_script !== null) parts.push("setup script");
+   if (mcpServerCount(entry)) parts.push(plural(mcpServerCount(entry), "MCP server"));
+@@ -97,6 +100,7 @@ function describe(entry: RepoEnvEntry): string {
+   const { variables, token } = splitToken(entry.names);
+   const parts = [
+     ...(token ? ["the Git token"] : []),
++    ...(entry.ssh_key ? ["the SSH key"] : []),
+     ...(variables.length ? [plural(variables.length, "variable")] : []),
+     ...(entry.instructions !== null ? ["the agent instructions"] : []),
+     ...(entry.setup_script !== null ? ["the setup script"] : []),
+@@ -109,6 +113,7 @@ function describe(entry: RepoEnvEntry): string {
+ function onlyVariables(entry: RepoEnvEntry): boolean {
+   return (
+     !splitToken(entry.names).token &&
++    !entry.ssh_key &&
+     entry.instructions === null &&
+     entry.setup_script === null &&
+     mcpServerCount(entry) === 0
+@@ -422,12 +427,14 @@ function RepositoryCard({
+           </div>
+         ) : (
+           <div className="flex flex-col gap-2.5">
+-            {entry.names.length > 0 && (
++            {(entry.names.length > 0 || entry.ssh_key) && (
+               <ul className="flex flex-col">
+                 {splitToken(entry.names).token && (
+                   <li className="flex items-center gap-3 py-0.5 text-ui">
+                     <span className="flex min-w-0 items-center gap-1.5 text-sm">
+-                      <KeyRoundIcon className="ui-icon shrink-0 text-muted-foreground" />
++                      <span className="cap-icon">
++                        <KeyRoundIcon className="ui-icon shrink-0 text-muted-foreground" />
++                      </span>
+                       Git token
+                     </span>
+                     <span className="text-muted-foreground" aria-label="hidden value">
+@@ -435,6 +442,19 @@ function RepositoryCard({
+                     </span>
+                   </li>
+                 )}
++                {entry.ssh_key && (
++                  <li className="flex items-center gap-3 py-0.5 text-ui">
++                    <span className="flex min-w-0 items-center gap-1.5 text-sm">
++                      <span className="cap-icon">
++                        <KeyRoundIcon className="ui-icon shrink-0 text-muted-foreground" />
++                      </span>
++                      SSH key
++                    </span>
++                    <span className="text-muted-foreground" aria-label="hidden value">
++                      ••••••••
++                    </span>
++                  </li>
++                )}
+                 {splitToken(entry.names).variables.map((name) => (
+                   <li key={name} className="flex items-center gap-3 py-0.5 text-ui">
+                     <span className="min-w-0 truncate font-mono text-sm">{name}</span>
+@@ -554,6 +574,10 @@ function VariablesEditor({
+   const tokenStored = entry ? splitToken(entry.names).token : false;
+   const [tokenOn, setTokenOn] = useState(tokenStored);
+   const [token, setToken] = useState("");
++  // The SSH key, likewise.
++  const sshKeyStored = entry?.ssh_key ?? false;
++  const [sshKeyOn, setSshKeyOn] = useState(sshKeyStored);
++  const [sshKey, setSshKey] = useState("");
+   // Their text comes back to be edited. Switched off, saving removes them;
+   // the text stays in case they're switched on again.
+   const [instructionsOn, setInstructionsOn] = useState(entry ? entry.instructions !== null : false);
+@@ -571,6 +595,7 @@ function VariablesEditor({
+   const named = rows.filter((r) => r.name);
+   const missingValue = named.some((r) => !r.existing && !r.value);
+   const missingToken = tokenOn && !tokenStored && !token;
++  const missingSshKey = sshKeyOn && !sshKeyStored && !sshKey.trim();
+   const instructionsError = textError(instructionsOn, instructions, "instructions");
+   const scriptError = textError(scriptOn, script, "script");
+   // Under its field once there's text; until then, why Save waits.
+@@ -579,20 +604,23 @@ function VariablesEditor({
+     ? "Give every new variable a value."
+     : missingToken
+       ? "Give the Git token a value."
+-      : blank[0]
+-        ? instructionsError
+-        : blank[1]
+-          ? scriptError
+-          : pasting
+-            ? "Add the pasted lines first."
+-            : null;
++      : missingSshKey
++        ? "Paste the SSH key."
++        : blank[0]
++          ? instructionsError
++          : blank[1]
++            ? scriptError
++            : pasting
++              ? "Add the pasted lines first."
++              : null;
+   const canSave =
+     key !== null &&
+     !alreadyThere &&
+-    (named.length > 0 || tokenOn || instructionsOn || scriptOn) &&
++    (named.length > 0 || tokenOn || sshKeyOn || instructionsOn || scriptOn) &&
+     errors.every((e) => e === null) &&
+     !missingValue &&
+     !missingToken &&
++    !missingSshKey &&
+     instructionsError === null &&
+     scriptError === null &&
+     !pasting &&
+@@ -652,6 +680,8 @@ function VariablesEditor({
+         variables,
+         instructions: instructionsOn ? instructions : null,
+         setup_script: scriptOn ? script : null,
++        // Left out, the stored key stays.
++        ssh_key: sshKeyOn ? (sshKey.trim() ? sshKey : undefined) : sshKeyStored ? null : undefined,
+       },
+       {
+         onSuccess: (saved) => {
+@@ -722,6 +752,45 @@ function VariablesEditor({
+         )}
+       </div>
+ 
++      <div className={SECTION} data-testid="repo-env-ssh-key">
++        <div className="flex items-center gap-2">
++          <Switch
++            id="repo-env-ssh-key"
++            checked={sshKeyOn}
++            onCheckedChange={setSshKeyOn}
++            componentId="settings.repo_env.ssh_key"
++          />
++          <label htmlFor="repo-env-ssh-key" className="text-sm font-medium text-muted-foreground">
++            SSH key
++          </label>
++        </div>
++        <p className="text-sm text-muted-foreground">
++          Clone, fetch and push this repository's SSH URLs, like git@github.com:org/repo.git, with
++          this private key, such as a deploy key. It can't have a passphrase. The agent doesn't get
++          it in its environment.
++        </p>
++        {sshKeyOn ? (
++          <Textarea
++            value={sshKey}
++            onChange={(e) => setSshKey(e.target.value)}
++            rows={4}
++            placeholder={
++              sshKeyStored
++                ? "Leave blank to keep the current key"
++                : "-----BEGIN OPENSSH PRIVATE KEY-----"
++            }
++            aria-label="SSH private key"
++            autoComplete="off"
++            spellCheck={false}
++            className="font-mono text-xs"
++          />
++        ) : (
++          sshKeyStored && (
++            <p className="text-sm text-muted-foreground">Saving removes the current key.</p>
++          )
++        )}
++      </div>
++
+       <div className={SECTION}>
+         <span className="text-sm font-medium text-muted-foreground">Variables</span>
+         {pasting ? (
+diff --git a/web/src/shell/NewChatDialog.projectPrefill.test.tsx b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
+index 54b63e4..078a47c 100644
+--- a/web/src/shell/NewChatDialog.projectPrefill.test.tsx
++++ b/web/src/shell/NewChatDialog.projectPrefill.test.tsx
+@@ -1,3 +1,4 @@
++import type * as RepoEnvHooks from "@/hooks/useRepoEnv";
+ import type * as SandboxModelOptionsModule from "@/hooks/useSandboxModelOptions";
+ 
+ vi.mock("@/hooks/useSandboxModelOptions", async (importOriginal) => ({
+@@ -26,6 +27,11 @@ vi.mock("@/hooks/useSidebarData", () => ({ useLoadedConversations: () => useTest
+ // The repository variables badge fetches names; stub it so it doesn't
+ // skew the create-POST call assertions.
+ vi.mock("@/components/RepoEnvBadge", () => ({ RepoEnvBadge: () => null }));
++// The configured repositories are a request of their own; none here.
++vi.mock("@/hooks/useRepoEnv", async (importOriginal) => ({
++  ...(await importOriginal<typeof RepoEnvHooks>()),
++  useConfiguredRepos: () => ({ data: [] }),
++}));
+ 
+ vi.mock("@/hooks/useSkills", () => ({
+   useSkills: () => ({ skills: [], skillsStatus: "ready", refetch: vi.fn() }),
+@@ -76,6 +82,7 @@ vi.mock("@/store/chatStore", () => ({
+ vi.mock("@/lib/identity", () => ({
+   authenticatedFetch: vi.fn(),
+   getCurrentUserId: vi.fn(() => null),
++  getCurrentIsAdmin: vi.fn(() => false),
+   resolveIdentity: vi.fn(async () => null),
+ }));
+ vi.mock("@/hooks/useHosts", () => ({
+diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
+index 651d7cb..a699408 100644
+--- a/web/src/shell/NewChatDialog.test.tsx
++++ b/web/src/shell/NewChatDialog.test.tsx
+@@ -1,3 +1,5 @@
++import type * as RepoEnvHooks from "@/hooks/useRepoEnv";
++import type { ConfiguredRepo } from "@/lib/repoEnv";
+ import { testAgent } from "@/test/agentFixtures";
+ import type * as SandboxModelOptionsModule from "@/hooks/useSandboxModelOptions";
+ 
+@@ -238,6 +240,15 @@ vi.mock("@/hooks/useDirectorySessions", () => ({
+ // The repository variables badge fetches names; stub it so it doesn't
+ // skew the create-POST call assertions.
+ vi.mock("@/components/RepoEnvBadge", () => ({ RepoEnvBadge: () => null }));
++// The repositories configured in Settings, a request of their own; none
++// unless a test says otherwise.
++const { configuredReposMock } = vi.hoisted(() => ({
++  configuredReposMock: vi.fn((): { data: ConfiguredRepo[] } => ({ data: [] })),
++}));
++vi.mock("@/hooks/useRepoEnv", async (importOriginal) => ({
++  ...(await importOriginal<typeof RepoEnvHooks>()),
++  useConfiguredRepos: configuredReposMock,
++}));
+ vi.mock("@/hooks/RunnerHealthProvider", () => ({
+   useRunnerHealthRegistration: vi.fn(),
+ }));
+@@ -7164,8 +7175,8 @@ describe("NewChatLandingScreen", () => {
+     expect(screen.queryByTestId("new-chat-landing-repo-select")).toBeNull();
+   });
+ 
+-  // Opens the "Add repository" combobox from a connected GitHub account.
+-  async function openRepoPicker(): Promise<void> {
++  // A connected GitHub account with one repository.
++  function mockGithubRepos(): void {
+     authenticatedFetchMock.mockImplementation(((input: RequestInfo | URL) => {
+       const url = typeof input === "string" ? input : input.toString();
+       if (url === "/v1/connections/github/repos") {
+@@ -7187,6 +7198,11 @@ describe("NewChatLandingScreen", () => {
+       }
+       return Promise.resolve({ ok: true, json: async () => ({}) } as unknown as Response);
+     }) as unknown as typeof authenticatedFetch);
++  }
++
++  // Opens the "Add repository" combobox from a connected GitHub account.
++  async function openRepoPicker(): Promise<void> {
++    mockGithubRepos();
+     renderLanding({ managed_sandboxes_enabled: true, enabled_connections: ["github"] });
+     await waitFor(() =>
+       expect(screen.getByTestId("new-chat-landing-host-chip").getAttribute("aria-label")).toContain(
+@@ -7198,6 +7214,110 @@ describe("NewChatLandingScreen", () => {
+     await screen.findByRole("option", { name: /octo\/hello/ });
+   }
+ 
++  it("offers the GitHub repositories and any URL on their own tabs", async () => {
++    mockGithubRepos();
++    renderLanding({ managed_sandboxes_enabled: true, enabled_connections: ["github"] });
++    await waitFor(() =>
++      expect(screen.getByTestId("new-chat-landing-host-chip").getAttribute("aria-label")).toContain(
++        "New Sandbox",
++      ),
++    );
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-chip"));
++    // The GitHub tab first, without the URL form.
++    await screen.findByTestId("new-chat-landing-repo-select");
++    expect(screen.queryByTestId("new-chat-landing-repo-input")).toBeNull();
++    fireEvent.mouseDown(screen.getByTestId("new-chat-landing-repo-tab-custom"), { button: 0 });
++    // Any URL, with its branch, on the Custom tab.
++    fireEvent.change(await screen.findByTestId("new-chat-landing-repo-input"), {
++      target: { value: "git@gitlab.com:acme/api.git" },
++    });
++    fireEvent.change(screen.getByTestId("new-chat-landing-repo-branch-input"), {
++      target: { value: "dev" },
++    });
++    expect(screen.queryByTestId("new-chat-landing-repo-select")).toBeNull();
++    fireEvent.click(screen.getByTestId("new-chat-landing-repo-add"));
++    const row = await screen.findByTestId("new-chat-landing-repo-row");
++    expect(row.textContent).toContain("api");
++    expect(screen.getByTestId("new-chat-landing-repo-chip").textContent).toContain("api#dev");
++    // This provider clones one repository, so both tabs go.
++    expect(screen.queryByTestId("new-chat-landing-repo-input")).toBeNull();
++    expect(screen.queryByTestId("new-chat-landing-repo-tab-repositories")).toBeNull();
++  });
++
++  it("lists the repositories configured in Settings, on any host, with GitHub's", async () => {
++    configuredReposMock.mockReturnValue({
++      data: [
++        {
++          repository: "gitlab.com/acme/api",
++          clone_url: "git@gitlab.com:acme/api.git",
++          git_token: false,
++          ssh_key: true,
++        },
++        // Already in the GitHub list, so only there, with its branches.
++        {
++          repository: "github.com/octo/hello",
++          clone_url: "https://github.com/octo/hello.git",
++          git_token: true,
++          ssh_key: false,
++        },
++      ],
++    });
++    try {
++      mockGithubRepos();
++      renderLanding({ managed_sandboxes_enabled: true, enabled_connections: ["github"] });
++      await waitFor(() =>
++        expect(
++          screen.getByTestId("new-chat-landing-host-chip").getAttribute("aria-label"),
++        ).toContain("New Sandbox"),
++      );
++      fireEvent.click(screen.getByTestId("new-chat-landing-repo-chip"));
++      fireEvent.click(await screen.findByTestId("new-chat-landing-repo-select"));
++      await screen.findByRole("option", { name: /octo\/hello/ });
++      const configured = screen.getAllByTestId("new-chat-landing-repo-configured");
++      expect(configured.map((o) => o.textContent)).toEqual(["gitlab.com/acme/api"]);
++      expect(screen.getByText("Configured in Settings")).toBeInTheDocument();
++      fireEvent.click(configured[0]);
++      const row = await screen.findByTestId("new-chat-landing-repo-row");
++      expect(row.textContent).toContain("api");
++      // Not a GitHub repository, so its branch is typed.
++      expect(screen.getByLabelText("Branch for api")).toBeInTheDocument();
++    } finally {
++      configuredReposMock.mockReturnValue({ data: [] });
++    }
++  });
++
++  it("shows the configured repositories without the GitHub App", async () => {
++    configuredReposMock.mockReturnValue({
++      data: [
++        {
++          repository: "gitlab.com/acme/web",
++          clone_url: "https://gitlab.com/acme/web.git",
++          git_token: true,
++          ssh_key: false,
++        },
++      ],
++    });
++    try {
++      renderLanding({ managed_sandboxes_enabled: true, enabled_connections: [] });
++      await waitFor(() =>
++        expect(
++          screen.getByTestId("new-chat-landing-host-chip").getAttribute("aria-label"),
++        ).toContain("New Sandbox"),
++      );
++      fireEvent.click(screen.getByTestId("new-chat-landing-repo-chip"));
++      fireEvent.click(await screen.findByTestId("new-chat-landing-repo-select"));
++      expect(
++        (await screen.findAllByTestId("new-chat-landing-repo-configured")).map(
++          (o) => o.textContent,
++        ),
++      ).toEqual(["gitlab.com/acme/web"]);
++      expect(screen.queryByText("Configured in Settings")).toBeInTheDocument();
++      expect(screen.queryByText(/Connect GitHub/)).toBeNull();
++    } finally {
++      configuredReposMock.mockReturnValue({ data: [] });
++    }
++  });
++
+   it("focuses the repo search when the picker opens with a mouse", async () => {
+     await openRepoPicker();
+     await waitFor(() =>
+diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
+index 5749911..d1a806c 100644
+--- a/web/src/shell/NewChatDialog.tsx
++++ b/web/src/shell/NewChatDialog.tsx
+@@ -49,6 +49,7 @@ import {
+ import { useQuery, useQueryClient } from "@tanstack/react-query";
+ import {
+   LaptopIcon,
++  LinkIcon,
+   MonitorCloudIcon,
+   CircleHelpIcon,
+   ChevronDownIcon,
+@@ -60,6 +61,7 @@ import {
+   FolderGit2Icon,
+   FolderIcon,
+   FolderOpenIcon,
++  KeyRoundIcon,
+   PlusIcon,
+   ShuffleIcon,
+   WandSparklesIcon,
+@@ -335,6 +337,9 @@ import {
+   KeyboardShortcutTooltipContent,
+ } from "@/components/KeyboardShortcut";
+ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
++import { RepoCustomForm } from "@/components/RepoCustomForm";
++import { useConfiguredRepos } from "@/hooks/useRepoEnv";
++import { type ConfiguredRepo, configuredRepoName, repoKey } from "@/lib/repoEnv";
+ import { RepoEnvBadge } from "@/components/RepoEnvBadge";
+ import { CreateAgentDialog } from "./CreateAgentDialog";
+ import { buildAgentBundle, type AgentBundleInput } from "@/lib/agentBundle";
+@@ -1195,17 +1200,27 @@ function useComboboxPopover(): {
+  * @param onSelect Called with the chosen repo (or ``null`` to clear).
+  * @param modal Make the popover modal, so its list scrolls inside a modal
+  *   Dialog's scroll lock (the project settings dialog).
++ * @param configured The repositories configured in Settings → Repository
++ *   variables, on any host, listed in their own group (added by this
++ *   deployment).
++ * @param onSelectConfigured Called with the chosen configured repository.
+  */
++const NO_CONFIGURED_REPOS: ConfiguredRepo[] = [];
++
+ export function SandboxRepoCombobox({
+   repos,
+   value,
+   onSelect,
+   modal = false,
++  configured = NO_CONFIGURED_REPOS,
++  onSelectConfigured,
+ }: {
+   repos: GithubRepo[];
+   value: string;
+   onSelect: (repo: GithubRepo | null) => void;
+   modal?: boolean;
++  configured?: ConfiguredRepo[];
++  onSelectConfigured?: (repo: ConfiguredRepo) => void;
+ }): ReactNode {
+   const { open, setOpen, triggerRef, contentProps } = useComboboxPopover();
+   const selected = repos.find((r) => r.full_name === value) ?? null;
+@@ -1217,7 +1232,7 @@ export function SandboxRepoCombobox({
+           type="button"
+           role="combobox"
+           aria-expanded={open}
+-          aria-label="GitHub repository"
++          aria-label={configured.length ? "Repository" : "GitHub repository"}
+           className={COMBOBOX_TRIGGER_CLASS}
+           data-testid="new-chat-landing-repo-select"
+         >
+@@ -1233,7 +1248,7 @@ export function SandboxRepoCombobox({
+           />
+           <CommandList>
+             <CommandEmpty>No repositories found.</CommandEmpty>
+-            <CommandGroup>
++            <CommandGroup heading={configured.length && repos.length ? "GitHub" : undefined}>
+               {repos.map((r) => (
+                 <CommandItem
+                   key={r.full_name}
+@@ -1246,14 +1261,43 @@ export function SandboxRepoCombobox({
+                 >
+                   <span className="truncate">{r.full_name}</span>
+                   {r.private && (
+-                    <LockIcon
+-                      className="size-3 shrink-0 opacity-60"
+-                      aria-label="Private repository"
+-                    />
++                    <span className="cap-icon">
++                      <LockIcon
++                        className="size-3 shrink-0 opacity-60"
++                        aria-label="Private repository"
++                      />
++                    </span>
+                   )}
+                 </CommandItem>
+               ))}
+             </CommandGroup>
++            {configured.length > 0 && (
++              <CommandGroup heading="Configured in Settings">
++                {configured.map((r) => (
++                  <CommandItem
++                    key={r.repository}
++                    value={r.repository}
++                    onSelect={() => {
++                      onSelectConfigured?.(r);
++                      setOpen(false);
++                    }}
++                    data-testid="new-chat-landing-repo-configured"
++                  >
++                    <span className="truncate">{configuredRepoName(r)}</span>
++                    {(r.git_token || r.ssh_key) && (
++                      <span className="cap-icon">
++                        <KeyRoundIcon
++                          className="size-3 shrink-0 opacity-60"
++                          aria-label={
++                            r.ssh_key && !r.git_token ? "Its own SSH key" : "Its own Git token"
++                          }
++                        />
++                      </span>
++                    )}
++                  </CommandItem>
++                ))}
++              </CommandGroup>
++            )}
+           </CommandList>
+         </Command>
+       </PopoverContent>
+@@ -1316,7 +1360,9 @@ export function SandboxRepoBranchSelect({
+           className={COMBOBOX_TRIGGER_CLASS}
+           data-testid="new-chat-landing-repo-branch-select"
+         >
+-          <GitBranchIcon className="size-3.5 shrink-0 opacity-60" />
++          <span className="cap-icon">
++            <GitBranchIcon className="size-3.5 shrink-0 opacity-60" />
++          </span>
+           <span className="truncate">{value === "" ? defaultLabel : value}</span>
+           <ChevronsUpDownIcon className="ml-auto size-3.5 shrink-0 opacity-50" />
+         </button>
+@@ -2658,8 +2704,9 @@ export function NewChatLandingScreen() {
+     sandboxReposEditedRef.current = true;
+     setSandboxRepoSelections((prev) => prev.map((r) => (r.url === url ? { ...r, branch } : r)));
+   }, []);
+-  // Free-text URL being typed into the "paste a URL" adder (not yet added).
+-  const [pendingRepoUrl, setPendingRepoUrl] = useState<string>("");
++  // The repository popover's tab: the GitHub account's and the configured
++  // repositories, or any URL with its own credentials.
++  const [repoTab, setRepoTab] = useState<"list" | "custom">("list");
+   // The repository chip's popover stays on the side it opened on as repos are
+   // added and the keyboard comes and goes. It's about 400px tall with a repo
+   // picked. It's 24rem wide (``w-96``), so on a phone it slides left of the
+@@ -2672,7 +2719,11 @@ export function NewChatLandingScreen() {
+   // reading `connected` off the payload doubles as the connection check.
+   const githubReposEnabled =
+     info !== "loading" && (info.enabled_connections ?? []).includes("github");
+-  const { data: sandboxRepoData, isError: sandboxReposErrored } = useQuery({
++  const {
++    data: sandboxRepoData,
++    isError: sandboxReposErrored,
++    isPending: sandboxReposLoading,
++  } = useQuery({
+     queryKey: ["github-repos"],
+     queryFn: fetchGithubRepos,
+     enabled: githubReposEnabled,
+@@ -2681,6 +2732,10 @@ export function NewChatLandingScreen() {
+   const sandboxRepoPickerConnected = sandboxRepoData?.connected ?? false;
+   const sandboxRepos = sandboxRepoPickerConnected ? (sandboxRepoData?.repos ?? []) : [];
+   const sandboxReposTruncated = sandboxRepoData?.truncated ?? false;
++  // The repositories configured in Settings → Repository variables, on any
++  // host, asked for once the repository popover first opens.
++  const [repoPopoverOpened, setRepoPopoverOpened] = useState(false);
++  const { data: configuredRepos = [] } = useConfiguredRepos(repoPopoverOpened);
+   const [workspace, setWorkspace] = useState<string>(() => restoredDraft?.workspace ?? "");
+   // Source tracking for the create's field-omission contract: true while the
+   // slot's value is the untouched seed the project-prefill effect wrote from
+@@ -2972,7 +3027,6 @@ export function NewChatLandingScreen() {
+     // Drafted sandbox repo fields are location state too — left in place they
+     // would clone the previous project's repo into this project's sandbox.
+     setSandboxRepoSelections([]);
+-    setPendingRepoUrl("");
+     sandboxReposEditedRef.current = false;
+     sandboxReposSeededForRef.current = null;
+     agentFromConfigRef.current = false;
+@@ -5251,6 +5305,18 @@ export function NewChatLandingScreen() {
+   const unselectedRepos = sandboxRepos.filter(
+     (r) => !sandboxRepoSelections.some((s) => s.url === repoCloneUrl(r)),
+   );
++  // Configured repositories not picked yet, and not already in the GitHub
++  // list, whose entry lists its branches.
++  const githubKeys = new Set(
++    (showGithubRepoPicker ? sandboxRepos : []).map(
++      (r) => `github.com/${r.full_name.toLowerCase()}`,
++    ),
++  );
++  const unpickedConfiguredRepos = configuredRepos.filter(
++    (c) =>
++      !githubKeys.has(c.repository) &&
++      !sandboxRepoSelections.some((s) => repoKey(s.url) === c.repository),
++  );
+   // Sandbox repository chip label: the single repo's name[#branch] (server's
+   // clone-dir rule), a count when several, or a placeholder when none.
+   const sandboxRepoLabel =
+@@ -6424,7 +6490,13 @@ export function NewChatLandingScreen() {
+               before the sandbox exists, so the workspace is specified as
+               a git repository URL (+ optional branch) the server clones
+               at create time. Blank = empty server-created workspace. */}
+-              <Popover onOpenChange={(open) => open && repoPopover.pickSide()}>
++              <Popover
++                onOpenChange={(open) => {
++                  if (!open) return;
++                  repoPopover.pickSide();
++                  setRepoPopoverOpened(true);
++                }}
++              >
+                 <PopoverTrigger asChild>
+                   <button
+                     ref={repoPopover.triggerRef}
+@@ -6542,86 +6614,94 @@ export function NewChatLandingScreen() {
+                     )}
+                     {/* Add-repository controls, hidden once the provider's
+                   repo cap is reached — so a single-repo provider shows one
+-                  slot and no multi-repo affordance. */}
+-                    {sandboxRepoSelections.length < maxSandboxRepos && (
+-                      <>
+-                        {/* Add from the connected account's repos (only those
+-                      not already picked); the free-text URL below is the
+-                      fallback for a repo not in the list or no GitHub link. */}
+-                        {showGithubRepoPicker && (
+-                          <>
+-                            <SandboxRepoCombobox
+-                              repos={unselectedRepos}
+-                              value=""
+-                              onSelect={(repo) => {
+-                                if (repo) {
+-                                  addSandboxRepo(
+-                                    repo.clone_url ?? `https://github.com/${repo.full_name}.git`,
+-                                  );
+-                                }
+-                              }}
+-                            />
+-                            {sandboxReposTruncated && (
++                  slot and no multi-repo affordance. A tab lists the connected
++                  GitHub account's repos and those configured in Settings, on
++                  any host; another takes any URL, with its own credentials.
++                  With neither list, only the URL. */}
++                    {sandboxRepoSelections.length < maxSandboxRepos &&
++                      (githubReposEnabled || configuredRepos.length > 0 ? (
++                        <Tabs
++                          value={repoTab}
++                          onValueChange={(tab) => setRepoTab(tab as "list" | "custom")}
++                          componentId="new_chat.repo_picker.tab"
++                          className="gap-2.5"
++                        >
++                          <TabsList className="w-full">
++                            <TabsTrigger
++                              value="list"
++                              data-testid="new-chat-landing-repo-tab-repositories"
++                            >
++                              <span className="cap-icon">
++                                <FolderGit2Icon />
++                              </span>
++                              Repositories
++                            </TabsTrigger>
++                            <TabsTrigger
++                              value="custom"
++                              data-testid="new-chat-landing-repo-tab-custom"
++                            >
++                              <span className="cap-icon">
++                                <LinkIcon />
++                              </span>
++                              Custom
++                            </TabsTrigger>
++                          </TabsList>
++                          <TabsContent value="list" className="flex flex-col gap-2">
++                            {(showGithubRepoPicker || unpickedConfiguredRepos.length > 0) && (
++                              <SandboxRepoCombobox
++                                repos={showGithubRepoPicker ? unselectedRepos : []}
++                                value=""
++                                onSelect={(repo) => {
++                                  if (repo) addSandboxRepo(repoCloneUrl(repo));
++                                }}
++                                configured={unpickedConfiguredRepos}
++                                onSelectConfigured={(repo) => addSandboxRepo(repo.clone_url)}
++                              />
++                            )}
++                            {showGithubRepoPicker && sandboxReposTruncated && (
+                               <p
+                                 className="text-sm text-muted-foreground"
+                                 data-testid="new-chat-landing-repo-truncated"
+                               >
+-                                Showing your most recently pushed repositories. Don't see one? Paste
+-                                its URL below.
++                                Showing your most recently pushed repositories. Don't see one? Add
++                                it under Custom.
+                               </p>
+                             )}
+-                            <p className="text-sm text-muted-foreground">
+-                              or paste a repository URL:
+-                            </p>
+-                          </>
+-                        )}
+-                        {/* Connected but the repo list failed to load: say so
+-                      explicitly, so a transient error isn't mistaken for
+-                      "GitHub not connected" (the picker just wouldn't render). */}
+-                        {githubReposEnabled && sandboxReposErrored && !showGithubRepoPicker && (
+-                          <p
+-                            className="text-sm text-destructive"
+-                            data-testid="new-chat-landing-repo-error"
+-                          >
+-                            Couldn't load your GitHub repositories. Paste a repository URL below.
+-                          </p>
+-                        )}
+-                        <div className="flex items-center gap-2">
+-                          <input
+-                            id="landing-repo-url"
+-                            type="text"
+-                            value={pendingRepoUrl}
+-                            onChange={(e) => setPendingRepoUrl(e.target.value)}
+-                            onKeyDown={(e) => {
+-                              // Enter adds the repo (same as the Add button), so a
+-                              // paste-then-Enter flow never needs the mouse.
+-                              if (e.key === "Enter" && isValidSandboxRepoUrl(pendingRepoUrl)) {
+-                                e.preventDefault();
+-                                addSandboxRepo(pendingRepoUrl);
+-                                setPendingRepoUrl("");
+-                              }
+-                            }}
+-                            placeholder="https://github.com/org/repo"
+-                            aria-label="Repository URL"
+-                            className="min-w-0 flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm outline-none transition-colors focus-visible:border-ring"
+-                            data-testid="new-chat-landing-repo-input"
+-                          />
+-                          <button
+-                            type="button"
+-                            disabled={!isValidSandboxRepoUrl(pendingRepoUrl)}
+-                            onClick={() => {
+-                              addSandboxRepo(pendingRepoUrl);
+-                              setPendingRepoUrl("");
+-                            }}
+-                            className="flex shrink-0 items-center gap-1 rounded-md border border-input px-2.5 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+-                            data-testid="new-chat-landing-repo-add"
+-                          >
+-                            <PlusIcon className="size-3.5" />
+-                            Add
+-                          </button>
+-                        </div>
+-                      </>
+-                    )}
++                            {githubReposEnabled &&
++                              !showGithubRepoPicker &&
++                              (sandboxReposErrored ? (
++                                /* Say so explicitly, so a transient error isn't
++                                mistaken for "GitHub not connected". */
++                                <p
++                                  className="text-sm text-destructive"
++                                  data-testid="new-chat-landing-repo-error"
++                                >
++                                  Couldn't load your GitHub repositories. Add one under Custom.
++                                </p>
++                              ) : sandboxReposLoading ? (
++                                <p className="text-sm text-muted-foreground">
++                                  Loading your GitHub repositories…
++                                </p>
++                              ) : (
++                                <p className="text-sm text-muted-foreground">
++                                  Connect GitHub in Settings → Sandbox Integrations to see your
++                                  GitHub repositories here.
++                                </p>
++                              ))}
++                          </TabsContent>
++                          <TabsContent value="custom">
++                            <RepoCustomForm
++                              onAdd={addSandboxRepo}
++                              isPicked={(url) => sandboxRepoSelections.some((r) => r.url === url)}
++                            />
++                          </TabsContent>
++                        </Tabs>
++                      ) : (
++                        <RepoCustomForm
++                          onAdd={addSandboxRepo}
++                          isPicked={(url) => sandboxRepoSelections.some((r) => r.url === url)}
++                        />
++                      ))}
+                     <p className="text-sm text-muted-foreground">
+                       {maxSandboxRepos > 1
+                         ? "Cloned into the sandbox at startup. Several repos are cloned side by side and the agent starts in the parent that holds them; pick one and it starts directly inside it. Leave empty for a blank workspace."

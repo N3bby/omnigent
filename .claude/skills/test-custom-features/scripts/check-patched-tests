@@ -2,9 +2,9 @@
 # Run the fast-mode and fuzzy "@" file search backend regressions and related
 # frontend suites, the project repositories frontend suites, the environment
 # menu's backend and frontend suites, the startup card's, the New session
-# screen's, the MCP servers page's and repository badge's, and a first message
-# waiting for its sandbox, against a fresh, fully patched upstream checkout.
-# Keep logs and JUnit reports.
+# screen's, the MCP servers page's and repository badge's, a first message
+# waiting for its sandbox, and the repository picker's Custom tab, against a
+# fresh, fully patched upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -114,7 +114,7 @@ PY
       src/hooks/useIsAdmin.test.tsx src/shell/WorkspacePanel.test.tsx src/components/ui/kbd.test.tsx \
       src/pages/McpServersPage.test.tsx src/lib/mcpServerIcons.test.ts \
       src/pages/RepoVariablesPage.test.tsx src/shell/settingsNav.test.tsx \
-      src/components/RepoEnvBadge.test.tsx \
+      src/components/RepoEnvBadge.test.tsx src/components/RepoCustomForm.test.tsx \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

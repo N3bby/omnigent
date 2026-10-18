@@ -147,11 +147,8 @@ class GitTokenTests(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertIsNone(repo_env.token_file(url))
 
-    def test_an_ssh_url_is_a_plain_clone(self) -> None:
-        self.assertEqual(
-            repo_env.clone_command("git@github.com:kunlabora/roadpass.git", "-- url dir", "dir"),
-            "git clone -- url dir",
-        )
+    def test_an_unusable_url_is_a_plain_clone(self) -> None:
+        self.assertEqual(repo_env.clone_command("https://github.com/", "-- url dir", "dir"), "git clone -- url dir")
 
     def git(self, tmp: Path, *args: str, stdin: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
         env = {
@@ -221,6 +218,132 @@ class GitTokenTests(unittest.TestCase):
         self.assertIn("+from omnigent_repo_env_api import add_token_repositories, repository_token\n", patch)
         self.assertIn("+            repo_list = await add_token_repositories(repo_list)\n", patch)
         self.assertIn("+            token = await repository_token(owner, repo) or await resolve_access_token(\n", patch)
+
+
+def openssh_key(cipher: str = "none") -> str:
+    """A private key in OpenSSH's format, as far as its cipher; the rest is filler."""
+    def string(value: bytes) -> bytes:
+        return len(value).to_bytes(4, "big") + value
+    blob = b"openssh-key-v1\0" + string(cipher.encode()) + string(b"none") + string(b"") + b"\0" * 40
+    body = base64.b64encode(blob).decode()
+    lines = [body[i : i + 70] for i in range(0, len(body), 70)]
+    return "-----BEGIN OPENSSH PRIVATE KEY-----\n" + "\n".join(lines) + "\n-----END OPENSSH PRIVATE KEY-----\n"
+
+
+# Stands in for ssh: notes the key it was given and serves the repository
+# from FAKE_SSH_ROOT, the way git-upload-pack on GitHub would.
+FAKE_SSH = """#!/bin/sh
+key=''
+prev=''
+for arg in "$@"; do
+    [ "$prev" = -i ] && key=$arg
+    prev=$arg
+done
+if [ -n "$key" ]; then
+    printf 'key %s %s %s\\n' "$(stat -c %a "$key")" "$(head -n 1 "$key")" "$key" >> "$FAKE_SSH_LOG"
+else
+    echo nokey >> "$FAKE_SSH_LOG"
+fi
+eval "command=\\${$#}"
+cd "$FAKE_SSH_ROOT" && exec sh -c "git ${command#git-}"
+"""
+
+
+class SshKeyTests(unittest.TestCase):
+    def test_accepts_a_private_key_without_a_passphrase(self) -> None:
+        key = openssh_key()
+        self.assertEqual(repo_env.check_ssh_key(key.replace("\n", "\r\n") + "\r\n\r\n"), key)
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----"
+        self.assertEqual(repo_env.check_ssh_key(f"  {pem}\n"), pem + "\n")
+
+    def test_rejects_public_keys_passphrases_and_anything_else(self) -> None:
+        cases = {
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI levi@laptop": "public key",
+            openssh_key("aes256-ctr"): "passphrase",
+            "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nabc\n-----END RSA PRIVATE KEY-----": "passphrase",
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----\nabc\n-----END ENCRYPTED PRIVATE KEY-----": "passphrase",
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nnot base64!\n-----END OPENSSH PRIVATE KEY-----": "damaged",
+            "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----": "starts with",
+            "github_pat_123": "starts with",
+            "-----BEGIN RSA PRIVATE KEY-----\n" + "x" * 17000 + "\n-----END RSA PRIVATE KEY-----": "16 KB",
+        }
+        for text, error in cases.items():
+            with self.subTest(text=text[:40]), self.assertRaisesRegex(ValueError, error):
+                repo_env.check_ssh_key(text)
+
+    def test_only_ssh_urls_have_a_key_file(self) -> None:
+        roadpass = repo_env.secret_name("github.com/kunlabora/roadpass")
+        expected = f"/run/omnigent/repo-env/{roadpass}/git-ssh-key"
+        for url in ("git@github.com:kunlabora/roadpass.git", "git@github.com:Kunlabora/RoadPass", "ssh://git@github.com/kunlabora/roadpass.git"):
+            with self.subTest(url=url):
+                self.assertEqual(repo_env.ssh_key_file(url), expected)
+        for url in ("https://github.com/kunlabora/roadpass.git", "kunlabora/roadpass", "git@github.com:"):
+            with self.subTest(url=url):
+                self.assertIsNone(repo_env.ssh_key_file(url))
+
+    def git(self, tmp: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+        env = {
+            "PATH": f"{tmp / 'bin'}:{os.environ['PATH']}",
+            "HOME": str(tmp),
+            "GIT_CONFIG_GLOBAL": str(tmp / "gitconfig"),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "FAKE_SSH_LOG": str(tmp / "ssh.log"),
+            "FAKE_SSH_ROOT": str(tmp / "github"),
+        }
+        return subprocess.run(args, cwd=tmp, env=env, check=check, capture_output=True, text=True)
+
+    def ssh_log(self, tmp: Path) -> list[str]:
+        log = tmp / "ssh.log"
+        lines = log.read_text().splitlines() if log.exists() else []
+        log.unlink(missing_ok=True)
+        return lines
+
+    def test_a_checkout_with_a_key_clones_fetches_and_pushes_with_it(self) -> None:
+        url = "git@github.com:kunlabora/roadpass.git"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "bin").mkdir()
+            (tmp / "bin" / "ssh").write_text(FAKE_SSH)
+            (tmp / "bin" / "ssh").chmod(0o755)
+            origin = tmp / "github" / "kunlabora" / "roadpass.git"
+            self.git(tmp, "git", "init", "-q", "--bare", str(origin))
+            with mock.patch.object(repo_env, "MOUNT_ROOT", str(tmp / "repo-env")):
+                path = Path(repo_env.ssh_key_file(url))
+                command = repo_env.clone_command(url, f"-q -- {url} {tmp / 'checkout'}", str(tmp / "checkout"))
+            path.parent.mkdir(parents=True)
+            path.write_text(openssh_key())
+            # Like a mounted Secret: readable by its group, which ssh refuses.
+            path.chmod(0o440)
+            self.git(tmp, "bash", "-c", f"set -e; {command}")
+            [line] = self.ssh_log(tmp)
+            # "key <mode> <first line> <file>"
+            parts = line.split(" ")
+            mode, first, copy = parts[1], " ".join(parts[2:-1]), parts[-1]
+            self.assertEqual((mode, first), ("600", "-----BEGIN OPENSSH PRIVATE KEY-----"))
+            self.assertFalse(Path(copy).exists(), "the private copy is removed")
+            config = (tmp / "checkout" / ".git" / "config").read_text()
+            self.assertIn("sshCommand", config)
+            self.assertNotIn("PRIVATE KEY", config)
+            # The checkout keeps using the key: a push and a fetch.
+            self.git(tmp, "git", "-C", "checkout", "-c", "user.name=Levi", "-c", "user.email=l@example.com",
+                     "commit", "-q", "--allow-empty", "-m", "first")
+            self.git(tmp, "git", "-C", "checkout", "push", "-q", "origin", "HEAD:main")
+            self.git(tmp, "git", "-C", "checkout", "fetch", "-q")
+            self.assertEqual([l.split(" ")[1] for l in self.ssh_log(tmp)], ["600", "600"])
+            # A removed key leaves plain ssh, with the user's own keys.
+            path.unlink()
+            self.git(tmp, "git", "-C", "checkout", "fetch", "-q")
+            self.assertEqual(self.ssh_log(tmp), ["nokey"])
+
+    def test_an_ssh_url_without_a_key_is_a_plain_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(repo_env, "MOUNT_ROOT", str(Path(tmp) / "repo-env")):
+                command = repo_env.clone_command("git@github.com:kunlabora/roadpass.git", "-q -- url dir", "dir")
+            self.assertIn("else git clone -q -- url dir; fi", command)
+            result = subprocess.run(["bash", "-c", command.replace("git clone", "echo plain")],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout, "plain -q -- url dir\n")
 
 
 class FakeApiException(Exception):
@@ -304,7 +427,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(entry, {
             "repository": ROADPASS, "names": ["TOKEN", "URL"],
             "instructions": None, "setup_script": None,
-            "instructions": None, "mcp_servers": [],
+            "instructions": None, "mcp_servers": [], "ssh_key": False,
             "updated_at": "2026-10-08T12:00:00+00:00", "updated_by": "levi",
         })
 
@@ -355,9 +478,11 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(entry["setup_script"], "#!/bin/sh\nmise install\n")
         self.assertEqual(repo_env.variable_names(self.core, ROADPASS), ["TOKEN"])
         self.assertEqual(repo_env.repository_summary(self.core, ROADPASS),
-                         {"names": ["TOKEN"], "instructions": True, "setup_script": True, "mcp_servers": []})
+                         {"names": ["TOKEN"], "instructions": True, "setup_script": True, "mcp_servers": [],
+                          "ssh_key": False})
         self.assertEqual(repo_env.repository_summary(self.core, "github.com/a/b"),
-                         {"names": [], "instructions": False, "setup_script": False, "mcp_servers": []})
+                         {"names": [], "instructions": False, "setup_script": False, "mcp_servers": [],
+                          "ssh_key": False})
         # Left out, they stay; blank or None removes them.
         repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None})
         self.assertEqual(set(decoded(self.core)), {"TOKEN", "agent-instructions.md", "setup.sh"})
@@ -374,6 +499,66 @@ class StoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at most 64 KB"):
             repo_env.save_repository(self.core, ROADPASS, {}, instructions="x" * (64 * 1024 + 1))
         self.assertEqual(decoded(self.core), {"setup.sh": "make\n"})
+
+    def test_an_ssh_key_is_write_only_and_saving_variables_keeps_it(self) -> None:
+        key = openssh_key()
+        entry = repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc"}, ssh_key=key)
+        self.assertEqual(decoded(self.core), {"TOKEN": "abc", "git-ssh-key": key})
+        self.assertEqual((entry["names"], entry["ssh_key"]), (["TOKEN"], True))
+        self.assertNotIn("PRIVATE", json.dumps(repo_env.list_repositories(self.core)))
+        self.assertTrue(repo_env.repository_summary(self.core, ROADPASS)["ssh_key"])
+        # Left out, it stays; None removes it.
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None, "MORE": "x"})
+        self.assertEqual(decoded(self.core)["git-ssh-key"], key)
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None}, ssh_key=None)
+        self.assertEqual(decoded(self.core), {"TOKEN": "abc"})
+        with self.assertRaisesRegex(ValueError, "public key"):
+            repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None}, ssh_key="ssh-rsa AAAA x")
+        # A repository can have only a key.
+        repo_env.save_repository(self.core, "github.com/a/b", {}, ssh_key=key)
+        self.assertEqual(decoded(self.core, "github.com/a/b"), {"git-ssh-key": key})
+
+    def test_credentials_from_the_new_session_form_keep_the_rest(self) -> None:
+        repo_env.save_repository(self.core, ROADPASS, {"NPM": "n"}, instructions="Rules.")
+        entry = repo_env.save_credentials(self.core, ROADPASS, token=" github_pat_1\n", updated_by="levi")
+        self.assertEqual(decoded(self.core), {"NPM": "n", "GIT_TOKEN": "github_pat_1", "agent-instructions.md": "Rules."})
+        self.assertEqual((entry["names"], entry["updated_by"]), (["GIT_TOKEN", "NPM"], "levi"))
+        key = openssh_key()
+        repo_env.save_credentials(self.core, ROADPASS, ssh_key=key)
+        self.assertEqual(set(decoded(self.core)), {"NPM", "GIT_TOKEN", "agent-instructions.md", "git-ssh-key"})
+        # A new repository gets a Secret the Pod and the page find.
+        entry = repo_env.save_credentials(self.core, "gitlab.com/acme/api", token="glpat-1")
+        self.assertEqual(entry["repository"], "gitlab.com/acme/api")
+        self.assertEqual(decoded(self.core, "gitlab.com/acme/api"), {"GIT_TOKEN": "glpat-1"})
+        for kwargs, error in (({}, "Git token or an SSH key"), ({"token": "  "}, "blank"),
+                              ({"ssh_key": openssh_key("aes256-ctr")}, "passphrase")):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ValueError, error):
+                repo_env.save_credentials(self.core, ROADPASS, **kwargs)
+
+    def test_the_picker_lists_every_repository_with_how_it_is_cloned(self) -> None:
+        repo_env.save_repository(self.core, ROADPASS, {"GIT_TOKEN": "github_pat_1", "NPM": "n"})
+        repo_env.save_credentials(self.core, "gitlab.com/acme/api", ssh_key=openssh_key())
+        repo_env.save_repository(self.core, "gitlab.com/acme/web", {"NPM": "n"})
+        repo_env.save_credentials(self.core, "gitlab.com/acme/both", token="glpat", ssh_key=openssh_key())
+        # A Secret that isn't the one a Pod would mount is left out.
+        self.core.secrets["stray"] = {**self.core.secrets[repo_env.secret_name("gitlab.com/acme/web")],
+                                      "metadata": {"name": "stray", "resourceVersion": "9",
+                                                   "annotations": {"omnigent.dev/repository": "gitlab.com/x/y"}}}
+        listed = repo_env.picker_repositories(self.core)
+        self.assertEqual(listed, [
+            {"repository": ROADPASS, "clone_url": "https://github.com/kunlabora/roadpass.git",
+             "git_token": True, "ssh_key": False},
+            {"repository": "gitlab.com/acme/api", "clone_url": "git@gitlab.com:acme/api.git",
+             "git_token": False, "ssh_key": True},
+            {"repository": "gitlab.com/acme/both", "clone_url": "https://gitlab.com/acme/both.git",
+             "git_token": True, "ssh_key": True},
+            {"repository": "gitlab.com/acme/web", "clone_url": "https://gitlab.com/acme/web.git",
+             "git_token": False, "ssh_key": False},
+        ])
+        self.assertNotIn("glpat", json.dumps(listed))
+        # Each URL is one the Pod finds the same Secret, and credential, for.
+        self.assertIsNotNone(repo_env.ssh_key_file(listed[1]["clone_url"]))
+        self.assertIsNotNone(repo_env.token_file(listed[0]["clone_url"]))
 
     def test_delete_is_fine_when_nothing_is_there(self) -> None:
         repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc"})

@@ -46,7 +46,7 @@ just the number), with an icon for its agent instructions, setup script and
 [MCP servers](mcp-servers.md#a-repositorys-servers); click it to see their
 names.
 
-![The new-session form's repository list, with "2 variables" next to roadpass](../images/repo-env-new-session.webp)
+![The new-session form's repository list, with "2 variables" next to Kunlabora/RoadPass](../images/repo-env-new-session.webp)
 
 The agent has the variables in every command it runs, and so does anything
 those commands start, like `npm install`, `mise run dev` or `mise exec`.
@@ -67,7 +67,8 @@ file doesn't exist, and mise skips it, so the session's variables stay.
 ## A repository the GitHub App can't reach
 
 Turn on its **Git token**: see
-[a repository's own Git token](repo-git-token.md).
+[a repository's own Git token](repo-git-token.md). For its SSH URLs, turn on
+**SSH key**: see [a repository by its URL](custom-repository.md).
 
 ## Instructions and a setup script
 
@@ -116,7 +117,8 @@ There's nothing to turn off. A repository without variables starts as before.
   serves (mounted by `images/server/patches/0006-repo-env-routes.patch`).
   Listing returns names; saving sends each name with a new value, or `null`
   to keep the current one, and replaces the Secret only if nobody changed it
-  since it was read. Every route but the names lookup is admin-only.
+  since it was read. Every route but the names lookup and the repository picker's list
+  (`/v1/repo-env/repositories`) is admin-only.
 - **Permissions:** for the page, the server may get, list and update Secrets
   in `omnigent-sandboxes` (`kubernetes/platform/runner-rbac.yaml`). That's a
   platform change, so it needs `mise run bootstrap` once.
@@ -132,6 +134,11 @@ There's nothing to turn off. A repository without variables starts as before.
   mounts nothing. A wake re-creates the Pod with the same repositories.
 - **`GIT_TOKEN`**: see [how it works](repo-git-token.md#how-it-works) on
   its own page.
+- **`git-ssh-key`**: the repository's SSH key. It isn't a variable name, so
+  the loader skips it, listing leaves it out of `names` and returns
+  `ssh_key: true` instead, and saving the variables keeps it unless the page
+  sends a new one or `null`. See
+  [how it works](custom-repository.md#how-it-works).
 - **`agent-instructions.md` and `setup.sh`**: the same Secret holds the
   repository's [agent instructions](repo-instructions.md#how-it-works) and
   [setup script](repo-setup-script.md#how-it-works) under these keys. They
