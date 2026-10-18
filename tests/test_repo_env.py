@@ -355,9 +355,9 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(entry["setup_script"], "#!/bin/sh\nmise install\n")
         self.assertEqual(repo_env.variable_names(self.core, ROADPASS), ["TOKEN"])
         self.assertEqual(repo_env.repository_summary(self.core, ROADPASS),
-                         {"names": ["TOKEN"], "instructions": True, "setup_script": True})
+                         {"names": ["TOKEN"], "instructions": True, "setup_script": True, "mcp_servers": []})
         self.assertEqual(repo_env.repository_summary(self.core, "github.com/a/b"),
-                         {"names": [], "instructions": False, "setup_script": False})
+                         {"names": [], "instructions": False, "setup_script": False, "mcp_servers": []})
         # Left out, they stay; blank or None removes them.
         repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None})
         self.assertEqual(set(decoded(self.core)), {"TOKEN", "agent-instructions.md", "setup.sh"})

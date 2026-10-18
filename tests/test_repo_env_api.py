@@ -94,10 +94,12 @@ class RouteTests(unittest.TestCase):
                           params={"repository": "https://github.com/kunlabora/roadpass.git"})
         self.assertEqual(names.json(), {
             "repository": ROADPASS, "names": ["TOKEN"], "instructions": False, "setup_script": False,
+            "mcp_servers": [],
         })
         self.assertEqual(self.call("GET", "/v1/repo-env/names", user=None, params={"repository": ROADPASS}).status_code, 401)
         bad = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": "nope"})
-        self.assertEqual(bad.json(), {"repository": None, "names": [], "instructions": False, "setup_script": False})
+        self.assertEqual(bad.json(), {"repository": None, "names": [], "instructions": False, "setup_script": False,
+                                      "mcp_servers": []})
 
     def test_instructions_and_script_come_back_to_admins_only(self) -> None:
         saved = self.call("PUT", "/v1/repo-env", json={
@@ -109,7 +111,8 @@ class RouteTests(unittest.TestCase):
         listed = self.call("GET", "/v1/repo-env").json()["data"][0]
         self.assertEqual((listed["names"], listed["instructions"]), ([], "Use pnpm."))
         names = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": ROADPASS})
-        self.assertEqual(names.json(), {"repository": ROADPASS, "names": [], "instructions": True, "setup_script": True})
+        self.assertEqual(names.json(), {"repository": ROADPASS, "names": [], "instructions": True, "setup_script": True,
+                                        "mcp_servers": []})
         self.assertNotIn("pnpm", names.text)
         # A page that doesn't send them keeps them; null removes one.
         self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"A": "1"}})

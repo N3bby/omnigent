@@ -334,6 +334,28 @@ def mcp_server_names(secret: Any) -> list[str]:
     return sorted(server["name"] for server in json.loads(text).get("servers", []))
 
 
+def mcp_server_badges(secret: Any) -> list[dict[str, Any]]:
+    """
+    The repository's MCP servers as the new-session form shows them, by name.
+
+    Anyone signed in reads these, so only what tells a server apart: its
+    name, its agents and an HTTP server's host, which picks its logo. Never
+    headers, arguments or variables, which can hold keys.
+    """
+    text = _text(secret, MCP_SERVERS_KEY)
+    if text is None:
+        return []
+    servers = sorted(json.loads(text).get("servers", []), key=lambda s: s["name"].casefold())
+    return [
+        {
+            "name": server["name"],
+            "agents": server["agents"],
+            "host": urlsplit(server["url"]).hostname if server.get("url") else None,
+        }
+        for server in servers
+    ]
+
+
 def _text(secret: Any, key: str) -> str | None:
     value = (secret.data or {}).get(key)
     return base64.b64decode(value).decode() if value else None
@@ -429,19 +451,21 @@ def repository_summary(core: Any, key: str) -> dict[str, Any]:
     :param core: A Kubernetes ``CoreV1Api``.
     :param key: A key from :func:`repo_key`.
     :returns: e.g. ``{"names": ["GOVFLANDERS_NPM_TOKEN"], "instructions": True,
-        "setup_script": False}``.
+        "setup_script": False, "mcp_servers": [{"name": "figma",
+        "agents": ["claude", "codex"], "host": "mcp.figma.com"}]}``.
     """
     try:
         secret = core.read_namespaced_secret(secret_name(key), NAMESPACE)
     except Exception as exc:
         if _not_found(exc):
-            return {"names": [], "instructions": False, "setup_script": False}
+            return {"names": [], "instructions": False, "setup_script": False, "mcp_servers": []}
         raise
     data = secret.data or {}
     return {
         "names": _names(secret),
         "instructions": INSTRUCTIONS_KEY in data,
         "setup_script": SETUP_SCRIPT_KEY in data,
+        "mcp_servers": mcp_server_badges(secret),
     }
 
 

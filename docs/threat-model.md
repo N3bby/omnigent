@@ -103,7 +103,8 @@ the runner namespace, which limits what a compromised server could do there.
   whichever agents a server is switched on for. A repository's servers go by
   repository name, like its variables. Give each one a key with as little
   access as the server allows. Only admins can see or change them, and the
-  page never sends a value back to the browser. See
+  page never sends a value back to the browser. Anyone signed in can see a
+  repository's servers' names, agents and HTTP hosts in the new-session form. See
   [MCP servers](features/mcp-servers.md).
 - **Agents skip permission prompts** by default (`claude_bypass_permissions`
   and `codex_bypass_approvals`). Turning these off makes the agents ask

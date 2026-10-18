@@ -4,9 +4,9 @@ Admins list, save and remove repositories' variables. Values only go from the
 browser to the Secret, never back: listing returns names, and saving a name
 without a value keeps the value it has. A repository's agent instructions and
 setup script aren't secret, so admins read them back to edit them. Anyone
-signed in can see the names of a repository's variables, and whether it has
-instructions or a script, which the new-session form shows next to the
-repository.
+signed in can see the names of a repository's variables, whether it has
+instructions or a script, and its MCP servers' names, which the new-session
+form shows next to the repository.
 
 A repository with a ``GIT_TOKEN`` variable is also in the repository picker,
 for everyone who has connected GitHub, and its branches are listed with that
@@ -154,14 +154,16 @@ def create_repo_env_router(
     @router.get("/repo-env/names")
     async def variable_names(request: Request, repository: str) -> dict[str, Any]:
         """
-        The names of one repository's variables, and whether it has agent
-        instructions or a setup script, for anyone signed in. Never the text.
+        The names of one repository's variables, whether it has agent
+        instructions or a setup script, and its MCP servers, for anyone signed
+        in. Never a value, the text or a server's keys.
         """
         await signed_in(request)
         try:
             key = repo_env.repo_key(repository)
         except ValueError:
-            return {"repository": None, "names": [], "instructions": False, "setup_script": False}
+            return {"repository": None, "names": [], "instructions": False, "setup_script": False,
+                    "mcp_servers": []}
         summary = await _kubernetes(lambda: repo_env.repository_summary(core(), key))
         return {"repository": key, **summary}
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Run the fast-mode and fuzzy "@" file search backend regressions and related
 # frontend suites, the project repositories frontend suites, the environment
-# menu's backend and frontend suites, the startup card's, and the New session
-# screen's, against a fresh, fully patched upstream checkout. Keep logs and
-# JUnit reports.
+# menu's backend and frontend suites, the startup card's, the New session
+# screen's, and the MCP servers page's and repository badge's, against a fresh,
+# fully patched upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -110,6 +110,9 @@ PY
       src/shell/MainTerminalView.startup.test.tsx \
       src/shell/NewChatDialog.test.tsx src/shell/NewChatDialog.flow.test.tsx \
       src/hooks/useIsAdmin.test.tsx src/shell/WorkspacePanel.test.tsx src/components/ui/kbd.test.tsx \
+      src/pages/McpServersPage.test.tsx src/lib/mcpServerIcons.test.ts \
+      src/pages/RepoVariablesPage.test.tsx src/shell/settingsNav.test.tsx \
+      src/components/RepoEnvBadge.test.tsx \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

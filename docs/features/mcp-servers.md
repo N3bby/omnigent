@@ -61,6 +61,12 @@ a server only that project needs, or to give one project a different key.
   A repository with only MCP servers is listed there as well.
 - **It stays where you added it.** To move a server to another repository or
   to every session, add it again there and remove it here.
+- **It shows in the new-session form.** A repository with MCP servers has a
+  plug icon next to it once picked; click it to see its servers, with their
+  icons and which agent each is for when it isn't both. Anyone signed in sees
+  their names there, never their URL's path, arguments or keys.
+
+![The new-session form's repository popover for roadpass: its variables, agent instructions and four MCP servers, figma, github, postgres for Claude Code only and sentry for Codex only, each with its logo](../images/mcp-servers-new-session.webp)
 
 A repository can also commit its own `.mcp.json` for Claude Code. Those work
 too, alongside these, but anyone who can read the repository sees them, so
@@ -153,7 +159,8 @@ delete the session.
   gets all of them, values included, whichever agents they're switched on
   for; a repository's only reach its sessions. Give each server a key with as
   little access as it allows. See the [threat model](../threat-model.md).
-- **Only admins can see or change them.** Others don't see the page.
+- **Only admins can see or change them.** Others don't see the page, only
+  the names of a repository's servers in the new-session form.
 - **Runners from before this feature** need to be recreated once to get the
   servers. A sleeping session gets them when it wakes.
 - **Omnigent's model probes don't start them**, so they don't slow down the
@@ -192,6 +199,11 @@ Agents then start exactly as they did before this feature.
   route is admin-only, and no response contains a header's or variable's
   value. The server's existing permissions on Secrets in `omnigent-sandboxes`
   cover it, so it needs no `mise run bootstrap`.
+- **The new-session form** shows a repository's servers in its badge
+  (`web/src/components/RepoEnvBadge.tsx`) from `/v1/repo-env/names`, which
+  anyone signed in reads. It returns each server's name, agents and, for an
+  HTTP server, its URL's host, which picks its logo
+  (`mcp_server_badges` in `omnigent_repo_env.py`).
 - **The Pod:** `0019-mcp-servers.patch` mounts the global Secret read-only at
   `/run/omnigent/mcp-servers/servers.json` in every runner Pod. The volume is
   optional, so Pods start as before when there's no Secret. A repository's

@@ -141,6 +141,19 @@ class StoreTests(unittest.TestCase):
         mcp_servers.delete(self.core, figma["id"], ROADPASS)
         self.assertEqual(decoded_keys(self.core), {"NPM_TOKEN", "agent-instructions.md"})
 
+    def test_the_new_session_form_sees_a_repositorys_servers_without_their_keys(self):
+        mcp_servers.save(self.core, {**FIGMA, "repository": ROADPASS})
+        mcp_servers.save(self.core, {**LINEAR, "repository": ROADPASS,
+                                     "url": "https://user:pass@MCP.Linear.app/mcp?token=query-secret"})
+        summary = repo_env.repository_summary(self.core, ROADPASS)
+        self.assertEqual(summary["mcp_servers"], [
+            {"name": "figma", "agents": ["claude", "codex"], "host": None},
+            {"name": "linear", "agents": ["codex"], "host": "mcp.linear.app"},
+        ])
+        text = json.dumps(summary)
+        for secret in (FIGMA_KEY, BEARER, "figma-developer-mcp", "pass", "query-secret"):
+            self.assertNotIn(secret, text)
+
     def test_global_and_repository_servers_list_together(self):
         mcp_servers.save(self.core, FIGMA)
         # The same name for a repository replaces the global one in its sessions.

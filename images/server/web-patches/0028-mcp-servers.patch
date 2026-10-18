@@ -18,10 +18,220 @@ colour, or its initial on a colour of its own. The editor shows the icon as
 the name, URL or arguments change.
 
 Repository variables cards count a repository's MCP servers, and removing a
-repository says it removes them too.
+repository says it removes them too. In the new-session form, a repository's
+badge lists its MCP servers with their icons (components/McpServerIcon.tsx),
+from /v1/repo-env/names, which anyone signed in reads: names, agents and an
+HTTP server's host, never keys.
 Applies after 0027-shortcut-key-width.patch.
 Base: omnigent v0.18.0 (a8676d23e88d).
 
+diff --git a/web/src/components/McpServerIcon.tsx b/web/src/components/McpServerIcon.tsx
+new file mode 100644
+index 0000000..af33349
+--- /dev/null
++++ b/web/src/components/McpServerIcon.tsx
+@@ -0,0 +1,57 @@
++/**
++ * An MCP server's icon (added by this deployment): its service's logo on the
++ * brand colour, or its initial on a colour of its own, so servers are easy to
++ * tell apart. Settings → MCP servers and the new-session form's repository
++ * badge show it.
++ */
++
++import { type McpServerLike, initialHue, lightOn, serverBrand } from "@/lib/mcpServerIcons";
++import { cn } from "@/lib/utils";
++
++export function McpServerIcon({
++  server,
++  size = "md",
++}: {
++  server: McpServerLike;
++  size?: "md" | "lg";
++}) {
++  const brand = serverBrand(server);
++  const tile = cn(
++    "flex shrink-0 items-center justify-center rounded-md ring-1 ring-black/10 ring-inset dark:ring-white/15",
++    size === "lg" ? "size-8" : "size-5",
++  );
++  if (brand) {
++    return (
++      <span
++        className={tile}
++        style={{ backgroundColor: `#${brand.hex}`, color: lightOn(brand.hex) ? "#fff" : "#000" }}
++        title={brand.title}
++        data-testid="mcp-server-icon"
++        data-brand={brand.title}
++      >
++        <svg
++          viewBox="0 0 24 24"
++          fill="currentColor"
++          aria-hidden="true"
++          className={size === "lg" ? "size-4.5" : "size-3"}
++        >
++          <path d={brand.path} />
++        </svg>
++      </span>
++    );
++  }
++  return (
++    <span
++      className={cn(
++        tile,
++        "font-sans font-semibold text-white uppercase",
++        size === "lg" ? "text-sm" : "text-[11px]",
++      )}
++      style={{ backgroundColor: `hsl(${initialHue(server.name)} 45% 42%)` }}
++      aria-hidden="true"
++      data-testid="mcp-server-icon"
++    >
++      {server.name.charAt(0)}
++    </span>
++  );
++}
+diff --git a/web/src/components/RepoEnvBadge.test.tsx b/web/src/components/RepoEnvBadge.test.tsx
+index 532c14f..125f857 100644
+--- a/web/src/components/RepoEnvBadge.test.tsx
++++ b/web/src/components/RepoEnvBadge.test.tsx
+@@ -6,7 +6,13 @@ import * as identity from "@/lib/identity";
+ 
+ vi.mock("@/lib/identity", () => ({ authenticatedFetch: vi.fn() }));
+ 
+-function renderBadge(url: string, names: string[], instructions = false, setupScript = false) {
++function renderBadge(
++  url: string,
++  names: string[],
++  instructions = false,
++  setupScript = false,
++  mcpServers?: { name: string; agents: string[]; host: string | null }[],
++) {
+   vi.mocked(identity.authenticatedFetch).mockResolvedValue(
+     new Response(
+       JSON.stringify({
+@@ -14,6 +20,8 @@ function renderBadge(url: string, names: string[], instructions = false, setupSc
+         names,
+         instructions,
+         setup_script: setupScript,
++        // Left out, as a server from before MCP servers sends it.
++        ...(mcpServers && { mcp_servers: mcpServers }),
+       }),
+     ),
+   );
+@@ -60,6 +68,23 @@ describe("RepoEnvBadge", () => {
+     expect(screen.queryByText("The agent gets these in its environment:")).not.toBeInTheDocument();
+   });
+ 
++  it("lists the repository's MCP servers with their icons", async () => {
++    renderBadge("https://github.com/kunlabora/roadpass.git", [], false, false, [
++      { name: "figma", agents: ["claude", "codex"], host: null },
++      { name: "tracker", agents: ["codex"], host: "mcp.linear.app" },
++    ]);
++    fireEvent.click(
++      await screen.findByRole("button", { name: "2 MCP servers for this repository" }),
++    );
++    expect(await screen.findByText("MCP servers")).toBeInTheDocument();
++    const rows = screen.getAllByRole("listitem");
++    expect(rows.map((row) => row.textContent)).toEqual(["figma", "tracker· Codex only"]);
++    // The name picks Figma's logo, and an HTTP server's host Linear's.
++    expect(
++      screen.getAllByTestId("mcp-server-icon").map((icon) => icon.getAttribute("data-brand")),
++    ).toEqual(["Figma", "Linear"]);
++  });
++
+   it("shows nothing without variables, and asks nothing for a non-repository", async () => {
+     const { container } = renderBadge("https://github.com/a/b", []);
+     await vi.waitFor(() => expect(identity.authenticatedFetch).toHaveBeenCalled());
+diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
+index 8669d7f..98519a2 100644
+--- a/web/src/components/RepoEnvBadge.tsx
++++ b/web/src/components/RepoEnvBadge.tsx
+@@ -1,16 +1,18 @@
+ /**
+  * "2 variables" next to a repository in the new-session form, when the
+  * repository has variables (added by this deployment), with an icon each for
+- * its agent instructions and setup script. Clicking it lists the variables'
+- * names and what the instructions and script do; values and text never reach
+- * the browser. Renders nothing for a repository without any, or while they
+- * load.
++ * its agent instructions, setup script and MCP servers. Clicking it lists the
++ * variables' names, what the instructions and script do, and the MCP servers;
++ * values, text and the servers' keys never reach the browser. Renders nothing
++ * for a repository without any, or while they load.
+  */
+ 
+ import type { ReactNode } from "react";
+-import { ScrollTextIcon, SquareTerminalIcon, VariableIcon } from "lucide-react";
++import { PlugIcon, ScrollTextIcon, SquareTerminalIcon, VariableIcon } from "lucide-react";
++import { McpServerIcon } from "@/components/McpServerIcon";
+ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+ import { useRepoEnvNames } from "@/hooks/useRepoEnv";
++import { MCP_AGENTS, agentsLabel } from "@/lib/mcpServers";
+ 
+ /** ``["2 variables", "agent instructions"]`` → ``"2 variables and agent instructions"``. */
+ function joinAnd(parts: string[]): string {
+@@ -20,13 +22,14 @@ function joinAnd(parts: string[]): string {
+ export function RepoEnvBadge({ url }: { url: string }) {
+   const { data } = useRepoEnvNames(url);
+   if (!data) return null;
+-  const { names, instructions, setup_script: setupScript } = data;
+-  if (!names.length && !instructions && !setupScript) return null;
++  const { names, instructions, setup_script: setupScript, mcp_servers: servers } = data;
++  if (!names.length && !instructions && !setupScript && !servers.length) return null;
+   const label = `${names.length} variable${names.length === 1 ? "" : "s"}`;
+   const parts = [
+     ...(names.length ? [label] : []),
+     ...(instructions ? ["agent instructions"] : []),
+     ...(setupScript ? ["a setup script"] : []),
++    ...(servers.length ? [`${servers.length} MCP server${servers.length === 1 ? "" : "s"}`] : []),
+   ];
+   return (
+     <Popover>
+@@ -48,6 +51,7 @@ export function RepoEnvBadge({ url }: { url: string }) {
+           )}
+           {instructions && <ScrollTextIcon className="size-3.5" />}
+           {setupScript && <SquareTerminalIcon className="size-3.5" />}
++          {servers.length > 0 && <PlugIcon className="size-3.5" />}
+         </button>
+       </PopoverTrigger>
+       <PopoverContent
+@@ -79,6 +83,29 @@ export function RepoEnvBadge({ url }: { url: string }) {
+             Runs in the checkout once, before the agent starts.
+           </BadgeItem>
+         )}
++        {servers.length > 0 && (
++          <BadgeItem icon={<PlugIcon className="ui-icon" />} title="MCP servers">
++            The agent connects to these when it starts, along with the ones for every session.
++            <ul className="mt-2 flex flex-col gap-1.5 text-foreground">
++              {servers.map((server) => (
++                <li key={server.name} className="flex min-w-0 items-center gap-2">
++                  <McpServerIcon
++                    server={{ name: server.name, url: server.host && `https://${server.host}` }}
++                  />
++                  <span className="flex min-w-0 gap-1">
++                    <span className="truncate">{server.name}</span>
++                    {/* Both agents is the usual case; only say so when it isn't. */}
++                    {server.agents.length < MCP_AGENTS.length && (
++                      <span className="shrink-0 text-muted-foreground">
++                        · {agentsLabel(server.agents)}
++                      </span>
++                    )}
++                  </span>
++                </li>
++              ))}
++            </ul>
++          </BadgeItem>
++        )}
+       </PopoverContent>
+     </Popover>
+   );
+@@ -100,7 +127,7 @@ function BadgeItem({
+       </span>
+       <div className="min-w-0 text-sm">
+         <p className="font-medium">{title}</p>
+-        <p className="text-muted-foreground">{children}</p>
++        <div className="text-muted-foreground">{children}</div>
+       </div>
+     </div>
+   );
 diff --git a/web/src/hooks/useMcpServers.ts b/web/src/hooks/useMcpServers.ts
 new file mode 100644
 index 0000000..7ceb7ed
@@ -463,10 +673,10 @@ index 0000000..4552262
 +}
 diff --git a/web/src/lib/mcpServers.ts b/web/src/lib/mcpServers.ts
 new file mode 100644
-index 0000000..a771bdd
+index 0000000..6069783
 --- /dev/null
 +++ b/web/src/lib/mcpServers.ts
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,148 @@
 +/**
 + * MCP servers for sessions' Claude Code and Codex (``/v1/mcp-servers``, added
 + * by this deployment): global ones for every session, and a repository's for
@@ -487,6 +697,13 @@ index 0000000..a771bdd
 +  { id: "claude", label: "Claude Code" },
 +  { id: "codex", label: "Codex" },
 +];
++
++/** ``["claude", "codex"]`` → ``"Claude Code and Codex"``; none → ``"Off"``. */
++export function agentsLabel(agents: McpAgent[]): string {
++  const labels = MCP_AGENTS.filter((a) => agents.includes(a.id)).map((a) => a.label);
++  if (!labels.length) return "Off";
++  return labels.length === 1 ? `${labels[0]} only` : labels.join(" and ");
++}
 +
 +/** One server, from ``GET /v1/mcp-servers``. */
 +export interface McpServer {
@@ -609,10 +826,18 @@ index 0000000..a771bdd
 +  if (!res.ok) throw new Error(await errorMessage(res));
 +}
 diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
-index 96cad72..222d875 100644
+index 96cad72..57b2594 100644
 --- a/web/src/lib/repoEnv.ts
 +++ b/web/src/lib/repoEnv.ts
-@@ -21,6 +21,11 @@ export interface RepoEnvEntry {
+@@ -10,6 +10,7 @@
+  */
+ 
+ import { authenticatedFetch } from "./identity";
++import type { McpAgent } from "./mcpServers";
+ 
+ /** One repository with variables, from ``GET /v1/repo-env``. */
+ export interface RepoEnvEntry {
+@@ -21,6 +22,11 @@ export interface RepoEnvEntry {
    instructions: string | null;
    /** Runs in the checkout before the agent starts, once per session, or null. */
    setup_script: string | null;
@@ -624,6 +849,39 @@ index 96cad72..222d875 100644
    /** ISO-8601 time of the last change, or null. */
    updated_at: string | null;
    /** Who last saved them from this page, or null (e.g. the CLI). */
+@@ -152,11 +158,22 @@ export interface RepoEnvSummary {
+   instructions: boolean;
+   /** Whether it has a setup script. */
+   setup_script: boolean;
++  /** The repository's own MCP servers, by name; empty from older servers. */
++  mcp_servers: RepoMcpServer[];
++}
++
++/** A repository's MCP server as anyone signed in sees it: never its keys. */
++export interface RepoMcpServer {
++  name: string;
++  agents: McpAgent[];
++  /** An HTTP server's host, for its logo, or null for a command. */
++  host: string | null;
+ }
+ 
+ /**
+- * The names of one repository's variables, and whether it has agent
+- * instructions or a setup script, for anyone signed in. Never their text.
++ * The names of one repository's variables, whether it has agent instructions
++ * or a setup script, and its MCP servers, for anyone signed in. Never a
++ * value, their text or a server's keys.
+  */
+ export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSummary> {
+   const res = await authenticatedFetch(
+@@ -168,6 +185,7 @@ export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSumm
+     names: body.names ?? [],
+     instructions: body.instructions ?? false,
+     setup_script: body.setup_script ?? false,
++    mcp_servers: body.mcp_servers ?? [],
+   };
+ }
+ 
 diff --git a/web/src/pages/McpServersPage.test.tsx b/web/src/pages/McpServersPage.test.tsx
 new file mode 100644
 index 0000000..0b2dece
@@ -1009,10 +1267,10 @@ index 0000000..0b2dece
 +});
 diff --git a/web/src/pages/McpServersPage.tsx b/web/src/pages/McpServersPage.tsx
 new file mode 100644
-index 0000000..215e7ee
+index 0000000..7446f58
 --- /dev/null
 +++ b/web/src/pages/McpServersPage.tsx
-@@ -0,0 +1,1025 @@
+@@ -0,0 +1,973 @@
 +/**
 + * Admin page for MCP servers (``/settings/mcp-servers``), added by this
 + * deployment. Rendered as a Settings sub-category, next to Subscriptions and
@@ -1035,6 +1293,7 @@ index 0000000..215e7ee
 +import { type ReactNode, useEffect, useId, useState } from "react";
 +import { useQuery } from "@tanstack/react-query";
 +import { FolderGit2Icon, LayersIcon, PencilIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
++import { McpServerIcon } from "@/components/McpServerIcon";
 +import { PageScroll } from "@/components/PageScroll";
 +import { Button } from "@/components/ui/button";
 +import { Input } from "@/components/ui/input";
@@ -1049,6 +1308,7 @@ index 0000000..215e7ee
 +import {
 +  MCP_AGENTS,
 +  type McpAgent,
++  agentsLabel,
 +  type McpServer,
 +  type McpTransport,
 +  envNameError,
@@ -1057,7 +1317,6 @@ index 0000000..215e7ee
 +  serverNameError,
 +  urlError,
 +} from "@/lib/mcpServers";
-+import { type McpServerLike, initialHue, lightOn, serverBrand } from "@/lib/mcpServerIcons";
 +import { absoluteTime, relativeTime } from "@/lib/relativeTime";
 +import { repoKey } from "@/lib/repoEnv";
 +import { cn } from "@/lib/utils";
@@ -1074,13 +1333,6 @@ index 0000000..215e7ee
 +
 +function plural(count: number, word: string): string {
 +  return `${count} ${word}${count === 1 ? "" : "s"}`;
-+}
-+
-+/** ``["claude", "codex"]`` → ``"Claude Code and Codex"``; none → ``"Off"``. */
-+function agentsLabel(agents: McpAgent[]): string {
-+  const labels = MCP_AGENTS.filter((a) => agents.includes(a.id)).map((a) => a.label);
-+  if (!labels.length) return "Off";
-+  return labels.length === 1 ? `${labels[0]} only` : labels.join(" and ");
 +}
 +
 +/** The command line as a shell would show it, quoting what needs it. */
@@ -1267,52 +1519,6 @@ index 0000000..215e7ee
 +/** ``github.com/kunlabora/roadpass`` → ``kunlabora/roadpass``. */
 +function repositoryPath(repository: string): string {
 +  return repository.slice(repository.indexOf("/") + 1);
-+}
-+
-+/**
-+ * A server's icon: its service's logo on the brand colour, or its initial on
-+ * a colour of its own, so servers are easy to tell apart.
-+ */
-+function McpServerIcon({ server, size = "md" }: { server: McpServerLike; size?: "md" | "lg" }) {
-+  const brand = serverBrand(server);
-+  const tile = cn(
-+    "flex shrink-0 items-center justify-center rounded-md ring-1 ring-black/10 ring-inset dark:ring-white/15",
-+    size === "lg" ? "size-8" : "size-5",
-+  );
-+  if (brand) {
-+    return (
-+      <span
-+        className={tile}
-+        style={{ backgroundColor: `#${brand.hex}`, color: lightOn(brand.hex) ? "#fff" : "#000" }}
-+        title={brand.title}
-+        data-testid="mcp-server-icon"
-+        data-brand={brand.title}
-+      >
-+        <svg
-+          viewBox="0 0 24 24"
-+          fill="currentColor"
-+          aria-hidden="true"
-+          className={size === "lg" ? "size-4.5" : "size-3"}
-+        >
-+          <path d={brand.path} />
-+        </svg>
-+      </span>
-+    );
-+  }
-+  return (
-+    <span
-+      className={cn(
-+        tile,
-+        "font-sans font-semibold text-white uppercase",
-+        size === "lg" ? "text-sm" : "text-[11px]",
-+      )}
-+      style={{ backgroundColor: `hsl(${initialHue(server.name)} 45% 42%)` }}
-+      aria-hidden="true"
-+      data-testid="mcp-server-icon"
-+    >
-+      {server.name.charAt(0)}
-+    </span>
-+  );
 +}
 +
 +/** "Every session", or the repository whose sessions get the servers below it. */

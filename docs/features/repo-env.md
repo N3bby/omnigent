@@ -42,7 +42,9 @@ To see which repositories have variables from your machine, run
 
 Start a session on the repository with the repository picker. Once picked,
 the repository shows **2 variables** (or however many it has, and on a phone
-just the number); click it to see their names.
+just the number), with an icon for its agent instructions, setup script and
+[MCP servers](mcp-servers.md#a-repositorys-servers); click it to see their
+names.
 
 ![The new-session form's repository list, with "2 variables" next to roadpass](../images/repo-env-new-session.webp)
 
