@@ -66,7 +66,7 @@ a server only that project needs, or to give one project a different key.
   icons and which agent each is for when it isn't both. Anyone signed in sees
   their names there, never their URL's path, arguments or keys.
 
-![The new-session form's repository popover for roadpass: its variables, agent instructions and four MCP servers, figma, github, postgres for Claude Code only and sentry for Codex only, each with its logo](../images/mcp-servers-new-session.webp)
+![The new-session form's repository popover for roadpass: its variables, agent instructions and two MCP servers, github and postgres for Claude Code only, each with its logo](../images/mcp-servers-new-session.webp)
 
 A repository can also commit its own `.mcp.json` for Claude Code. Those work
 too, alongside these, but anyone who can read the repository sees them, so

@@ -141,7 +141,7 @@ index 532c14f..125f857 100644
      const { container } = renderBadge("https://github.com/a/b", []);
      await vi.waitFor(() => expect(identity.authenticatedFetch).toHaveBeenCalled());
 diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
-index 8669d7f..98519a2 100644
+index 0ea9ee9..bbabb0b 100644
 --- a/web/src/components/RepoEnvBadge.tsx
 +++ b/web/src/components/RepoEnvBadge.tsx
 @@ -1,16 +1,18 @@
@@ -159,8 +159,8 @@ index 8669d7f..98519a2 100644
   */
  
  import type { ReactNode } from "react";
--import { ScrollTextIcon, SquareTerminalIcon, VariableIcon } from "lucide-react";
-+import { PlugIcon, ScrollTextIcon, SquareTerminalIcon, VariableIcon } from "lucide-react";
+-import { FolderKeyIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
++import { FolderKeyIcon, PlugIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
 +import { McpServerIcon } from "@/components/McpServerIcon";
  import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
  import { useRepoEnvNames } from "@/hooks/useRepoEnv";
@@ -2404,10 +2404,10 @@ index 6cba016..255631e 100644
    });
  
 diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
-index 5bbe40e..8662363 100644
+index 3bad36a..4a38f55 100644
 --- a/web/src/shell/settingsNav.tsx
 +++ b/web/src/shell/settingsNav.tsx
-@@ -17,6 +17,7 @@ import {
+@@ -18,6 +18,7 @@ import {
    KeyboardIcon,
    KeyRoundIcon,
    PaletteIcon,
@@ -2434,7 +2434,7 @@ index 5bbe40e..8662363 100644
 @@ -168,6 +171,8 @@ export function settingsNavGroups(
      adminItems.push({ id: "subscriptions", label: "Subscriptions", icon: KeyRoundIcon });
      // This deployment's environment variables per repository.
-     adminItems.push({ id: "repo-env", label: "Repository variables", icon: VariableIcon });
+     adminItems.push({ id: "repo-env", label: "Repository variables", icon: FolderKeyIcon });
 +    // The MCP servers every session's Claude Code and Codex get.
 +    adminItems.push({ id: "mcp-servers", label: "MCP servers", icon: PlugIcon });
      groups.push({ title: "Admin", items: adminItems });

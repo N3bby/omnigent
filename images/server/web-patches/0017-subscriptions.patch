@@ -1168,11 +1168,11 @@ index add5bd2..6cba016 100644
  
    it("includes the Sandbox Integrations item only when a connection is enabled", () => {
 diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
-index 754e873..5bbe40e 100644
+index 9ae4ce5..3bad36a 100644
 --- a/web/src/shell/settingsNav.tsx
 +++ b/web/src/shell/settingsNav.tsx
-@@ -15,6 +15,7 @@ import {
-   DownloadIcon,
+@@ -16,6 +16,7 @@ import {
+   FolderKeyIcon,
    GitBranchIcon,
    KeyboardIcon,
 +  KeyRoundIcon,
@@ -1202,5 +1202,5 @@ index 754e873..5bbe40e 100644
 +    // The Claude and ChatGPT accounts this deployment's agents use.
 +    adminItems.push({ id: "subscriptions", label: "Subscriptions", icon: KeyRoundIcon });
      // This deployment's environment variables per repository.
-     adminItems.push({ id: "repo-env", label: "Repository variables", icon: VariableIcon });
+     adminItems.push({ id: "repo-env", label: "Repository variables", icon: FolderKeyIcon });
      groups.push({ title: "Admin", items: adminItems });

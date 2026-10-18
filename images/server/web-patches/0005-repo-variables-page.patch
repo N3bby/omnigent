@@ -62,7 +62,7 @@ index 0000000..e62b78f
 +});
 diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
 new file mode 100644
-index 0000000..12239ea
+index 0000000..dde83b2
 --- /dev/null
 +++ b/web/src/components/RepoEnvBadge.tsx
 @@ -0,0 +1,50 @@
@@ -73,7 +73,7 @@ index 0000000..12239ea
 + * repository without variables, or while the names load.
 + */
 +
-+import { VariableIcon } from "lucide-react";
++import { FolderKeyIcon } from "lucide-react";
 +import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 +import { useRepoEnvNames } from "@/hooks/useRepoEnv";
 +
@@ -90,7 +90,7 @@ index 0000000..12239ea
 +          aria-label={`${label} for this repository`}
 +          data-testid="repo-env-badge"
 +        >
-+          <VariableIcon className="size-3.5" />
++          <FolderKeyIcon className="size-3.5" />
 +          {/* Phones show only the count, leaving the row's room to the
 +          repository's name. */}
 +          <span className="max-sm:hidden">{label}</span>
@@ -638,7 +638,7 @@ index 0000000..a01644e
 +});
 diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
 new file mode 100644
-index 0000000..de0fb80
+index 0000000..b3abf58
 --- /dev/null
 +++ b/web/src/pages/RepoVariablesPage.tsx
 @@ -0,0 +1,726 @@
@@ -1493,17 +1493,17 @@ index ef1e4f0..add5bd2 100644
  
    it("includes the Sandbox Integrations item only when a connection is enabled", () => {
 diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
-index c312717..754e873 100644
+index c312717..9ae4ce5 100644
 --- a/web/src/shell/settingsNav.tsx
 +++ b/web/src/shell/settingsNav.tsx
-@@ -23,6 +23,7 @@ import {
-   UserCogIcon,
-   UsersIcon,
-   VectorSquareIcon,
-+  VariableIcon,
- } from "lucide-react";
- import { Link, useLocation } from "@/lib/routing";
- import { Button } from "@/components/ui/button";
+@@ -13,6 +13,7 @@ import {
+   BlocksIcon,
+   BotIcon,
+   DownloadIcon,
++  FolderKeyIcon,
+   GitBranchIcon,
+   KeyboardIcon,
+   PaletteIcon,
 @@ -46,6 +47,7 @@ export type SettingsSectionId =
    | "members"
    | "policies"
@@ -1525,7 +1525,7 @@ index c312717..754e873 100644
      adminItems.push({ id: "policies", label: "Policies", icon: ShieldCheckIcon });
      if (!isSingleUser) adminItems.push({ id: "sharing", label: "Sharing", icon: Share2Icon });
 +    // This deployment's environment variables per repository.
-+    adminItems.push({ id: "repo-env", label: "Repository variables", icon: VariableIcon });
++    adminItems.push({ id: "repo-env", label: "Repository variables", icon: FolderKeyIcon });
      groups.push({ title: "Admin", items: adminItems });
    }
    groups.push({

@@ -334,7 +334,7 @@ index e62b78f..532c14f 100644
      const { container } = renderBadge("https://github.com/a/b", []);
      await vi.waitFor(() => expect(identity.authenticatedFetch).toHaveBeenCalled());
 diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
-index 12239ea..8669d7f 100644
+index dde83b2..0ea9ee9 100644
 --- a/web/src/components/RepoEnvBadge.tsx
 +++ b/web/src/components/RepoEnvBadge.tsx
 @@ -1,50 +1,107 @@
@@ -350,9 +350,9 @@ index 12239ea..8669d7f 100644
 + * load.
   */
  
--import { VariableIcon } from "lucide-react";
+-import { FolderKeyIcon } from "lucide-react";
 +import type { ReactNode } from "react";
-+import { ScrollTextIcon, SquareTerminalIcon, VariableIcon } from "lucide-react";
++import { FolderKeyIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
  import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
  import { useRepoEnvNames } from "@/hooks/useRepoEnv";
  
@@ -384,14 +384,14 @@ index 12239ea..8669d7f 100644
 +          aria-label={`${joinAnd(parts)} for this repository`}
            data-testid="repo-env-badge"
          >
--          <VariableIcon className="size-3.5" />
+-          <FolderKeyIcon className="size-3.5" />
 -          {/* Phones show only the count, leaving the row's room to the
 -          repository's name. */}
 -          <span className="max-sm:hidden">{label}</span>
 -          <span className="sm:hidden">{names.length}</span>
 +          {names.length > 0 && (
 +            <>
-+              <VariableIcon className="size-3.5" />
++              <FolderKeyIcon className="size-3.5" />
 +              {/* Phones show only the count, leaving the row's room to the
 +              repository's name. */}
 +              <span className="max-sm:hidden">{label}</span>
@@ -773,7 +773,7 @@ index 922787e..aa820ce 100644
      renderPage();
      const card = await screen.findByRole("article", { name: ROADPASS });
 diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
-index bff95f4..8e5282d 100644
+index 4b2f150..04ad5e6 100644
 --- a/web/src/pages/RepoVariablesPage.tsx
 +++ b/web/src/pages/RepoVariablesPage.tsx
 @@ -6,14 +6,18 @@
