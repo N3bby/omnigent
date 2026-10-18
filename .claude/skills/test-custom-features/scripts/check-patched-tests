@@ -3,8 +3,9 @@
 # frontend suites, the project repositories frontend suites, the environment
 # menu's backend and frontend suites, the startup card's, the New session
 # screen's, the MCP servers page's and repository badge's, a first message
-# waiting for its sandbox, and the repository picker's Custom tab, against a
-# fresh, fully patched upstream checkout. Keep logs and JUnit reports.
+# waiting for its sandbox, the repository picker's Custom tab, and the chat
+# stream's reconnect after a network drop, against a fresh, fully patched
+# upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"

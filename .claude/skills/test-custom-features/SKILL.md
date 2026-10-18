@@ -127,6 +127,7 @@ PASS  images/server/web-patches/0028-mcp-servers.patch
 PASS  images/server/web-patches/0029-first-message-while-starting.patch
 PASS  images/server/web-patches/0030-inline-file-mentions.patch
 PASS  images/server/web-patches/0031-repo-picker-tabs.patch
+PASS  images/server/web-patches/0032-stream-reopen-timeout.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -187,7 +188,7 @@ application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
 `@` file search, a project's repositories, the environment menu, the
 startup card, the New session screen, MCP servers, a first message waiting for its sandbox or the repository picker's tabs, or changing their native message, composer, file-index, project
-settings, Stop, sandbox lifecycle, sandbox start or runner idle paths:
+settings, Stop, sandbox lifecycle, sandbox start, chat stream reconnect or runner idle paths:
 
 ```bash
 .claude/skills/test-custom-features/scripts/check-patched-tests
@@ -198,7 +199,7 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx` | 1962 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx` | 1964 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py` | 352 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
@@ -218,7 +219,8 @@ survives closing the app adds 2 frontend cases to `chatStore.test.ts` and the
 last backend file (2 cases); the repository picker's tabs add
 `RepoCustomForm.test.tsx` (7 cases), three New session cases (the tabs and
 the configured repositories) and two Repository variables page cases for the
-SSH key. These are
+SSH key; the chat's stream reconnect after a network drop
+(`0032-stream-reopen-timeout.patch`) adds 2 cases to `chatStore.test.ts`. These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -752,7 +754,10 @@ after the next message it names `feature-check`. Switch back, then remove
     another and press Stop while the card is still running: the message is
     back in the composer and the chat says **Stopped before the sandbox
     started, so the message wasn't sent.** When the sandbox is up, the agent
-    hasn't answered it. Delete both sessions.
+    hasn't answered it. Then start a third and keep the app open: when the
+    sandbox joins the tailnet, the phone's VPN reconnects and the chat may
+    show **Load failed**, but within about ten seconds of the VPN reconnecting the card carries on
+    and the agent answers, without restarting the app. Delete the sessions.
 
 ## 7. Clean up
 

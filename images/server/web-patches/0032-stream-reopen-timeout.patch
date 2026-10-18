@@ -1,0 +1,173 @@
+Reopen a session's stream when a reconnect gets no answer, and recover the
+sandbox status a dropped stream missed.
+
+When the network drops under the session stream without closing it, as a
+phone's VPN does when it reconnects, the stream errors and the pump reopens
+it at once. That open can sit on a dead route and never get an answer.
+Nothing ended it: the stall guard watches only the body, and the wake
+fast-path (recycleStreamIfStale) runs only when the tab becomes visible or
+the browser comes back online, and neither happens while the app stays in
+front. The chat froze until the app was restarted. An open now gives up
+after SSE_OPEN_TIMEOUT_MS (10 s, twice the server's slowest answer) and
+retries with the usual backoff.
+
+The reconnect's snapshot also didn't restore sandboxStatus. If the sandbox
+finished starting while the stream was down, its `ready` event was lost
+(the stream has no replay), and the chat kept treating the session as
+starting. reconnectStatusPatch now takes it from the snapshot like the
+other status fields.
+
+An upstream bug fix: delete it once upstream's startStreamPump times out the
+stream open and reconnectStatusPatch sets sandboxStatus.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0031.
+diff --git a/web/src/store/chatStore.test.ts b/web/src/store/chatStore.test.ts
+index 11f1e77a3..20eb2e196 100644
+--- a/web/src/store/chatStore.test.ts
++++ b/web/src/store/chatStore.test.ts
+@@ -79,6 +79,7 @@ import {
+   initChatStore,
+   pumpStreamEvents,
+   SSE_STALE_RECYCLE_MS,
++  SSE_OPEN_TIMEOUT_MS,
+   setPendingInitialPrompt,
+   startStreamPump,
+   useChatStore,
+@@ -13819,6 +13820,75 @@ describe("chatStore — startStreamPump reconnect loop", () => {
+     await loop;
+   });
+ 
++  it("retries a stream open the server never answers", async () => {
++    seedSession("conv_open_hang", []);
++    const sinks: StreamSink[] = [];
++    let opens = 0;
++    fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
++      const url = typeof input === "string" ? input : input.toString();
++      if (/\/v1\/sessions\/[^/]+\/stream$/.test(url)) {
++        opens += 1;
++        if (opens === 1) {
++          // A request on a connection the network dropped without closing
++          // (a phone's VPN reconnecting): no answer, ever, until aborted.
++          return new Promise<Response>((_resolve, reject) => {
++            init?.signal?.addEventListener(
++              "abort",
++              () => reject(new DOMException("aborted", "AbortError")),
++              { once: true },
++            );
++          });
++        }
++        const sink = pushableStream();
++        sinks.push(sink);
++        return mockResponse(null, { bodyStream: sink.stream });
++      }
++      return defaultFetchHandler(input, init);
++    });
++    const controller = new AbortController();
++    useChatStore.setState({ conversationId: "conv_open_hang", abortController: controller });
++
++    const loop = startStreamPump("conv_open_hang", controller, setState, getState);
++    await vi.advanceTimersByTimeAsync(SSE_OPEN_TIMEOUT_MS - 1_000);
++    expect(opens).toBe(1);
++
++    await vi.advanceTimersByTimeAsync(1_000 + 1_000);
++    expect(opens).toBe(2);
++    expect(sinks).toHaveLength(1);
++
++    sinks[0]!.push("data: [DONE]\n\n");
++    sinks[0]!.close();
++    await drainAsync(2);
++    await loop;
++  });
++
++  it("recovers a sandbox status the dropped stream missed", async () => {
++    seedSession("conv_sandbox_gap", []);
++    const sinks = routeStreamOpens();
++    const controller = new AbortController();
++    useChatStore.setState({
++      conversationId: "conv_sandbox_gap",
++      abortController: controller,
++      sandboxStatus: { stage: "connecting", error: null },
++    });
++
++    const loop = startStreamPump("conv_sandbox_gap", controller, setState, getState);
++    await drainAsync();
++    expect(sinks).toHaveLength(1);
++
++    // The sandbox comes up while the stream is down: its `ready` event is
++    // lost, and the snapshot no longer carries a sandbox status.
++    sinks[0]!.error();
++    await drainAsync();
++    expect(sinks).toHaveLength(2);
++    expect(useChatStore.getState().sandboxStatus).toBeNull();
++
++    sinks[1]!.push("data: [DONE]\n\n");
++    sinks[1]!.close();
++    await drainAsync(2);
++    await loop;
++  });
++
+   /** Drain reconcile's sequential await chain under fake timers. */
+   async function drainAsync(turns = 25): Promise<void> {
+     /* oxlint-disable no-await-in-loop */
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index 77aa1eb90..85fb7b94e 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -4852,6 +4852,10 @@ function reconnectStatusPatch(
+   // returns to "N background tasks still running" rather than vanishing on reconnect.
+   patch.backgroundTaskCount = session.backgroundTaskCount ?? 0;
+   patch.backgroundTasks = session.backgroundTasks ?? [];
++  // A sandbox launch that finished during the gap sent its last
++  // `session.sandbox_status` into the dead stream, which has no replay; the
++  // chat would otherwise treat the sandbox as starting for good.
++  patch.sandboxStatus = session.sandboxStatus ?? null;
+   if (session.contextWindow != null) patch.contextWindow = session.contextWindow;
+   if (session.lastTotalTokens != null) patch.tokensUsed = session.lastTotalTokens;
+   if (session.totalCostUsd != null) patch.sessionCostUsd = session.totalCostUsd;
+@@ -5458,6 +5462,15 @@ const streamAttemptActivity = new Map<AbortController, number>();
+ // ceiling; these event-driven checks make the common cases immediate.
+ export const SSE_STALE_RECYCLE_MS = 35_000;
+ 
++// How long a stream open may wait for the server's response headers. The
++// server answers within about 5 s (its slowest step, the runner relay
++// handshake, gives up after 5 s), so an open still unanswered after twice that
++// is stuck on a connection the network dropped without closing (a phone's VPN
++// reconnecting under it). Neither the stall guard, which only watches the
++// body, nor the wake fast-path, which needs the tab to come back or the
++// network to return, ends it then.
++export const SSE_OPEN_TIMEOUT_MS = 10_000;
++
+ /**
+  * Recycle every live stream attempt that looks dead — no bytes for
+  * `SSE_STALE_RECYCLE_MS` while its connection is supposedly up.
+@@ -5603,11 +5616,22 @@ export async function startStreamPump(
+       try {
+         const idle = presenceIdle.idleNow();
+         let streamRes: Response;
++        let openTimedOut = false;
++        const openTimer = setTimeout(() => {
++          openTimedOut = true;
++          attempt.abort();
++        }, SSE_OPEN_TIMEOUT_MS);
+         try {
+           streamRes = await openSessionStream(id, attempt.signal, { idle });
+         } catch (err) {
+           if (err instanceof Error && err.name === "AbortError") {
+             if (controller.signal.aborted || isConversationDisposed(id)) break;
++            if (openTimedOut) {
++              console.warn(
++                `Session ${id}: stream open unanswered in ${SSE_OPEN_TIMEOUT_MS} ms, will retry`,
++              );
++              failedOpens += 1;
++            }
+             // Only the attempt was aborted; reopen with current presence
+             // and host routing without discarding the stream binding.
+             continue;
+@@ -5616,6 +5640,8 @@ export async function startStreamPump(
+           console.warn(`Session ${id}: stream connect failed, will retry`, err);
+           failedOpens += 1;
+           continue;
++        } finally {
++          clearTimeout(openTimer);
+         }
+ 
+         if (controller.signal.aborted || isConversationDisposed(id)) break;
