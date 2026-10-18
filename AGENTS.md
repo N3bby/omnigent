@@ -86,7 +86,8 @@ browser tools, which control the user's own browser. Install it once with
 `mise exec node@<node> -- npx -y playwright@1 install --with-deps chromium`.
 
 **Take screenshots of UI changes**, before and after where that helps, and
-link them in your reply so the user can see the change. When a feature page
+link them in your reply so the user can see the change. Use the
+[Codex theme](docs/features/codex-theme.md) in dark mode. When a feature page
 shows that part of the UI, update or add its image in `docs/images/` as a
 small `.webp` with descriptive alt text, like the existing ones.
 
