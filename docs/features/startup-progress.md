@@ -38,11 +38,17 @@ words.
 ### When it's done
 
 A start that went well folds into one line, such as `Sandbox ready in 31s`,
-which opens again when you click it. It stays below your message, above the
-agent's working line, until the agent replies. A message you send later, to
-the sandbox that's running since, doesn't bring it back. A start no message
-asked for, such as **Start now** in the
-[environment menu](environment-menu.md), stays until your next message.
+which opens again when you click it. It stays at the end of the chat, above
+the agent's working line, until something happens after the start: the agent
+works, or you send a message. So:
+
+- A start your message asked for goes when the agent gets to it.
+- A start no message asked for, such as **Start now** in the
+  [environment menu](environment-menu.md), stays until your next message.
+- A sandbox that starts again in the middle of the agent's work goes with the
+  agent's next step.
+- A message you send later, to the sandbox that's running since, doesn't
+  bring it back.
 
 A setup script that failed doesn't stop the session: the agent starts
 anyway. The card stays open with the script's last lines, **Show log** and

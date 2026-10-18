@@ -11,10 +11,11 @@ goes wrong, why in plain words with the failed container's log, Try again
 for a clone problem, and Copy error details. "Log" opens the startup log,
 polled from GET /v1/sessions/{id}/startup-log while the start is going, with
 a filter per source. A finished start folds to "Sandbox ready in 30s" and
-stays until the agent answers the message that waited for it, not one sent
-to the running sandbox later. One no message asked for (Start now, Try
-again) stays until the next message; a failed setup script stays until
-dismissed.
+stays until the thread moves on after it: the agent works, or a new message
+comes. So a start a message asked for goes when the agent gets to it, one no
+message asked for (Start now, Try again) stays until the next message, and
+one in the middle of a turn goes with the agent's next step. A failed setup
+script stays until dismissed.
 It sits above Working… and pending questions, since the start comes first.
 
 The record arrives in the session snapshot (`startup`) and in session.startup
@@ -32,10 +33,10 @@ The environment menu is unchanged.
 Base: omnigent v0.18.0 (a8676d23e88d), after 0020-environment-menu.patch.
 diff --git a/web/src/components/chat/SandboxStartupCard.test.tsx b/web/src/components/chat/SandboxStartupCard.test.tsx
 new file mode 100644
-index 0000000..133937d
+index 0000000..3d770c5
 --- /dev/null
 +++ b/web/src/components/chat/SandboxStartupCard.test.tsx
-@@ -0,0 +1,365 @@
+@@ -0,0 +1,356 @@
 +import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 +import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 +import { MemoryRouter } from "react-router-dom";
@@ -278,52 +279,43 @@ index 0000000..133937d
 +
 +describe("startupCardVisible", () => {
 +  it("shows a start in progress or failed, whatever the thread", () => {
-+    expect(startupCardVisible(startup(), false, false)).toBe(true);
-+    expect(startupCardVisible(startup({ outcome: "failed" }), false, false)).toBe(true);
++    expect(startupCardVisible(startup(), false, NOW)).toBe(true);
++    expect(startupCardVisible(startup({ outcome: "failed" }), false, NOW)).toBe(true);
 +  });
 +
-+  it("shows a finished start until the agent answers", () => {
-+    const ready = startup({ outcome: "ready", steps: [step("agent", "done")] });
-+    expect(startupCardVisible(ready, true, false)).toBe(true);
-+    expect(startupCardVisible(ready, false, false)).toBe(false);
-+  });
-+
-+  it("shows a finished start only for the message that waited for it", () => {
-+    const ready = startup({ outcome: "ready", startedAt: NOW - 606, endedAt: NOW - 600 });
-+    // The message that woke the sandbox, sent while it started.
-+    expect(startupCardVisible(ready, true, false, NOW - 620)).toBe(true);
-+    // Its clock may be a little ahead of the server's.
-+    expect(startupCardVisible(ready, true, false, NOW - 597)).toBe(true);
-+    // A later message, to the sandbox that's running since.
-+    expect(startupCardVisible(ready, true, false, NOW - 30)).toBe(false);
-+    expect(startupCardVisible(ready, true, false, null)).toBe(false);
-+    // Answered, the message that woke it, or a later one.
-+    expect(startupCardVisible(ready, false, false, NOW - 620)).toBe(false);
-+    expect(startupCardVisible(ready, false, false, NOW - 30)).toBe(false);
-+  });
-+
-+  it("keeps a start no message asked for until the next message", () => {
-+    // Start now on a sandbox stopped since the last answer an hour ago.
-+    const woken = startup({ outcome: "ready", startedAt: NOW - 20, endedAt: NOW - 14 });
-+    expect(startupCardVisible(woken, false, false, NOW - 3600)).toBe(true);
-+    expect(startupCardVisible(woken, false, false, null)).toBe(true);
-+    // The next message goes to the running sandbox.
-+    expect(startupCardVisible(woken, true, false, NOW)).toBe(false);
++  it("shows a finished start until the thread moves on after it", () => {
++    const ready = startup({ outcome: "ready", startedAt: NOW - 120, endedAt: NOW - 114 });
++    // The message that woke it, or the last answer before Start now.
++    expect(startupCardVisible(ready, false, NOW - 121)).toBe(true);
++    expect(startupCardVisible(ready, false, NOW - 3600)).toBe(true);
++    // The browser's clock may be a little ahead of the server's.
++    expect(startupCardVisible(ready, false, NOW - 111)).toBe(true);
++    // The agent's next step, in its answer or in a turn the start came in the
++    // middle of, or a new message to the running sandbox.
++    expect(startupCardVisible(ready, false, NOW - 60)).toBe(false);
++    // No thread, or nothing in it with a time.
++    expect(startupCardVisible(ready, false)).toBe(true);
++    expect(startupCardVisible(ready, false, null)).toBe(true);
 +  });
 +
 +  it("keeps a warning until it's dismissed, and a running setup script", () => {
 +    const warned = startup({
 +      outcome: "ready",
++      endedAt: NOW - 14,
 +      warning: { title: "x", body: "", log: null, source: null, raw: null, child: null },
 +    });
-+    expect(startupCardVisible(warned, false, false)).toBe(true);
-+    expect(startupCardVisible(warned, false, true)).toBe(false);
-+    const setup = startup({ outcome: "ready", steps: [step("setup", "running")] });
-+    expect(startupCardVisible(setup, false, false)).toBe(true);
++    expect(startupCardVisible(warned, false, NOW)).toBe(true);
++    expect(startupCardVisible(warned, true, NOW)).toBe(false);
++    const setup = startup({
++      outcome: "ready",
++      endedAt: NOW - 14,
++      steps: [step("setup", "running")],
++    });
++    expect(startupCardVisible(setup, false, NOW)).toBe(true);
 +  });
 +
 +  it("hides a cancelled start", () => {
-+    expect(startupCardVisible(startup({ outcome: "cancelled" }), true, false)).toBe(false);
++    expect(startupCardVisible(startup({ outcome: "cancelled" }), false)).toBe(false);
 +  });
 +});
 +
@@ -338,14 +330,14 @@ index 0000000..133937d
 +      conversationId: "conv_1",
 +      sandboxStartup: startup({ outcome: "failed", failure: CLONE_FAILURE }),
 +    });
-+    renderCard(<SessionStartupCard awaitingReply />);
++    renderCard(<SessionStartupCard />);
 +    expect(screen.getByTestId("sandbox-startup-card")).toHaveAttribute("data-outcome", "failed");
 +    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
 +  });
 +
 +  it("renders nothing without a start", () => {
 +    useChatStore.setState({ conversationId: "conv_1", sandboxStartup: null });
-+    renderCard(<SessionStartupCard awaitingReply />);
++    renderCard(<SessionStartupCard />);
 +    expect(screen.queryByTestId("sandbox-startup-card")).toBeNull();
 +  });
 +});
@@ -403,10 +395,10 @@ index 0000000..133937d
 +});
 diff --git a/web/src/components/chat/SandboxStartupCard.tsx b/web/src/components/chat/SandboxStartupCard.tsx
 new file mode 100644
-index 0000000..867e74a
+index 0000000..0c7af9f
 --- /dev/null
 +++ b/web/src/components/chat/SandboxStartupCard.tsx
-@@ -0,0 +1,783 @@
+@@ -0,0 +1,771 @@
 +import { useEffect, useMemo, useRef, useState } from "react";
 +import {
 +  CheckIcon,
@@ -896,59 +888,47 @@ index 0000000..867e74a
 + * Whether the thread shows the startup card.
 + *
 + * Always while the sandbox starts and after it failed. A finished start stays
-+ * until the agent answers the message that waited for it; one no message asked
-+ * for (Start now, Try again) stays until the next message. With a warning (a
-+ * failed setup script), it stays until it's dismissed. A cancelled one doesn't
-+ * show.
++ * until the thread moves on after it: the agent works, or a new message comes.
++ * So a start a message asked for goes when the agent gets to it, one no message
++ * asked for (Start now, Try again) stays until the next message, and one in the
++ * middle of a turn goes with the agent's next step. With a warning (a failed
++ * setup script), it stays until it's dismissed. A cancelled one doesn't show.
 + *
 + * @param startup - The session's current or last start.
-+ * @param awaitingReply - Whether the thread's last message is the user's.
 + * @param isDismissed - Whether its warning was dismissed.
-+ * @param sentAt - When the user's last message was sent, answered or not, in
-+ *   Unix seconds; `null` when unknown or there's none. A message sent after the
-+ *   start ended, to a running sandbox, doesn't bring it back. Leave it out
-+ *   where any unanswered message counts.
++ * @param lastActivityAt - When the thread's newest message or agent activity
++ *   came, in Unix seconds; `null` when unknown or there's none. Leave it out
++ *   where there's no thread, and a finished start stays.
 + */
 +export function startupCardVisible(
 +  startup: SandboxStartup,
-+  awaitingReply: boolean,
 +  isDismissed: boolean,
-+  sentAt?: number | null,
++  lastActivityAt?: number | null,
 +): boolean {
 +  if (startup.outcome === "running" || startup.outcome === "failed") return true;
 +  if (startup.outcome === "cancelled") return false;
 +  if (startup.warning && !isDismissed) return true;
 +  if (startup.steps.some((s) => s.id === "setup" && s.state === "running")) return true;
-+  if (sentAt === undefined) return awaitingReply;
-+  if (awaitingReply) {
-+    if (startup.endedAt === null) return true;
-+    return sentAt !== null && sentAt <= startup.endedAt + SENT_DURING_START_SLACK_S;
-+  }
-+  // Answered: shown only when the start came well after that message, so no
-+  // message asked for it; it then stays until the next one.
-+  return sentAt === null || sentAt < startup.startedAt - SENT_BEFORE_START_S;
++  if (startup.endedAt === null || lastActivityAt == null) return true;
++  return lastActivityAt <= startup.endedAt + CLOCK_SLACK_S;
 +}
 +
-+// The message's time is the browser's while live and the start's the server's.
-+const SENT_DURING_START_SLACK_S = 5;
-+// A message wakes the sandbox straight away; one this much older didn't.
-+const SENT_BEFORE_START_S = 30;
++// The thread's times are the browser's while live, and the start's the
++// server's. A message that woke the sandbox can also be stored just after.
++const CLOCK_SLACK_S = 5;
 +
 +/**
 + * The open session's startup card, from the chat store, or nothing when the
 + * session has no start to show.
 + *
-+ * @param awaitingReply - Whether the thread's last message is the user's: a
-+ *   finished start stays until the agent answers.
-+ * @param sentAt - When that message was sent; see {@link startupCardVisible}.
++ * @param lastActivityAt - When the thread last moved; see
++ *   {@link startupCardVisible}.
 + */
 +export function SessionStartupCard({
-+  awaitingReply,
-+  sentAt,
++  lastActivityAt,
 +  className,
 +}: {
-+  awaitingReply: boolean;
-+  sentAt?: number | null;
++  lastActivityAt?: number | null;
 +  className?: string;
 +}) {
 +  const startup = useChatStore((s) => s.sandboxStartup);
@@ -957,7 +937,7 @@ index 0000000..867e74a
 +  const [, setDismissals] = useState(0);
 +  if (!startup || !sessionId) return null;
 +  const key = `${sessionId}:${startup.startedAt}`;
-+  if (!startupCardVisible(startup, awaitingReply, dismissed.has(key), sentAt)) return null;
++  if (!startupCardVisible(startup, dismissed.has(key), lastActivityAt)) return null;
 +  const agentLabel =
 +    nativeCodingAgentForWrapper(session?.labels?.[WRAPPER_LABEL_KEY])?.displayName ?? null;
 +  return (
@@ -1191,7 +1171,7 @@ index 0000000..867e74a
 +  });
 +}
 diff --git a/web/src/components/chat/Transcript.tsx b/web/src/components/chat/Transcript.tsx
-index ebbb2bc..3c98ea4 100644
+index ebbb2bc..88d902e 100644
 --- a/web/src/components/chat/Transcript.tsx
 +++ b/web/src/components/chat/Transcript.tsx
 @@ -34,6 +34,7 @@ import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
@@ -1207,20 +1187,20 @@ index ebbb2bc..3c98ea4 100644
    const showArcaBanner = arcaWarning.showForHost(hostId);
    const hasPinnedBanner = display.hasTasks || showArcaBanner;
 +  // The sandbox startup card (this deployment) replaces "Working…" while the
-+  // sandbox starts, and stays until the agent answers.
++  // sandbox starts, and stays until the thread moves on.
 +  const startupRunning = useChatStore((s) => s.sandboxStartup?.outcome === "running");
 +  const startupFailed = useChatStore((s) => s.sandboxStartup?.outcome === "failed");
-+  // Whether the last message is unanswered, and when it was sent: a finished
-+  // start shows for the message that waited for it, or, when no message asked
-+  // for it (Start now), until the next one.
-+  const awaiting = useMemo((): { reply: boolean; sentAt: number | null } => {
-+    let reply = true;
-+    for (let i = display.bubbles.length - 1; i >= 0; i--) {
-+      const b = display.bubbles[i];
-+      if (b.kind === "assistant") reply = false;
-+      if (b.kind === "user" && !isSystemBubble(b)) return { reply, sentAt: b.createdAtS ?? null };
++  // When the thread last moved, a message or the agent's work: a finished start
++  // shows until it moves on after it.
++  const lastActivityAt = useMemo((): number | null => {
++    let newest: number | null = null;
++    for (const b of display.bubbles) {
++      if (b.kind !== "assistant" && (b.kind !== "user" || isSystemBubble(b))) continue;
++      if (b.createdAtS !== undefined && (newest === null || b.createdAtS > newest)) {
++        newest = b.createdAtS;
++      }
 +    }
-+    return { reply: false, sentAt: null };
++    return newest;
 +  }, [display.bubbles]);
    return (
      <>
@@ -1234,7 +1214,7 @@ index ebbb2bc..3c98ea4 100644
 +              sandboxLaunching || startupFailed ? (
 +                <>
 +                  <RunnerStartingIndicator variant="hero" />
-+                  <SessionStartupCard awaitingReply className="mx-auto mt-[18vh] max-w-xl" />
++                  <SessionStartupCard className="mx-auto mt-[18vh] max-w-xl" />
 +                </>
                ) : (
                  <ConversationEmptyState>
@@ -1245,7 +1225,7 @@ index ebbb2bc..3c98ea4 100644
                  />
 +                {/* How the sandbox start is going, step by step (this deployment).
 +                The start comes before the reply, so it's above Working…. */}
-+                <SessionStartupCard awaitingReply={awaiting.reply} sentAt={awaiting.sentAt} />
++                <SessionStartupCard lastActivityAt={lastActivityAt} />
                  {/* Pending elicitation cards, floated to the bottom of the chat
                  so an outstanding question stays in view. Newest renders last,
                  nearest the composer. Above the Working… indicator. */}
@@ -2122,7 +2102,7 @@ index 0000000..1c0fdb2
 +  });
 +});
 diff --git a/web/src/shell/MainTerminalView.tsx b/web/src/shell/MainTerminalView.tsx
-index 20a564a..246d660 100644
+index 20a564a..2df285c 100644
 --- a/web/src/shell/MainTerminalView.tsx
 +++ b/web/src/shell/MainTerminalView.tsx
 @@ -22,6 +22,8 @@ import {
@@ -2183,7 +2163,7 @@ index 20a564a..246d660 100644
 +                data-testid="terminal-starting-up"
 +                className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-6"
 +              >
-+                <SessionStartupCard awaitingReply className="max-w-xl" />
++                <SessionStartupCard className="max-w-xl" />
 +              </div>
 +            ) : (
 +              <div
@@ -2203,7 +2183,7 @@ index 20a564a..246d660 100644
 +            )
 +          ) : startupFailed ? (
 +            <div className="flex flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-6">
-+              <SessionStartupCard awaitingReply className="max-w-xl" />
++              <SessionStartupCard className="max-w-xl" />
              </div>
            ) : resumeAvailable ? (
              <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
