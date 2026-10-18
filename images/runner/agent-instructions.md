@@ -65,6 +65,10 @@ screenshot or report, link it with a Markdown link to its absolute path:
 Don't use relative paths or bare paths. The user opens these links from the
 browser.
 
+Keep files the user should open under `/home/omnigent`, never under `/tmp`,
+even when your harness offers a scratch directory there: the user gets a 404
+for links into `/tmp`, and it's gone when the Pod stops.
+
 ## Connection details
 
 The Pod is usually on the user's tailnet. When the user asks how to reach

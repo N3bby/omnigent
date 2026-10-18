@@ -87,9 +87,10 @@ browser tools, which control the user's own browser. Install it once with
 
 **Take screenshots of UI changes**, before and after where that helps, and
 link them in your reply so the user can see the change. Use the
-[Codex theme](docs/features/codex-theme.md) in dark mode. When a feature page
-shows that part of the UI, update or add its image in `docs/images/` as a
-small `.webp` with descriptive alt text, like the existing ones.
+[Codex theme](docs/features/codex-theme.md) in dark mode, and save them in
+`.generated/screenshots/`. When a feature page shows that part of the UI,
+update or add its image in `docs/images/` as a small `.webp` with
+descriptive alt text, like the existing ones.
 
 For runner patches, set up a second checkout the same way with the runner
 set, and connect its host to that server. Give it its own data and config directories: your
