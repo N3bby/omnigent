@@ -1,0 +1,101 @@
+Post a Claude Code session's first message while its sandbox starts.
+
+Since upstream #8039, the first message of a Claude Code session stays in
+the browser (initialDraft) until Claude Code reports its model, so Stop can
+put it back in the composer before it reaches the agent. For a sandbox
+session that's the whole start, a minute or more. On a phone, closing the
+app in that time lost the message: it was never sent. Codex sessions never
+waited.
+
+modelSelectionPending no longer waits for Claude's model while the session's
+sandbox is starting (sandboxStatus is set and not ready or failed). The
+message is posted straight away and waits on the server, which delivers it
+once the sandbox is up and, with
+images/server/patches/0020-stop-message-waiting-for-sandbox.patch, lets Stop
+take it back: the POST answers 409, so send() puts the draft back in the
+composer. A pending model switch, and a session on your own machine, keep
+the draft local as before.
+Base: omnigent v0.18.0 (a8676d23e88d).
+diff --git a/web/src/store/chatStore.test.ts b/web/src/store/chatStore.test.ts
+index 865b7b08b..11f1e77a3 100644
+--- a/web/src/store/chatStore.test.ts
++++ b/web/src/store/chatStore.test.ts
+@@ -3601,9 +3601,11 @@ describe("chatStore — first message during native model startup", () => {
+   const sessionId = "conv_native_startup";
+   const original = "unfinished first prompt";
+   let harness = "claude-native";
++  let sandboxStatus: { stage: string; error: string | null } | null = null;
+ 
+   beforeEach(() => {
+     harness = "claude-native";
++    sandboxStatus = null;
+     clearSessionDrafts();
+     seedSession(sessionId);
+     fetchMock.mockImplementation((input, init) => {
+@@ -3619,6 +3621,7 @@ describe("chatStore — first message during native model startup", () => {
+               harness === "claude-native" ? "claude-code-native-ui" : "codex-native-ui",
+           },
+           llm_model: null,
++          sandbox_status: sandboxStatus,
+         });
+       }
+       return defaultFetchHandler(input, init);
+@@ -3693,6 +3696,31 @@ describe("chatStore — first message during native model startup", () => {
+     expect(useChatStore.getState().failedSendDraft).toBeNull();
+   });
+ 
++  it("posts the first message while the sandbox starts, so the server holds it", async () => {
++    sandboxStatus = { stage: "provisioning", error: null };
++    begin();
++    await settle();
++
++    expect(eventBodies()).toEqual([
++      {
++        type: "message",
++        data: expect.objectContaining({ content: [{ type: "input_text", text: original }] }),
++      },
++    ]);
++    expect(useChatStore.getState().pendingUserMessages[0]?.initialDraft).toBeUndefined();
++    // Stop goes to the server, which takes the waiting message back.
++    useChatStore.getState().stop();
++    await settle();
++    expect(eventBodies().at(-1)?.type).toBe("interrupt");
++  });
++
++  it("keeps the first draft local when the sandbox failed to start", async () => {
++    sandboxStatus = { stage: "failed", error: "no room" };
++    begin();
++    await settle();
++    expect(eventBodies()).toEqual([]);
++  });
++
+   it("cancels and restores repeated corrected drafts before native startup finishes", async () => {
+     begin();
+     await settle();
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index 0756504cf..77aa1eb90 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -1437,12 +1437,21 @@ const SEND_CHAIN_MAX_WAIT_MS = 180_000;
+ 
+ function modelSelectionPending(state: ConversationState): boolean {
+   // Claude reports its model before a prompt; other native CLIs may need a turn.
++  // While the sandbox starts, the server holds the message instead (and Stop
++  // takes it back there), so it isn't lost if the app closes during the start.
+   return (
+     state.pendingModelChange !== null ||
+-    (state.sessionModelSeeded && state.sessionHarness === "claude-native")
++    (state.sessionModelSeeded &&
++      state.sessionHarness === "claude-native" &&
++      !sandboxStarting(state))
+   );
+ }
+ 
++function sandboxStarting(state: ConversationState): boolean {
++  const stage = state.sandboxStatus?.stage;
++  return stage !== undefined && stage !== "ready" && stage !== "failed";
++}
++
+ /** Keep the draft local while native model startup or a model switch is pending. */
+ function waitForModelSelection(conversationId: string, tempId: string): Promise<boolean> {
+   return new Promise((resolve, reject) => {

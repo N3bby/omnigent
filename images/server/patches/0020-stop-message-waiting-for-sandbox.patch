@@ -1,0 +1,241 @@
+Let Stop take back a message waiting for its session's sandbox to start.
+
+A message for a session whose sandbox is still starting waits in its POST
+(_await_settled_managed_launch) and goes to the agent once the sandbox is
+up. Upstream's web UI kept a Claude Code session's first message in the
+browser for that whole start, so Stop could still take it back; on a phone,
+closing the app during the start lost the message. The web UI now posts it
+straight away (web-patches/0029-first-message-while-starting.patch), so the
+server has to be the one that takes it back: Stop (an interrupt) during the
+start sets an event each waiting message watches, and the message answers
+409 "Stopped before the sandbox started" instead of being sent. A message
+sent after Stop waits as usual.
+
+The waiting POST already outlives its client: Starlette doesn't cancel a
+handler that isn't reading the request when the client disconnects. The test
+covers that too, on the Starlette the server image resolves.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0019-mcp-servers.patch.
+diff --git a/omnigent/server/routes/sessions/routes_events.py b/omnigent/server/routes/sessions/routes_events.py
+index dc5541e9a..41387dc3f 100644
+--- a/omnigent/server/routes/sessions/routes_events.py
++++ b/omnigent/server/routes/sessions/routes_events.py
+@@ -310,6 +310,60 @@ _retry_recovery_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+ _retry_recovery_tasks: WorkspaceScopedCache[str, asyncio.Task[dict[str, bool | str]]] = (
+     WorkspaceScopedCache()
+ )
++# Messages waiting for their session's sandbox to start, by session id: each
++# waits until its event is set, which Stop does.
++_messages_waiting_for_sandbox: WorkspaceScopedCache[str, set[asyncio.Event]] = (
++    WorkspaceScopedCache()
++)
++
++
++async def _await_sandbox_unless_stopped(session_id: str, launch: Any) -> None:
++    """
++    Wait for a starting sandbox, as ``_await_settled_managed_launch`` does,
++    unless Stop takes the message back first.
++
++    The web UI posts a session's first message as soon as it's created, so the
++    message is safe on the server if the browser goes away, and Stop during the
++    start still means it never runs.
++
++    :param session_id: Session/conversation identifier.
++    :param launch: The session's ``ManagedLaunch``.
++    :raises OmnigentError: The launch's failure, or a conflict when Stop came
++        first.
++    """
++    stopped = asyncio.Event()
++    waiting = _messages_waiting_for_sandbox.get(session_id)
++    if waiting is None:
++        waiting = _messages_waiting_for_sandbox[session_id] = set()
++    waiting.add(stopped)
++    started = asyncio.ensure_future(_await_settled_managed_launch(launch))
++    stop = asyncio.ensure_future(stopped.wait())
++    try:
++        await asyncio.wait({started, stop}, return_when=asyncio.FIRST_COMPLETED)
++    finally:
++        stop.cancel()
++        waiting.discard(stopped)
++        if not waiting and _messages_waiting_for_sandbox.get(session_id) is waiting:
++            del _messages_waiting_for_sandbox[session_id]
++        if not started.done():
++            started.cancel()
++    if not started.done():
++        raise OmnigentError(
++            "Stopped before the sandbox started, so the message wasn't sent.",
++            code=ErrorCode.CONFLICT,
++        )
++    started.result()
++
++
++def _stop_messages_waiting_for_sandbox(session_id: str) -> None:
++    """
++    Take back the messages still waiting for *session_id*'s sandbox to start.
++
++    :param session_id: Session/conversation identifier.
++    """
++    for stopped in _messages_waiting_for_sandbox.get(session_id, set()):
++        stopped.set()
++
+ 
+ # POST /events types that arrive per streamed chunk — the harness echoing its
+ # own live output back. Their per-call audit row is pure noise (the content is
+@@ -1481,6 +1535,9 @@ def register_events_routes(
+                 )
+             else:
+                 _publish_interrupted(session_id)
++                # A message waiting for the sandbox to start hasn't reached
++                # the agent yet: take it back rather than run it once it starts.
++                _stop_messages_waiting_for_sandbox(session_id)
+                 # Fence the cancelled turn (see _interrupt_fenced_sessions).
+                 _interrupt_fenced_sessions.add(session_id)
+                 # Read before the forward so a message sent after Stop stays live;
+@@ -2418,7 +2475,7 @@ def register_events_routes(
+                 _managed_tracker.get(session_id) if _managed_tracker is not None else None
+             )
+             if _managed_launch is not None:
+-                await _await_settled_managed_launch(_managed_launch)
++                await _await_sandbox_unless_stopped(session_id, _managed_launch)
+                 # The launch bound host_id / workspace / runner_id to
+                 # the row after this handler's fetch — re-read so the
+                 # resolution below sees the bound runner.
+diff --git a/tests/server/integration/test_message_waiting_for_sandbox.py b/tests/server/integration/test_message_waiting_for_sandbox.py
+new file mode 100644
+index 000000000..02dc88b3f
+--- /dev/null
++++ b/tests/server/integration/test_message_waiting_for_sandbox.py
+@@ -0,0 +1,134 @@
++"""A session's first message waits on the server while its sandbox starts.
++
++The web UI posts it as soon as the session exists, so closing the app during
++the start doesn't lose it. Stop during the start still takes it back.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import threading
++from collections.abc import Callable
++
++import pytest
++from asgiref.testing import ApplicationCommunicator
++
++from omnigent.server.routes._sessions.orchestration import _session_is_starting
++from tests.server.helpers import (
++    FakeSandboxLauncher,
++    create_test_agent,
++    install_fake_modal_launcher,
++)
++from tests.server.integration.test_host_session_binding import (
++    ManagedSessionEnv,
++    managed_session_env,  # noqa: F401 - fixture
++)
++
++pytestmark = pytest.mark.asyncio
++
++_MESSAGE = {
++    "type": "message",
++    "data": {"role": "user", "content": [{"type": "input_text", "text": "hello sandbox"}]},
++}
++
++
++async def _start_session(
++    env: ManagedSessionEnv, monkeypatch: pytest.MonkeyPatch
++) -> tuple[str, threading.Event]:
++    """Create a managed session whose sandbox is held mid-start, and its gate."""
++    gate = threading.Event()
++    install_fake_modal_launcher(
++        monkeypatch, FakeSandboxLauncher(provision_gate=gate, fail_on_host_start=True)
++    )
++    agent = await create_test_agent(env.client, name="waiting-message-agent")
++    resp = await env.client.post(
++        "/v1/sessions", json={"agent_id": agent["id"], "host_type": "managed"}
++    )
++    assert resp.status_code == 201, resp.text
++    return resp.json()["id"], gate
++
++
++async def _wait_until(condition: Callable[[], bool], timeout_s: float = 5.0) -> None:
++    deadline = asyncio.get_running_loop().time() + timeout_s
++    while not condition():
++        assert asyncio.get_running_loop().time() < deadline, "condition never held"
++        await asyncio.sleep(0.02)
++
++
++def _post_scope(path: str, body: bytes) -> dict[str, object]:
++    return {
++        "type": "http",
++        "asgi": {"version": "3.0"},
++        "http_version": "1.1",
++        "method": "POST",
++        "scheme": "http",
++        "path": path,
++        "raw_path": path.encode(),
++        "root_path": "",
++        "query_string": b"",
++        "headers": [
++            (b"host", b"test"),
++            (b"content-type", b"application/json"),
++            (b"content-length", str(len(body)).encode()),
++        ],
++        "client": ("127.0.0.1", 50000),
++        "server": ("test", 80),
++    }
++
++
++async def test_a_waiting_message_outlives_a_client_that_disconnects(
++    managed_session_env: ManagedSessionEnv,  # noqa: F811
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    env = managed_session_env
++    session_id, gate = await _start_session(env, monkeypatch)
++    body = json.dumps(_MESSAGE).encode()
++    client = ApplicationCommunicator(
++        env.app, _post_scope(f"/v1/sessions/{session_id}/events", body)
++    )
++    await client.send_input({"type": "http.request", "body": body, "more_body": False})
++    await _wait_until(lambda: _session_is_starting(session_id))
++
++    # The phone app closes. The message keeps waiting for the sandbox.
++    await client.send_input({"type": "http.disconnect"})
++    await asyncio.sleep(0.3)
++    assert _session_is_starting(session_id)
++
++    # It finishes once the start settles (here, failed).
++    gate.set()
++    await _wait_until(lambda: not _session_is_starting(session_id), timeout_s=15.0)
++    response = await client.receive_output(timeout=5.0)
++    assert response["type"] == "http.response.start"
++    assert response["status"] == 503
++
++
++async def test_stop_takes_back_a_message_waiting_for_the_sandbox(
++    managed_session_env: ManagedSessionEnv,  # noqa: F811
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    env = managed_session_env
++    session_id, gate = await _start_session(env, monkeypatch)
++    message = asyncio.create_task(
++        env.client.post(f"/v1/sessions/{session_id}/events", json=_MESSAGE)
++    )
++    await _wait_until(lambda: _session_is_starting(session_id))
++
++    stop = await env.client.post(f"/v1/sessions/{session_id}/events", json={"type": "interrupt"})
++    assert stop.status_code < 400, stop.text
++
++    resp = await asyncio.wait_for(message, timeout=5.0)
++    # A coded refusal, so the web UI gives the draft back.
++    assert resp.status_code == 409, resp.text
++    assert "Stopped before the sandbox started" in resp.text
++    assert not _session_is_starting(session_id)
++
++    # A message sent after Stop waits for the sandbox as usual.
++    later = asyncio.create_task(
++        env.client.post(f"/v1/sessions/{session_id}/events", json=_MESSAGE)
++    )
++    await _wait_until(lambda: _session_is_starting(session_id))
++    gate.set()
++    resp = await asyncio.wait_for(later, timeout=15.0)
++    assert resp.status_code == 503, resp.text
++    assert "managed sandbox failed to launch" in resp.text
