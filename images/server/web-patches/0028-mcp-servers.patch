@@ -1,0 +1,1790 @@
+Add Settings -> MCP servers, where admins keep the MCP servers sessions'
+Claude Code and Codex get: for every session, or for sessions on one
+repository.
+
+McpServersPage groups the servers under "Every session" and each repository,
+as cards (their URL or command line, header or variable names, and which
+agents get them), with edit and remove actions. The editor takes where the
+server goes, a name, the agents, and either a URL with headers or a command
+with one argument per line and variables. A repository's server may share a
+name with one for every session, which it replaces in its sessions; the page
+says so. Header and variable values are write-only, like repository
+variables: a blank field keeps the stored value. lib/mcpServers.ts calls the
+/v1/mcp-servers routes in images/server/omnigent_mcp_servers_api.py.
+
+Repository variables cards count a repository's MCP servers, and removing a
+repository says it removes them too.
+Applies after 0027-shortcut-key-width.patch.
+Base: omnigent v0.18.0 (a8676d23e88d).
+
+diff --git a/web/src/hooks/useMcpServers.ts b/web/src/hooks/useMcpServers.ts
+new file mode 100644
+index 0000000..7ceb7ed
+--- /dev/null
++++ b/web/src/hooks/useMcpServers.ts
+@@ -0,0 +1,42 @@
++import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import {
++  deleteMcpServer,
++  fetchMcpServers,
++  type SaveMcpServer,
++  saveMcpServer,
++} from "@/lib/mcpServers";
++
++const LIST_KEY = ["mcp-servers"];
++
++/** Every MCP server (admin only). */
++export function useMcpServers() {
++  return useQuery({ queryKey: LIST_KEY, queryFn: fetchMcpServers, staleTime: 5_000 });
++}
++
++function useInvalidate() {
++  const queryClient = useQueryClient();
++  return () => {
++    void queryClient.invalidateQueries({ queryKey: LIST_KEY });
++    // A repository's servers show on its Repository variables card.
++    void queryClient.invalidateQueries({ queryKey: ["repo-env"] });
++  };
++}
++
++/** Add or replace a server, null keeping a header's or variable's current value. */
++export function useSaveMcpServer() {
++  const invalidate = useInvalidate();
++  return useMutation({
++    mutationFn: (body: SaveMcpServer) => saveMcpServer(body),
++    onSuccess: invalidate,
++  });
++}
++
++/** Remove a server, global or a repository's. */
++export function useDeleteMcpServer() {
++  const invalidate = useInvalidate();
++  return useMutation({
++    mutationFn: (server: { id: string; repository: string | null }) =>
++      deleteMcpServer(server.id, server.repository),
++    onSuccess: invalidate,
++  });
++}
+diff --git a/web/src/hooks/useRepoEnv.ts b/web/src/hooks/useRepoEnv.ts
+index afa384a..115f9d9 100644
+--- a/web/src/hooks/useRepoEnv.ts
++++ b/web/src/hooks/useRepoEnv.ts
+@@ -34,6 +34,8 @@ function useInvalidate() {
+   const queryClient = useQueryClient();
+   return () => {
+     void queryClient.invalidateQueries({ queryKey: LIST_KEY });
++    // Removing a repository removes its MCP servers too.
++    void queryClient.invalidateQueries({ queryKey: ["mcp-servers"] });
+     void queryClient.invalidateQueries({ queryKey: [NAMES_KEY] });
+   };
+ }
+diff --git a/web/src/lib/mcpServers.ts b/web/src/lib/mcpServers.ts
+new file mode 100644
+index 0000000..a771bdd
+--- /dev/null
++++ b/web/src/lib/mcpServers.ts
+@@ -0,0 +1,141 @@
++/**
++ * MCP servers for sessions' Claude Code and Codex (``/v1/mcp-servers``, added
++ * by this deployment): global ones for every session, and a repository's for
++ * sessions on it, where they replace a global server of the same name.
++ *
++ * Header and variable values only go to the server. Listing returns their
++ * names, and saving a name with ``null`` keeps its current value. The checks
++ * here mirror ``omnigent_mcp_servers.py`` so the page can flag a field before
++ * saving; the server checks again.
++ */
++
++import { authenticatedFetch } from "./identity";
++
++export type McpAgent = "claude" | "codex";
++export type McpTransport = "http" | "stdio";
++
++export const MCP_AGENTS: { id: McpAgent; label: string }[] = [
++  { id: "claude", label: "Claude Code" },
++  { id: "codex", label: "Codex" },
++];
++
++/** One server, from ``GET /v1/mcp-servers``. */
++export interface McpServer {
++  id: string;
++  /** What the agents call it, e.g. ``"figma"``; their tools carry it as a prefix. */
++  name: string;
++  /** ``host/owner/repo`` for a repository's server, or null for every session's. */
++  repository: string | null;
++  transport: McpTransport;
++  /** The HTTP server's URL, or null for a command. */
++  url: string | null;
++  /** The HTTP server's header names, sorted. Never values. */
++  header_names: string[];
++  /** The command that starts a stdio server, or null for HTTP. */
++  command: string | null;
++  args: string[];
++  /** The stdio server's variable names, sorted. Never values. */
++  env_names: string[];
++  /** The agents that get it; empty when it's switched off. */
++  agents: McpAgent[];
++  /** ISO-8601 time of the last change, or null. */
++  updated_at: string | null;
++  /** Who last saved it, or null. */
++  updated_by: string | null;
++}
++
++/** Body for ``PUT /v1/mcp-servers``; without ``id`` it adds a server. */
++export interface SaveMcpServer {
++  id?: string;
++  /** owner/repo or a clone URL for a repository's server; null for every session's. */
++  repository: string | null;
++  name: string;
++  transport: McpTransport;
++  agents: McpAgent[];
++  url?: string;
++  /** Each header's new value, or null to keep the current one. Names left out are removed. */
++  headers?: Record<string, string | null>;
++  command?: string;
++  args?: string[];
++  /** Each variable's new value, or null to keep the current one. Names left out are removed. */
++  env?: Record<string, string | null>;
++}
++
++const NAME = /^[A-Za-z0-9_-]{1,64}$/;
++const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/;
++const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
++
++/**
++ * Why a server can't have this name, or null when it can.
++ *
++ * @param taken The names already used where it goes: every session's, or the
++ *   repository's. The same name in the other place is fine.
++ */
++export function serverNameError(name: string, taken: string[]): string | null {
++  if (!name) return null;
++  if (!NAME.test(name)) return "Use letters, digits, - and _, up to 64 characters.";
++  if (name.toLowerCase() === "omnigent") return "omnigent is Omnigent's own MCP server.";
++  if (taken.some((t) => t.toLowerCase() === name.toLowerCase())) {
++    return `There's already an MCP server called ${name} here.`;
++  }
++  return null;
++}
++
++/** Why this isn't a URL the agents can reach, or null when it is. */
++export function urlError(url: string): string | null {
++  if (!url.trim()) return null;
++  try {
++    const parsed = new URL(url.trim());
++    if ((parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.host) return null;
++  } catch {
++    // Falls through to the message.
++  }
++  return "Give the server's URL, starting with https://.";
++}
++
++export function headerNameError(name: string): string | null {
++  return HEADER_NAME.test(name) ? null : "Use a header name such as Authorization, without spaces.";
++}
++
++export function envNameError(name: string): string | null {
++  return ENV_NAME.test(name)
++    ? null
++    : "Use letters, digits and underscores, not starting with a digit.";
++}
++
++/** One argument per line, as the page edits them; blank lines are dropped. */
++export function parseArgs(text: string): string[] {
++  return text.split(/\r?\n/).filter((line) => line.trim() !== "");
++}
++
++async function errorMessage(res: Response): Promise<string> {
++  const body = await res.json().catch(() => ({}));
++  return body?.error?.message ?? `${res.status} ${res.statusText}`;
++}
++
++/** Every MCP server (admin only). */
++export async function fetchMcpServers(): Promise<McpServer[]> {
++  const res = await authenticatedFetch("/v1/mcp-servers");
++  if (!res.ok) throw new Error(await errorMessage(res));
++  return ((await res.json()) as { data: McpServer[] }).data;
++}
++
++/** Add a server, or replace the one with ``body.id`` (admin only). */
++export async function saveMcpServer(body: SaveMcpServer): Promise<McpServer> {
++  const res = await authenticatedFetch("/v1/mcp-servers", {
++    method: "PUT",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify(body),
++  });
++  if (!res.ok) throw new Error(await errorMessage(res));
++  return (await res.json()) as McpServer;
++}
++
++/** Remove a server, global or a repository's (admin only). */
++export async function deleteMcpServer(id: string, repository: string | null): Promise<void> {
++  const query = repository ? `?repository=${encodeURIComponent(repository)}` : "";
++  const res = await authenticatedFetch(`/v1/mcp-servers/${encodeURIComponent(id)}${query}`, {
++    method: "DELETE",
++  });
++  if (!res.ok) throw new Error(await errorMessage(res));
++}
+diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
+index 96cad72..222d875 100644
+--- a/web/src/lib/repoEnv.ts
++++ b/web/src/lib/repoEnv.ts
+@@ -21,6 +21,11 @@ export interface RepoEnvEntry {
+   instructions: string | null;
+   /** Runs in the checkout before the agent starts, once per session, or null. */
+   setup_script: string | null;
++  /**
++   * The names of the repository's own MCP servers, which Settings → MCP
++   * servers edits; missing from servers before that page existed.
++   */
++  mcp_servers?: string[];
+   /** ISO-8601 time of the last change, or null. */
+   updated_at: string | null;
+   /** Who last saved them from this page, or null (e.g. the CLI). */
+diff --git a/web/src/pages/McpServersPage.test.tsx b/web/src/pages/McpServersPage.test.tsx
+new file mode 100644
+index 0000000..7e31e40
+--- /dev/null
++++ b/web/src/pages/McpServersPage.test.tsx
+@@ -0,0 +1,358 @@
++// Tests for the admin MCP servers page. The identity module's
++// authenticatedFetch is replaced by an in-memory /v1/mcp-servers, so the page,
++// its react-query hooks and the fetch helpers run as they do in the browser.
++
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { McpServersPage } from "./McpServersPage";
++import * as identity from "@/lib/identity";
++import { parseArgs, serverNameError, urlError } from "@/lib/mcpServers";
++
++vi.mock("@/lib/CapabilitiesContext", () => ({
++  useServerInfo: () => ({ login_url: "/login", single_user: false, enabled_connections: [] }),
++}));
++vi.mock("@/lib/identity", () => ({
++  resolveIdentity: vi.fn(),
++  getCurrentIsAdmin: vi.fn(),
++  authenticatedFetch: vi.fn(),
++}));
++vi.mock("@/components/ui/toast", () => ({ showToast: vi.fn() }));
++
++interface Stored {
++  id: string;
++  repository: string | null;
++  name: string;
++  transport: "http" | "stdio";
++  agents: string[];
++  url?: string;
++  headers?: Record<string, string>;
++  command?: string;
++  args?: string[];
++  env?: Record<string, string>;
++}
++
++// What the fake server holds, values included.
++const ROADPASS = "github.com/kunlabora/roadpass";
++
++let stored: Stored[];
++let requests: { method: string; url: string; body?: Record<string, unknown> }[];
++
++function json(status: number, body: unknown): Response {
++  return new Response(JSON.stringify(body), {
++    status,
++    headers: { "Content-Type": "application/json" },
++  });
++}
++
++function entry(server: Stored) {
++  return {
++    id: server.id,
++    repository: server.repository,
++    name: server.name,
++    transport: server.transport,
++    url: server.url ?? null,
++    header_names: Object.keys(server.headers ?? {}).sort(),
++    command: server.command ?? null,
++    args: server.args ?? [],
++    env_names: Object.keys(server.env ?? {}).sort(),
++    agents: server.agents,
++    updated_at: new Date(Date.now() - 2 * 86_400_000).toISOString(),
++    updated_by: "levi",
++  };
++}
++
++function merge(sent: Record<string, string | null>, current: Record<string, string>) {
++  const next: Record<string, string> = {};
++  for (const [name, value] of Object.entries(sent)) {
++    if (value === null && !(name in current)) throw new Error(`${name} has no value yet`);
++    next[name] = value ?? current[name];
++  }
++  return next;
++}
++
++async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
++  const url = String(input);
++  const method = init?.method ?? "GET";
++  const body = init?.body ? JSON.parse(String(init.body)) : undefined;
++  requests.push({ method, url, body });
++  if (method === "GET" && url === "/v1/mcp-servers") {
++    return json(200, { object: "list", data: stored.map(entry) });
++  }
++  if (method === "PUT") {
++    const current = stored.find((s) => s.id === body.id);
++    const same = current?.transport === body.transport ? current : undefined;
++    try {
++      const server: Stored = {
++        id: current?.id ?? `id-${stored.length + 1}`,
++        repository: body.repository,
++        name: body.name,
++        transport: body.transport,
++        agents: body.agents,
++        ...(body.transport === "http"
++          ? { url: body.url, headers: merge(body.headers ?? {}, same?.headers ?? {}) }
++          : {
++              command: body.command,
++              args: body.args,
++              env: merge(body.env ?? {}, same?.env ?? {}),
++            }),
++      };
++      stored = current ? stored.map((s) => (s === current ? server : s)) : [...stored, server];
++      return json(200, entry(server));
++    } catch (err) {
++      return json(400, { error: { message: (err as Error).message } });
++    }
++  }
++  if (method === "DELETE") {
++    const id = new URL(url, "http://x").pathname.split("/").pop();
++    stored = stored.filter((s) => s.id !== id);
++    return json(200, { id, deleted: true });
++  }
++  return json(404, { error: { message: "not found" } });
++}
++
++function renderPage() {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
++  return render(
++    <QueryClientProvider client={client}>
++      <McpServersPage />
++    </QueryClientProvider>,
++  );
++}
++
++function lastPut() {
++  return requests.filter((r) => r.method === "PUT").at(-1)?.body;
++}
++
++beforeEach(() => {
++  stored = [
++    {
++      id: "figma-id",
++      repository: null,
++      name: "figma",
++      transport: "stdio",
++      agents: ["claude", "codex"],
++      command: "npx",
++      args: ["-y", "figma-developer-mcp", "--stdio"],
++      env: { FIGMA_API_KEY: "figd_secret" },
++    },
++    {
++      id: "linear-id",
++      repository: null,
++      name: "linear",
++      transport: "http",
++      agents: ["codex"],
++      url: "https://mcp.linear.app/mcp",
++      headers: { Authorization: "Bearer lin_secret" },
++    },
++  ];
++  requests = [];
++  vi.mocked(identity.resolveIdentity).mockResolvedValue("levi");
++  vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(true);
++  vi.mocked(identity.authenticatedFetch).mockImplementation(fakeFetch);
++});
++
++afterEach(cleanup);
++
++describe("McpServersPage", () => {
++  it("lists the servers with their header and variable names, never values", async () => {
++    renderPage();
++    const figma = await screen.findByRole("article", { name: "figma" });
++    expect(within(figma).getByText("npx -y figma-developer-mcp --stdio")).toBeInTheDocument();
++    expect(within(figma).getByText("FIGMA_API_KEY")).toBeInTheDocument();
++    expect(
++      within(figma).getByText(/Command · Claude Code and Codex · updated 2d ago by levi/),
++    ).toBeInTheDocument();
++    const linear = screen.getByRole("article", { name: "linear" });
++    expect(within(linear).getByText(/HTTP · mcp.linear.app · Codex only/)).toBeInTheDocument();
++    expect(within(linear).getByText("Authorization")).toBeInTheDocument();
++    expect(document.body.textContent).not.toContain("secret");
++  });
++
++  it("tells a non-admin they can't manage it", async () => {
++    vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(false);
++    renderPage();
++    expect(
++      await screen.findByText("You don't have permission to manage MCP servers."),
++    ).toBeInTheDocument();
++    expect(requests).toEqual([]);
++  });
++
++  it("adds a command server with its arguments and variables", async () => {
++    renderPage();
++    fireEvent.click(await screen.findByRole("button", { name: "Add server" }));
++    const editor = screen.getByTestId("mcp-server-editor");
++    fireEvent.change(within(editor).getByLabelText("Name"), { target: { value: "github" } });
++    fireEvent.click(within(editor).getByLabelText("Command (stdio)"));
++    fireEvent.click(within(editor).getByLabelText("Claude Code"));
++    fireEvent.change(within(editor).getByLabelText("Command"), { target: { value: "docker" } });
++    fireEvent.change(within(editor).getByLabelText("Arguments"), {
++      target: { value: "run\n-i\n\n--rm\nghcr.io/github/github-mcp-server" },
++    });
++    fireEvent.click(within(editor).getByRole("button", { name: "Add variable" }));
++    fireEvent.change(within(editor).getByLabelText("Variable name"), {
++      target: { value: "GITHUB_PERSONAL_ACCESS_TOKEN" },
++    });
++    expect(within(editor).getByText("Give every new variable a value.")).toBeInTheDocument();
++    expect(within(editor).getByRole("button", { name: "Save" })).toBeDisabled();
++    fireEvent.change(within(editor).getByLabelText("Value for GITHUB_PERSONAL_ACCESS_TOKEN"), {
++      target: { value: "ghp_new" },
++    });
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(screen.queryByTestId("mcp-server-editor")).toBeNull());
++    expect(lastPut()).toEqual({
++      repository: null,
++      name: "github",
++      transport: "stdio",
++      agents: ["codex"],
++      command: "docker",
++      args: ["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"],
++      env: { GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_new" },
++    });
++    expect(await screen.findByRole("article", { name: "github" })).toBeInTheDocument();
++  });
++
++  it("keeps blank values and drops removed headers when editing", async () => {
++    stored[1].headers = { Authorization: "Bearer lin_secret", "X-Team": "eng" };
++    renderPage();
++    const linear = await screen.findByRole("article", { name: "linear" });
++    fireEvent.click(within(linear).getByRole("button", { name: "Edit linear" }));
++    fireEvent.click(within(linear).getByRole("button", { name: "Remove X-Team" }));
++    fireEvent.click(within(linear).getByLabelText("Claude Code"));
++    fireEvent.click(within(linear).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(lastPut()).toBeDefined());
++    expect(lastPut()).toEqual({
++      id: "linear-id",
++      repository: null,
++      name: "linear",
++      transport: "http",
++      agents: ["claude", "codex"],
++      url: "https://mcp.linear.app/mcp",
++      headers: { Authorization: null },
++    });
++    expect(stored[1].headers).toEqual({ Authorization: "Bearer lin_secret" });
++  });
++
++  it("says when changing the transport drops the stored values", async () => {
++    renderPage();
++    const figma = await screen.findByRole("article", { name: "figma" });
++    fireEvent.click(within(figma).getByRole("button", { name: "Edit figma" }));
++    fireEvent.click(within(figma).getByLabelText("URL (HTTP)"));
++    expect(within(figma).getByText("Saving removes its 1 variable.")).toBeInTheDocument();
++    expect(within(figma).getByText("Give the server's URL.")).toBeInTheDocument();
++    fireEvent.change(within(figma).getByLabelText("URL"), {
++      target: { value: "https://mcp.figma.com/mcp" },
++    });
++    fireEvent.click(within(figma).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(lastPut()).toBeDefined());
++    expect(lastPut()).toMatchObject({ transport: "http", headers: {} });
++    expect(lastPut()).not.toHaveProperty("env");
++  });
++
++  it("refuses names the agents can't tell apart", async () => {
++    renderPage();
++    fireEvent.click(await screen.findByRole("button", { name: "Add server" }));
++    const editor = screen.getByTestId("mcp-server-editor");
++    const name = within(editor).getByLabelText("Name");
++    fireEvent.change(name, { target: { value: "FIGMA" } });
++    expect(
++      within(editor).getByText("There's already an MCP server called FIGMA here."),
++    ).toBeInTheDocument();
++    fireEvent.change(name, { target: { value: "omnigent" } });
++    expect(within(editor).getByText("omnigent is Omnigent's own MCP server.")).toBeInTheDocument();
++    fireEvent.change(within(editor).getByLabelText("URL"), {
++      target: { value: "https://x.dev/mcp" },
++    });
++    expect(within(editor).getByRole("button", { name: "Save" })).toBeDisabled();
++  });
++
++  it("groups a repository's servers under it, and says which one they replace", async () => {
++    stored.push({
++      id: "roadpass-figma",
++      repository: ROADPASS,
++      name: "figma",
++      transport: "stdio",
++      agents: ["claude"],
++      command: "npx",
++      args: ["-y", "figma-developer-mcp", "--stdio"],
++      env: { FIGMA_API_KEY: "figd_roadpass_secret" },
++    });
++    renderPage();
++    const every = await screen.findByRole("region", { name: "Every session" });
++    expect(
++      within(every)
++        .getAllByRole("article")
++        .map((a) => a.getAttribute("aria-label")),
++    ).toEqual(["figma", "linear"]);
++    const roadpass = screen.getByRole("region", { name: `Sessions on ${ROADPASS}` });
++    expect(within(roadpass).getByText("kunlabora/roadpass")).toBeInTheDocument();
++    const card = within(roadpass).getByRole("article", { name: "figma" });
++    expect(
++      within(card).getByText(/Claude Code only · replaces the one for every session/),
++    ).toBeInTheDocument();
++    expect(document.body.textContent).not.toContain("secret");
++    // Removing it says which repository it's for.
++    fireEvent.click(within(card).getByRole("button", { name: "Remove figma" }));
++    fireEvent.click(within(card).getByRole("button", { name: "Remove" }));
++    await waitFor(() =>
++      expect(requests.at(-2)).toMatchObject({
++        method: "DELETE",
++        url: `/v1/mcp-servers/roadpass-figma?repository=${encodeURIComponent(ROADPASS)}`,
++      }),
++    );
++  });
++
++  it("adds a server for one repository", async () => {
++    renderPage();
++    fireEvent.click(await screen.findByRole("button", { name: "Add server" }));
++    const editor = screen.getByTestId("mcp-server-editor");
++    fireEvent.click(within(editor).getByLabelText("Sessions on one repository"));
++    fireEvent.change(within(editor).getByLabelText("Name"), { target: { value: "figma" } });
++    expect(within(editor).getByText("Choose the repository.")).toBeInTheDocument();
++    fireEvent.change(within(editor).getByLabelText("Repository"), {
++      target: { value: "git@github.com:Kunlabora/RoadPass.git" },
++    });
++    expect(within(editor).getByText(ROADPASS)).toBeInTheDocument();
++    // Taken for every session, but a repository may have its own figma.
++    expect(
++      within(editor).getByText(
++        "Sessions on kunlabora/roadpass get this one instead of the figma for every session.",
++      ),
++    ).toBeInTheDocument();
++    fireEvent.change(within(editor).getByLabelText("URL"), {
++      target: { value: "https://mcp.figma.com/mcp" },
++    });
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(lastPut()).toBeDefined());
++    expect(lastPut()).toMatchObject({ repository: ROADPASS, name: "figma", transport: "http" });
++    expect(
++      await screen.findByRole("region", { name: `Sessions on ${ROADPASS}` }),
++    ).toBeInTheDocument();
++  });
++
++  it("removes a server once confirmed", async () => {
++    renderPage();
++    const figma = await screen.findByRole("article", { name: "figma" });
++    fireEvent.click(within(figma).getByRole("button", { name: "Remove figma" }));
++    expect(
++      within(figma).getByText(/and its 1 variable\? New agents start without it\./),
++    ).toBeInTheDocument();
++    fireEvent.click(within(figma).getByRole("button", { name: "Remove" }));
++    await waitFor(() => expect(screen.queryByRole("article", { name: "figma" })).toBeNull());
++    expect(requests.at(-2)).toMatchObject({ method: "DELETE", url: "/v1/mcp-servers/figma-id" });
++  });
++});
++
++describe("mcpServers helpers", () => {
++  it("checks names and URLs like the server", () => {
++    expect(serverNameError("figma-dev_2", [])).toBeNull();
++    expect(serverNameError("figma tools", [])).toMatch(/letters, digits/);
++    expect(urlError("https://mcp.figma.com/mcp")).toBeNull();
++    expect(urlError("mcp.figma.com")).toMatch(/https:\/\//);
++    expect(urlError("ftp://x.dev")).toMatch(/https:\/\//);
++  });
++
++  it("takes one argument per line, as written", () => {
++    expect(parseArgs("-y\r\n  spaced arg  \n\n$HOME\n")).toEqual(["-y", "  spaced arg  ", "$HOME"]);
++  });
++});
+diff --git a/web/src/pages/McpServersPage.tsx b/web/src/pages/McpServersPage.tsx
+new file mode 100644
+index 0000000..b39d51e
+--- /dev/null
++++ b/web/src/pages/McpServersPage.tsx
+@@ -0,0 +1,981 @@
++/**
++ * Admin page for MCP servers (``/settings/mcp-servers``), added by this
++ * deployment. Rendered as a Settings sub-category, next to Subscriptions and
++ * Repository variables.
++ *
++ * Sessions' Claude Code and Codex get the servers listed here, each for the
++ * agents it's switched on for: an HTTP server by its URL and headers, or a
++ * command (stdio) with its arguments and variables. A server is for every
++ * session, or for sessions on one repository, where it replaces a server of
++ * the same name for every session. Header and variable
++ * values are write-only: the server lists names, and editing keeps a value
++ * whose field is left blank. The server stores every session's servers in a
++ * Kubernetes Secret that every runner Pod mounts, and a repository's in its
++ * variables Secret, which only its sessions mount. The agent wrappers read
++ * them whenever an agent starts.
++ *
++ * Gated on the client by an admin check AND on the server by the routes.
++ */
++
++import { type ReactNode, useEffect, useId, useState } from "react";
++import { useQuery } from "@tanstack/react-query";
++import {
++  FolderGit2Icon,
++  GlobeIcon,
++  LayersIcon,
++  PencilIcon,
++  PlusIcon,
++  SquareTerminalIcon,
++  Trash2Icon,
++  XIcon,
++} from "lucide-react";
++import { PageScroll } from "@/components/PageScroll";
++import { Button } from "@/components/ui/button";
++import { Input } from "@/components/ui/input";
++import { Textarea } from "@/components/ui/textarea";
++import { showToast } from "@/components/ui/toast";
++import { useDeleteMcpServer, useMcpServers, useSaveMcpServer } from "@/hooks/useMcpServers";
++import { useRepoEnv } from "@/hooks/useRepoEnv";
++import { useServerInfo } from "@/lib/CapabilitiesContext";
++import { isSingleUserMode } from "@/lib/capabilities";
++import { fetchGithubRepos } from "@/lib/githubIntegration";
++import { getCurrentIsAdmin, resolveIdentity } from "@/lib/identity";
++import {
++  MCP_AGENTS,
++  type McpAgent,
++  type McpServer,
++  type McpTransport,
++  envNameError,
++  headerNameError,
++  parseArgs,
++  serverNameError,
++  urlError,
++} from "@/lib/mcpServers";
++import { absoluteTime, relativeTime } from "@/lib/relativeTime";
++import { repoKey } from "@/lib/repoEnv";
++import { cn } from "@/lib/utils";
++
++// Phones: page gutters like the other Settings pages, and 40px tap targets on
++// touch screens.
++const PAGE_PADDING = "px-4 sm:px-8";
++const TOUCH_ICON_BUTTON = "max-md:pointer-coarse:size-10";
++const TOUCH_HEIGHT = "max-md:pointer-coarse:h-10";
++
++function sameName(a: string, b: string): boolean {
++  return a.toLowerCase() === b.toLowerCase();
++}
++
++function plural(count: number, word: string): string {
++  return `${count} ${word}${count === 1 ? "" : "s"}`;
++}
++
++/** ``["claude", "codex"]`` → ``"Claude Code and Codex"``; none → ``"Off"``. */
++function agentsLabel(agents: McpAgent[]): string {
++  const labels = MCP_AGENTS.filter((a) => agents.includes(a.id)).map((a) => a.label);
++  if (!labels.length) return "Off";
++  return labels.length === 1 ? `${labels[0]} only` : labels.join(" and ");
++}
++
++/** The command line as a shell would show it, quoting what needs it. */
++function commandLine(server: McpServer): string {
++  const quote = (word: string) =>
++    /^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", `'\\''`)}'`;
++  return [server.command ?? "", ...server.args].map(quote).join(" ");
++}
++
++/** ``"HTTP · mcp.figma.com · Claude Code and Codex"``, for a server's card. */
++function summary(server: McpServer): string {
++  let where = "Command";
++  if (server.transport === "http") {
++    try {
++      where = `HTTP · ${new URL(server.url ?? "").host}`;
++    } catch {
++      where = "HTTP";
++    }
++  }
++  return `${where} · ${agentsLabel(server.agents)}`;
++}
++
++export function McpServersPage() {
++  const info = useServerInfo();
++  const isSingleUser = isSingleUserMode(info);
++  const [meIsAdmin, setMeIsAdmin] = useState<boolean | null>(null);
++
++  // Admin probe via the mode-agnostic `/v1/me` identity, as on the
++  // Repository variables page. Skipped in single-user mode.
++  useEffect(() => {
++    if (isSingleUser) return;
++    void (async () => {
++      const userId = await resolveIdentity();
++      if (userId === null) return;
++      setMeIsAdmin(getCurrentIsAdmin());
++    })();
++  }, [isSingleUser]);
++
++  if (!isSingleUser && meIsAdmin === null) {
++    return (
++      <div className="flex min-h-full items-center justify-center text-ui text-muted-foreground">
++        Loading...
++      </div>
++    );
++  }
++
++  if (!isSingleUser && meIsAdmin === false) {
++    return (
++      <PageScroll contentClassName={PAGE_PADDING} extraBottom="2.5rem">
++        <h1 className="mb-2 text-2xl font-semibold">MCP servers</h1>
++        <p className="text-ui text-muted-foreground">
++          You don't have permission to manage MCP servers.
++        </p>
++      </PageScroll>
++    );
++  }
++
++  return <McpServers />;
++}
++
++function McpServers() {
++  const { data: servers, isLoading, error } = useMcpServers();
++  const remove = useDeleteMcpServer();
++  const [adding, setAdding] = useState(false);
++  const [editing, setEditing] = useState<string | null>(null);
++  const [confirming, setConfirming] = useState<string | null>(null);
++
++  const list = servers ?? [];
++  const repositories = [
++    ...new Set(list.flatMap((s) => (s.repository ? [s.repository] : []))),
++  ].sort();
++  const groups: { repository: string | null; servers: McpServer[] }[] = [
++    { repository: null, servers: list.filter((s) => s.repository === null) },
++    ...repositories.map((repository) => ({
++      repository,
++      servers: list.filter((s) => s.repository === repository),
++    })),
++  ];
++
++  function confirmRemove(server: McpServer) {
++    remove.mutate(server, {
++      onSuccess: () => {
++        setConfirming(null);
++        showToast(`Removed ${server.name}. New agents start without it.`);
++      },
++      onError: (err) => showToast(`Couldn't remove it: ${err.message}`),
++    });
++  }
++
++  return (
++    <PageScroll contentClassName={PAGE_PADDING} extraBottom="2.5rem">
++      <div className="mb-4 flex flex-wrap items-start justify-between gap-3 sm:mb-6">
++        <div className="min-w-0 max-w-xl">
++          <h1 className="text-2xl font-semibold">MCP servers</h1>
++          <p className="mt-1 text-ui text-muted-foreground">
++            Tools sessions' Claude Code and Codex get, such as Figma or Linear: a server's URL, or
++            the command that starts it. Add one for every session, or for sessions on one
++            repository. Once saved, a header's or variable's value can be replaced but not shown
++            again.
++          </p>
++        </div>
++        {!adding && (
++          <Button
++            onClick={() => {
++              setEditing(null);
++              setConfirming(null);
++              setAdding(true);
++            }}
++            componentId="settings.mcp_servers.add"
++            className={TOUCH_HEIGHT}
++          >
++            <PlusIcon className="ui-icon" />
++            Add server
++          </Button>
++        )}
++      </div>
++
++      {adding && (
++        <div className="mb-4 rounded-lg border border-border p-3 sm:mb-6 sm:p-4">
++          <ServerEditor servers={list} onClose={() => setAdding(false)} />
++        </div>
++      )}
++
++      {error ? (
++        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui text-destructive">
++          Couldn't load the MCP servers: {error.message}
++        </p>
++      ) : isLoading ? (
++        <p className="text-ui text-muted-foreground">Loading…</p>
++      ) : (
++        <div className="flex flex-col gap-6" data-testid="mcp-server-list">
++          {groups.map((group) => (
++            <section
++              key={group.repository ?? ""}
++              aria-label={group.repository ? `Sessions on ${group.repository}` : "Every session"}
++              className="flex flex-col gap-3"
++            >
++              <GroupHeading repository={group.repository} count={group.servers.length} />
++              {group.servers.map((server) => (
++                <ServerCard
++                  key={server.id}
++                  server={server}
++                  servers={list.filter((s) => s.id !== server.id)}
++                  editing={editing === server.id}
++                  confirming={confirming === server.id}
++                  removing={remove.isPending}
++                  onEdit={() => {
++                    setAdding(false);
++                    setConfirming(null);
++                    setEditing(server.id);
++                  }}
++                  onCloseEditor={() => setEditing(null)}
++                  onAskRemove={() => {
++                    setEditing(null);
++                    setConfirming(server.id);
++                  }}
++                  onCancelRemove={() => setConfirming(null)}
++                  onRemove={() => confirmRemove(server)}
++                />
++              ))}
++              {group.repository === null && group.servers.length === 0 && (
++                <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-ui text-muted-foreground">
++                  {list.length
++                    ? "No server for every session. Only the repositories below have their own."
++                    : "No MCP servers yet. Agents only have Omnigent's own tools and the ones a repository configures."}
++                </p>
++              )}
++            </section>
++          ))}
++        </div>
++      )}
++
++      <p className="mt-6 max-w-xl text-sm text-muted-foreground">
++        An agent gets the servers as they are when it starts, so new sessions get changes. A running
++        session gets them once its agent restarts: choose Restart agent in its environment menu, or
++        let it wake from being idle. A repository's servers only reach sessions on it, and replace a
++        server of the same name for every session. A server that needs you to sign in asks in each
++        session.
++      </p>
++    </PageScroll>
++  );
++}
++
++/** ``github.com/kunlabora/roadpass`` → ``kunlabora/roadpass``. */
++function repositoryPath(repository: string): string {
++  return repository.slice(repository.indexOf("/") + 1);
++}
++
++/** "Every session", or the repository whose sessions get the servers below it. */
++function GroupHeading({ repository, count }: { repository: string | null; count: number }) {
++  const Icon = repository ? FolderGit2Icon : LayersIcon;
++  return (
++    <h2 className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground">
++      <Icon className="ui-icon shrink-0" />
++      {repository ? (
++        <span className="min-w-0 truncate" title={repository}>
++          Sessions on <span className="text-foreground">{repositoryPath(repository)}</span>
++        </span>
++      ) : (
++        <span>Every session</span>
++      )}
++      <span className="shrink-0 font-normal">· {plural(count, "server")}</span>
++    </h2>
++  );
++}
++
++function ServerCard({
++  server,
++  servers,
++  editing,
++  confirming,
++  removing,
++  onEdit,
++  onCloseEditor,
++  onAskRemove,
++  onCancelRemove,
++  onRemove,
++}: {
++  server: McpServer;
++  /** Every other server, global and per repository. */
++  servers: McpServer[];
++  editing: boolean;
++  confirming: boolean;
++  removing: boolean;
++  onEdit: () => void;
++  onCloseEditor: () => void;
++  onAskRemove: () => void;
++  onCancelRemove: () => void;
++  onRemove: () => void;
++}) {
++  const updated = server.updated_at ? Date.parse(server.updated_at) : NaN;
++  const ago = relativeTime(updated);
++  const Icon = server.transport === "http" ? GlobeIcon : SquareTerminalIcon;
++  const secrets = server.transport === "http" ? server.header_names : server.env_names;
++  return (
++    <article
++      className="rounded-lg border border-border"
++      data-testid="mcp-server"
++      aria-label={server.name}
++    >
++      {/* Narrow screens: the buttons sit top right and the details go below
++      at full width. From sm, one line. */}
++      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 px-3 py-2 sm:flex sm:items-center">
++        <span className="flex h-[1lh] shrink-0 items-center text-ui">
++          <Icon className="ui-icon shrink-0 text-muted-foreground" />
++        </span>
++        {/* The summary takes the room left and wraps, so a long one never
++        squeezes the name away (as on Repository variables' cards). */}
++        <span className="min-w-0 font-mono text-ui font-medium wrap-anywhere sm:max-w-[40%] sm:shrink-0 sm:truncate">
++          {server.name}
++        </span>
++        <span
++          className={cn(
++            "col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1",
++            server.agents.length === 0 && "italic",
++          )}
++          title={absoluteTime(updated)}
++        >
++          {summary(server)}
++          {server.repository &&
++            servers.some((s) => s.repository === null && sameName(s.name, server.name)) &&
++            " · replaces the one for every session"}
++          {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
++          {server.updated_by && ` by ${server.updated_by}`}
++        </span>
++        {!editing && (
++          <div className="col-start-3 row-start-1 flex shrink-0 gap-1 max-md:pointer-coarse:-my-2 max-md:pointer-coarse:-mr-1.5 max-md:pointer-coarse:gap-0">
++            <Button
++              variant="ghost"
++              size="icon-sm"
++              onClick={onEdit}
++              aria-label={`Edit ${server.name}`}
++              title="Edit"
++              componentId="settings.mcp_servers.edit"
++              className={TOUCH_ICON_BUTTON}
++            >
++              <PencilIcon className="ui-icon" />
++            </Button>
++            <Button
++              variant="ghost"
++              size="icon-sm"
++              onClick={onAskRemove}
++              aria-label={`Remove ${server.name}`}
++              title="Remove"
++              componentId="settings.mcp_servers.remove"
++              className={TOUCH_ICON_BUTTON}
++            >
++              <Trash2Icon className="ui-icon" />
++            </Button>
++          </div>
++        )}
++      </div>
++      <div className="border-t border-border px-3 py-2">
++        {editing ? (
++          <ServerEditor server={server} servers={servers} onClose={onCloseEditor} />
++        ) : confirming ? (
++          <div className="flex flex-wrap items-center justify-between gap-3">
++            <p className="text-ui">
++              Remove <span className="font-mono font-medium">{server.name}</span>
++              {secrets.length > 0 &&
++                ` and its ${plural(secrets.length, server.transport === "http" ? "header" : "variable")}`}
++              ? New agents start without it.
++            </p>
++            <div className="ml-auto flex gap-2">
++              <Button
++                variant="outline"
++                onClick={onCancelRemove}
++                disabled={removing}
++                className={TOUCH_HEIGHT}
++              >
++                Cancel
++              </Button>
++              <Button
++                variant="destructive"
++                onClick={onRemove}
++                loading={removing}
++                className={TOUCH_HEIGHT}
++              >
++                Remove
++              </Button>
++            </div>
++          </div>
++        ) : (
++          <div className="flex flex-col gap-1.5">
++            <p className="rounded-md bg-muted/50 px-2.5 py-1.5 font-mono text-sm text-muted-foreground wrap-anywhere">
++              {server.transport === "http" ? server.url : commandLine(server)}
++            </p>
++            {secrets.length > 0 && (
++              <ul className="flex flex-col">
++                {secrets.map((name) => (
++                  <li key={name} className="flex items-center gap-3 py-0.5 text-ui">
++                    <span className="min-w-0 truncate font-mono text-sm">{name}</span>
++                    <span className="text-muted-foreground" aria-label="hidden value">
++                      ••••••••
++                    </span>
++                  </li>
++                ))}
++              </ul>
++            )}
++          </div>
++        )}
++      </div>
++    </article>
++  );
++}
++
++interface Row {
++  id: number;
++  name: string;
++  value: string;
++  /** Already stored: the name is fixed and a blank value keeps it. */
++  existing: boolean;
++}
++
++let nextRowId = 0;
++function newRow(name = "", value = "", existing = false): Row {
++  nextRowId += 1;
++  return { id: nextRowId, name, value, existing };
++}
++
++function storedRows(names: string[]): Row[] {
++  return names.length ? names.map((name) => newRow(name, "", true)) : [];
++}
++
++function rowError(row: Row, rows: Row[], index: number, nameError: (n: string) => string | null) {
++  if (!row.name) return row.value ? "Give this value a name." : null;
++  const error = nameError(row.name);
++  if (error) return error;
++  if (rows.findIndex((r) => r.name === row.name) !== index)
++    return `${row.name} is already in this list.`;
++  return null;
++}
++
++/** The rows sent to the server: each name's new value, or null to keep it. */
++function rowValues(rows: Row[]): Record<string, string | null> {
++  const values: Record<string, string | null> = {};
++  for (const row of rows) {
++    if (row.name) values[row.name] = row.existing && !row.value ? null : row.value;
++  }
++  return values;
++}
++
++/** Sections of the editor, one under the other with a rule between. */
++const SECTION = "flex flex-col gap-2 not-first:border-t not-first:border-border not-first:pt-4";
++/** A field's label inside a section, below the section's own label. */
++const FIELD_LABEL = "mt-2 text-sm font-medium text-muted-foreground";
++
++/** Edits one server. Without ``server`` it adds one. */
++function ServerEditor({
++  server,
++  servers,
++  onClose,
++}: {
++  server?: McpServer;
++  /** Every other server, global and per repository. */
++  servers: McpServer[];
++  onClose: () => void;
++}) {
++  const save = useSaveMcpServer();
++  // A new server picks where it goes; a saved one stays there.
++  const [forRepository, setForRepository] = useState(server ? server.repository !== null : false);
++  const [repositoryText, setRepositoryText] = useState(server?.repository ?? "");
++  const [name, setName] = useState(server?.name ?? "");
++  const [agents, setAgents] = useState<McpAgent[]>(server?.agents ?? ["claude", "codex"]);
++  const [transport, setTransport] = useState<McpTransport>(server?.transport ?? "http");
++  const [url, setUrl] = useState(server?.url ?? "");
++  const [headers, setHeaders] = useState<Row[]>(() =>
++    server?.transport === "http" ? storedRows(server.header_names) : [],
++  );
++  const [command, setCommand] = useState(server?.command ?? "");
++  const [args, setArgs] = useState(server?.args.join("\n") ?? "");
++  const [env, setEnv] = useState<Row[]>(() =>
++    server?.transport === "stdio" ? storedRows(server.env_names) : [],
++  );
++  const [saveError, setSaveError] = useState<string | null>(null);
++
++  const rows = transport === "http" ? headers : env;
++  const nameCheck = transport === "http" ? headerNameError : envNameError;
++  const errors = rows.map((row, i) => rowError(row, rows, i, nameCheck));
++  const missingValue = rows.some((r) => r.name && !r.existing && !r.value);
++  const repository = server ? server.repository : forRepository ? repoKey(repositoryText) : null;
++  const repositoryMissing = forRepository && repository === null;
++  const nameError = serverNameError(
++    name,
++    servers.filter((s) => s.repository === repository).map((s) => s.name),
++  );
++  // The same name in the other place is allowed: a repository's replaces the
++  // one for every session in its sessions.
++  const overlap = !name
++    ? null
++    : repository
++      ? servers.some((s) => s.repository === null && sameName(s.name, name))
++        ? `Sessions on ${repositoryPath(repository)} get this one instead of the ${name} for every session.`
++        : null
++      : (() => {
++          const shadowing = servers.filter((s) => s.repository && sameName(s.name, name));
++          return shadowing.length
++            ? `Sessions on ${shadowing.map((s) => repositoryPath(s.repository!)).join(", ")} get their repository's ${name} instead.`
++            : null;
++        })();
++  const urlProblem = transport === "http" ? urlError(url) : null;
++  // A server that changes transport can't keep the old one's values.
++  const dropping =
++    server && server.transport !== transport
++      ? server.transport === "http"
++        ? server.header_names.length
++        : server.env_names.length
++      : 0;
++  const hint = repositoryMissing
++    ? "Choose the repository."
++    : !name
++      ? "Name the server."
++      : transport === "http" && !url.trim()
++        ? "Give the server's URL."
++        : transport === "stdio" && !command.trim()
++          ? "Give the command that starts it."
++          : missingValue
++            ? `Give every new ${transport === "http" ? "header" : "variable"} a value.`
++            : null;
++  const canSave =
++    hint === null &&
++    nameError === null &&
++    urlProblem === null &&
++    errors.every((e) => e === null) &&
++    !save.isPending;
++
++  function toggleAgent(agent: McpAgent, on: boolean) {
++    setAgents((current) =>
++      MCP_AGENTS.map((a) => a.id).filter((a) => (a === agent ? on : current.includes(a))),
++    );
++  }
++
++  function submit() {
++    if (!canSave) return;
++    setSaveError(null);
++    save.mutate(
++      {
++        ...(server ? { id: server.id } : {}),
++        repository,
++        name,
++        transport,
++        agents,
++        ...(transport === "http"
++          ? { url: url.trim(), headers: rowValues(headers) }
++          : { command: command.trim(), args: parseArgs(args), env: rowValues(env) }),
++      },
++      {
++        onSuccess: (saved) => {
++          const where = saved.repository
++            ? `New agents on ${repositoryPath(saved.repository)} get it.`
++            : "New agents get it.";
++          showToast(
++            server
++              ? `Saved the changes to ${saved.name}.`
++              : saved.agents.length
++                ? `Added ${saved.name}. ${where}`
++                : `Added ${saved.name}, switched off.`,
++          );
++          onClose();
++        },
++        onError: (err) => setSaveError(err.message),
++      },
++    );
++  }
++
++  return (
++    <form
++      className="flex flex-col gap-4"
++      onSubmit={(e) => {
++        e.preventDefault();
++        submit();
++      }}
++      data-testid="mcp-server-editor"
++    >
++      <div className={SECTION}>
++        <ScopeField
++          server={server}
++          forRepository={forRepository}
++          onForRepository={setForRepository}
++          text={repositoryText}
++          onText={setRepositoryText}
++          repository={repository}
++          known={servers.flatMap((s) => (s.repository ? [s.repository] : []))}
++        />
++      </div>
++
++      <div className={SECTION}>
++        <label className="text-sm font-medium text-muted-foreground" htmlFor="mcp-server-name">
++          Name
++        </label>
++        <Input
++          id="mcp-server-name"
++          value={name}
++          onChange={(e) => setName(e.target.value.trim())}
++          placeholder="figma"
++          aria-invalid={nameError ? true : undefined}
++          autoComplete="off"
++          autoCapitalize="off"
++          spellCheck={false}
++          className={cn("font-mono sm:w-64", TOUCH_HEIGHT)}
++        />
++        {nameError ? (
++          <p className="text-sm text-destructive">{nameError}</p>
++        ) : overlap ? (
++          <p className="text-sm text-muted-foreground">{overlap}</p>
++        ) : (
++          <p className="text-sm text-muted-foreground">
++            The agents list the server's tools under this name.
++          </p>
++        )}
++        <fieldset className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
++          <legend className="mb-1 text-sm font-medium text-muted-foreground">For</legend>
++          {MCP_AGENTS.map((agent) => (
++            <label
++              key={agent.id}
++              className={cn("flex cursor-pointer items-center gap-2 text-ui", TOUCH_HEIGHT)}
++            >
++              <input
++                type="checkbox"
++                checked={agents.includes(agent.id)}
++                onChange={(e) => toggleAgent(agent.id, e.target.checked)}
++                className="size-4 shrink-0 accent-primary"
++              />
++              {agent.label}
++            </label>
++          ))}
++          {agents.length === 0 && (
++            <span className="text-sm text-muted-foreground">
++              Switched off: no agent gets it until you choose one.
++            </span>
++          )}
++        </fieldset>
++      </div>
++
++      <div className={SECTION}>
++        <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1">
++          <legend className="mb-1 text-sm font-medium text-muted-foreground">Connect by</legend>
++          {(
++            [
++              ["http", "URL (HTTP)"],
++              ["stdio", "Command (stdio)"],
++            ] as const
++          ).map(([id, label]) => (
++            <label
++              key={id}
++              className={cn("flex cursor-pointer items-center gap-2 text-ui", TOUCH_HEIGHT)}
++            >
++              <input
++                type="radio"
++                name="mcp-server-transport"
++                checked={transport === id}
++                onChange={() => setTransport(id)}
++                className="size-4 shrink-0 accent-primary"
++              />
++              {label}
++            </label>
++          ))}
++        </fieldset>
++        {dropping > 0 && (
++          <p className="text-sm text-muted-foreground">
++            Saving removes its{" "}
++            {plural(dropping, server?.transport === "http" ? "header" : "variable")}.
++          </p>
++        )}
++        {transport === "http" ? (
++          <>
++            <Input
++              value={url}
++              onChange={(e) => setUrl(e.target.value)}
++              placeholder="https://mcp.figma.com/mcp"
++              aria-label="URL"
++              aria-invalid={urlProblem ? true : undefined}
++              autoComplete="off"
++              spellCheck={false}
++              className={cn("font-mono", TOUCH_HEIGHT)}
++            />
++            {urlProblem && <p className="text-sm text-destructive">{urlProblem}</p>}
++            <PairsEditor
++              label="Headers"
++              what="header"
++              rows={headers}
++              onRows={setHeaders}
++              errors={errors}
++              placeholder="Authorization"
++            >
++              Such as Authorization: Bearer …, for a server that takes an API key. A server that
++              signs you in with your browser needs none.
++            </PairsEditor>
++          </>
++        ) : (
++          <>
++            <label htmlFor="mcp-server-command" className={FIELD_LABEL}>
++              Command
++            </label>
++            <Input
++              id="mcp-server-command"
++              value={command}
++              onChange={(e) => setCommand(e.target.value)}
++              placeholder="npx"
++              autoComplete="off"
++              spellCheck={false}
++              className={cn("font-mono sm:w-64", TOUCH_HEIGHT)}
++            />
++            <label htmlFor="mcp-server-args" className={FIELD_LABEL}>
++              Arguments
++            </label>
++            <Textarea
++              id="mcp-server-args"
++              value={args}
++              onChange={(e) => setArgs(e.target.value)}
++              rows={3}
++              placeholder={"-y\nfigma-developer-mcp\n--stdio"}
++              className="font-mono text-sm md:text-sm"
++              spellCheck={false}
++              autoCapitalize="off"
++            />
++            <p className="text-sm text-muted-foreground">
++              One argument per line, taken as written: nothing is expanded. It starts in the
++              session's workspace. Keep keys out of the arguments; give them as variables.
++            </p>
++            <PairsEditor
++              label="Variables"
++              what="variable"
++              rows={env}
++              onRows={setEnv}
++              errors={errors}
++              placeholder="FIGMA_API_KEY"
++            >
++              Only this server gets them, not the agent.
++            </PairsEditor>
++          </>
++        )}
++      </div>
++
++      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
++        {hint && <span className="mr-auto text-sm text-muted-foreground">{hint}</span>}
++        <Button
++          type="button"
++          variant="outline"
++          onClick={onClose}
++          disabled={save.isPending}
++          className={TOUCH_HEIGHT}
++        >
++          Cancel
++        </Button>
++        <Button type="submit" disabled={!canSave} loading={save.isPending} className={TOUCH_HEIGHT}>
++          Save
++        </Button>
++      </div>
++      {saveError && (
++        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui text-destructive">
++          {saveError}
++        </p>
++      )}
++    </form>
++  );
++}
++
++/**
++ * Where a server goes: every session, or sessions on one repository, picked
++ * from your GitHub repositories and the ones with variables, or pasted. A
++ * saved server says where it is; it can't move.
++ */
++function ScopeField({
++  server,
++  forRepository,
++  onForRepository,
++  text,
++  onText,
++  repository,
++  known,
++}: {
++  server?: McpServer;
++  forRepository: boolean;
++  onForRepository: (on: boolean) => void;
++  text: string;
++  onText: (text: string) => void;
++  repository: string | null;
++  /** Repositories that already have MCP servers. */
++  known: string[];
++}) {
++  const info = useServerInfo();
++  const githubEnabled = info !== "loading" && (info.enabled_connections ?? []).includes("github");
++  // The same queries as Repository variables and the new-session picker.
++  const { data: github } = useQuery({
++    queryKey: ["github-repos"],
++    queryFn: fetchGithubRepos,
++    enabled: githubEnabled && !server && forRepository,
++    staleTime: 5 * 60_000,
++  });
++  const { data: withVariables } = useRepoEnv();
++  const listId = useId();
++
++  if (server) {
++    return (
++      <>
++        <span className="text-sm font-medium text-muted-foreground">Sessions</span>
++        <p className="text-ui">
++          {server.repository ? (
++            <>
++              Sessions on <span className="font-mono">{server.repository}</span>
++            </>
++          ) : (
++            "Every session"
++          )}
++        </p>
++        <p className="text-sm text-muted-foreground">
++          To move it, add it again where you want it and remove it here.
++        </p>
++      </>
++    );
++  }
++
++  const suggestions = [
++    ...new Set([
++      ...known,
++      ...(withVariables ?? []).map((e) => e.repository),
++      ...(github?.connected
++        ? github.repos.map((r) => `github.com/${r.full_name.toLowerCase()}`)
++        : []),
++    ]),
++  ].sort();
++
++  return (
++    <>
++      <fieldset className="flex flex-wrap items-center gap-x-4 gap-y-1">
++        <legend className="mb-1 text-sm font-medium text-muted-foreground">Sessions</legend>
++        {(
++          [
++            [false, "Every session"],
++            [true, "Sessions on one repository"],
++          ] as const
++        ).map(([value, label]) => (
++          <label
++            key={label}
++            className={cn("flex cursor-pointer items-center gap-2 text-ui", TOUCH_HEIGHT)}
++          >
++            <input
++              type="radio"
++              name="mcp-server-scope"
++              checked={forRepository === value}
++              onChange={() => onForRepository(value)}
++              className="size-4 shrink-0 accent-primary"
++            />
++            {label}
++          </label>
++        ))}
++      </fieldset>
++      {forRepository && (
++        <>
++          <Input
++            value={text}
++            onChange={(e) => onText(e.target.value)}
++            list={listId}
++            placeholder="owner/repo, or a clone URL"
++            aria-label="Repository"
++            autoComplete="off"
++            spellCheck={false}
++            autoFocus
++            className={cn("font-mono", TOUCH_HEIGHT)}
++          />
++          <datalist id={listId}>
++            {suggestions.map((key) => (
++              <option key={key} value={key} />
++            ))}
++          </datalist>
++          {repository ? (
++            <p className="text-sm text-muted-foreground wrap-anywhere">
++              Only sessions on <span className="font-mono">{repository}</span> get it, and its keys.
++            </p>
++          ) : (
++            text.trim() && (
++              <p className="text-sm text-destructive">Enter owner/repo or a clone URL.</p>
++            )
++          )}
++        </>
++      )}
++    </>
++  );
++}
++
++/** A server's headers or variables: names with write-only values. */
++function PairsEditor({
++  label,
++  what,
++  rows,
++  onRows,
++  errors,
++  placeholder,
++  children,
++}: {
++  label: string;
++  what: "header" | "variable";
++  rows: Row[];
++  onRows: (update: (rows: Row[]) => Row[]) => void;
++  errors: (string | null)[];
++  placeholder: string;
++  children: ReactNode;
++}) {
++  function update(id: number, patch: Partial<Row>) {
++    onRows((current) => current.map((r) => (r.id === id ? { ...r, ...patch } : r)));
++  }
++  return (
++    <div className="flex flex-col gap-2">
++      <span className={FIELD_LABEL}>{label}</span>
++      <p className="text-sm text-muted-foreground">{children}</p>
++      {rows.map((row, i) => (
++        <div key={row.id} className="flex flex-col gap-1 not-first:max-sm:mt-1">
++          {/* Narrow screens: the name and its remove button, with the value
++          below at full width. From sm, one line. */}
++          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5 sm:flex">
++            <Input
++              value={row.name}
++              onChange={(e) => update(row.id, { name: e.target.value.trim() })}
++              readOnly={row.existing}
++              placeholder={placeholder}
++              aria-label={`${what === "header" ? "Header" : "Variable"} name`}
++              aria-invalid={errors[i] ? true : undefined}
++              autoComplete="off"
++              autoCapitalize="off"
++              spellCheck={false}
++              className={cn(
++                "font-mono sm:w-64 sm:flex-none",
++                TOUCH_HEIGHT,
++                row.existing && "bg-muted/40",
++              )}
++            />
++            <Input
++              type="password"
++              value={row.value}
++              onChange={(e) => update(row.id, { value: e.target.value })}
++              placeholder={row.existing ? "Leave blank to keep the current value" : "Value"}
++              aria-label={`Value for ${row.name || `new ${what}`}`}
++              autoComplete="new-password"
++              className={cn("col-span-2 min-w-0 sm:flex-1", TOUCH_HEIGHT)}
++            />
++            <Button
++              type="button"
++              variant="ghost"
++              size="icon-sm"
++              onClick={() => onRows((current) => current.filter((r) => r.id !== row.id))}
++              aria-label={`Remove ${row.name || what}`}
++              className={cn("col-start-2 row-start-1", TOUCH_ICON_BUTTON)}
++            >
++              <XIcon className="ui-icon" />
++            </Button>
++          </div>
++          {errors[i] && <p className="text-sm text-destructive">{errors[i]}</p>}
++        </div>
++      ))}
++      <div>
++        <Button
++          type="button"
++          variant="ghost"
++          size="sm"
++          onClick={() => onRows((current) => [...current, newRow()])}
++          className={TOUCH_HEIGHT}
++        >
++          <PlusIcon className="ui-icon" />
++          Add {what}
++        </Button>
++      </div>
++    </div>
++  );
++}
+diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
+index aa820ce..7ab9b8e 100644
+--- a/web/src/pages/RepoVariablesPage.test.tsx
++++ b/web/src/pages/RepoVariablesPage.test.tsx
+@@ -25,6 +25,8 @@ const ROADPASS = "github.com/kunlabora/roadpass";
+ let stored: Record<string, Record<string, string>>;
+ let texts: Record<string, { instructions: string | null; setup_script: string | null }>;
+ let requests: { method: string; url: string; body?: unknown }[];
++// Each repository's MCP server names, which Settings → MCP servers edits.
++let mcpServers: Record<string, string[]>;
+ 
+ function json(status: number, body: unknown): Response {
+   return new Response(JSON.stringify(body), {
+@@ -39,6 +41,7 @@ function entry(repository: string) {
+     names: Object.keys(stored[repository]).sort(),
+     instructions: texts[repository]?.instructions ?? null,
+     setup_script: texts[repository]?.setup_script ?? null,
++    mcp_servers: mcpServers[repository] ?? [],
+     updated_at: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+     updated_by: "levi",
+   };
+@@ -95,6 +98,7 @@ beforeEach(() => {
+     [ROADPASS]: { GOVFLANDERS_NPM_TOKEN: "secret-token", NPM_CONFIG_REGISTRY: "https://r" },
+   };
+   texts = {};
++  mcpServers = {};
+   requests = [];
+   vi.mocked(identity.resolveIdentity).mockResolvedValue("levi");
+   vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(true);
+@@ -112,6 +116,17 @@ describe("RepoVariablesPage", () => {
+     expect(document.body.textContent).not.toContain("secret-token");
+   });
+ 
++  it("counts a repository's MCP servers, and says removing it removes them", async () => {
++    mcpServers = { [ROADPASS]: ["figma"] };
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    expect(within(card).getByText(/2 variables · 1 MCP server · updated/)).toBeInTheDocument();
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Remove variables for kunlabora/roadpass" }),
++    );
++    expect(within(card).getByText(/2 variables and its 1 MCP server for/)).toBeInTheDocument();
++  });
++
+   it("lets a long repository wrap at its slashes on a phone", async () => {
+     renderPage();
+     const card = await screen.findByRole("article", { name: ROADPASS });
+diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
+index 04ad5e6..afc22e0 100644
+--- a/web/src/pages/RepoVariablesPage.tsx
++++ b/web/src/pages/RepoVariablesPage.tsx
+@@ -66,14 +66,24 @@ function splitToken(names: string[]): { variables: string[]; token: boolean } {
+   return { variables: names.filter((n) => n !== GIT_TOKEN), token: names.includes(GIT_TOKEN) };
+ }
+ 
+-/** ``"2 variables · Git token · instructions · setup script"``, for a repository's card. */
++/** How many MCP servers the repository has, from Settings → MCP servers. */
++function mcpServerCount(entry: RepoEnvEntry): number {
++  return entry.mcp_servers?.length ?? 0;
++}
++
++/** ``"2 variables · Git token · instructions · setup script · 1 MCP server"``, for a repository's card. */
+ function summary(entry: RepoEnvEntry): string {
+   const { variables, token } = splitToken(entry.names);
+-  const others = token || entry.instructions !== null || entry.setup_script !== null;
++  const others =
++    token ||
++    entry.instructions !== null ||
++    entry.setup_script !== null ||
++    mcpServerCount(entry) > 0;
+   const parts = variables.length || !others ? [plural(variables.length, "variable")] : [];
+   if (token) parts.push("Git token");
+   if (entry.instructions !== null) parts.push("instructions");
+   if (entry.setup_script !== null) parts.push("setup script");
++  if (mcpServerCount(entry)) parts.push(plural(mcpServerCount(entry), "MCP server"));
+   return parts.join(" · ");
+ }
+ 
+@@ -90,6 +100,7 @@ function describe(entry: RepoEnvEntry): string {
+     ...(variables.length ? [plural(variables.length, "variable")] : []),
+     ...(entry.instructions !== null ? ["the agent instructions"] : []),
+     ...(entry.setup_script !== null ? ["the setup script"] : []),
++    ...(mcpServerCount(entry) ? [`its ${plural(mcpServerCount(entry), "MCP server")}`] : []),
+   ];
+   return parts.length ? joinAnd(parts) : plural(0, "variable");
+ }
+@@ -97,7 +108,10 @@ function describe(entry: RepoEnvEntry): string {
+ /** Only variables, so "Remove all 2 variables" reads right. */
+ function onlyVariables(entry: RepoEnvEntry): boolean {
+   return (
+-    !splitToken(entry.names).token && entry.instructions === null && entry.setup_script === null
++    !splitToken(entry.names).token &&
++    entry.instructions === null &&
++    entry.setup_script === null &&
++    mcpServerCount(entry) === 0
+   );
+ }
+ 
+diff --git a/web/src/pages/SettingsPage.tsx b/web/src/pages/SettingsPage.tsx
+index 862fdf0..39a8b97 100644
+--- a/web/src/pages/SettingsPage.tsx
++++ b/web/src/pages/SettingsPage.tsx
+@@ -281,6 +281,9 @@ const SubscriptionsPage = lazy(() =>
+ const RepoVariablesPage = lazy(() =>
+   import("@/pages/RepoVariablesPage").then((m) => ({ default: m.RepoVariablesPage })),
+ );
++const McpServersPage = lazy(() =>
++  import("@/pages/McpServersPage").then((m) => ({ default: m.McpServersPage })),
++);
+ 
+ /**
+  * Settings content panel. The section nav lives in the sidebar card
+@@ -322,7 +325,8 @@ export function SettingsPage() {
+     section === "policies" ||
+     section === "sharing" ||
+     section === "repo-env" ||
+-    section === "subscriptions"
++    section === "subscriptions" ||
++    section === "mcp-servers"
+   ) {
+     return (
+       <Suspense fallback={null}>
+@@ -334,6 +338,8 @@ export function SettingsPage() {
+           <SharingPage />
+         ) : section === "subscriptions" ? (
+           <SubscriptionsPage />
++        ) : section === "mcp-servers" ? (
++          <McpServersPage />
+         ) : (
+           <RepoVariablesPage />
+         )}
+diff --git a/web/src/shell/settingsNav.test.tsx b/web/src/shell/settingsNav.test.tsx
+index 6cba016..255631e 100644
+--- a/web/src/shell/settingsNav.test.tsx
++++ b/web/src/shell/settingsNav.test.tsx
+@@ -148,6 +148,7 @@ describe("settingsNavGroups", () => {
+       "sharing",
+       "subscriptions",
+       "repo-env",
++      "mcp-servers",
+     ]);
+     // Admin under OIDC (accountsEnabled false) → still appears. This is the
+     // #1489 fix: OIDC previously had no admin chrome at all.
+@@ -158,6 +159,7 @@ describe("settingsNavGroups", () => {
+       "sharing",
+       "subscriptions",
+       "repo-env",
++      "mcp-servers",
+     ]);
+   });
+ 
+@@ -172,6 +174,7 @@ describe("settingsNavGroups", () => {
+       "policies",
+       "subscriptions",
+       "repo-env",
++      "mcp-servers",
+     ]);
+   });
+ 
+diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
+index 5bbe40e..8662363 100644
+--- a/web/src/shell/settingsNav.tsx
++++ b/web/src/shell/settingsNav.tsx
+@@ -17,6 +17,7 @@ import {
+   KeyboardIcon,
+   KeyRoundIcon,
+   PaletteIcon,
++  PlugIcon,
+   SettingsIcon,
+   Share2Icon,
+   ShieldCheckIcon,
+@@ -50,6 +51,7 @@ export type SettingsSectionId =
+   | "sharing"
+   | "subscriptions"
+   | "repo-env"
++  | "mcp-servers"
+   | "archived"
+   | "cli"
+   | "updates";
+@@ -69,6 +71,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
+   "sharing",
+   "subscriptions",
+   "repo-env",
++  "mcp-servers",
+   "archived",
+   "cli",
+   "updates",
+@@ -168,6 +171,8 @@ export function settingsNavGroups(
+     adminItems.push({ id: "subscriptions", label: "Subscriptions", icon: KeyRoundIcon });
+     // This deployment's environment variables per repository.
+     adminItems.push({ id: "repo-env", label: "Repository variables", icon: VariableIcon });
++    // The MCP servers every session's Claude Code and Codex get.
++    adminItems.push({ id: "mcp-servers", label: "MCP servers", icon: PlugIcon });
+     groups.push({ title: "Admin", items: adminItems });
+   }
+   groups.push({

@@ -16,12 +16,16 @@ script, under keys that aren't variable names, so the loader skips them. The
 runner appends the instructions to its own and runs the script in the
 checkout (``images/runner/repo-env/``). It finds the checkout from
 ``OMNIGENT_REPO_CHECKOUTS``, which the server sets on the runner Pod.
+
+It can also hold the repository's own MCP servers, which Settings → MCP
+servers edits (``omnigent_mcp_servers``). Saving the variables keeps them.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import re
 import shlex
 from collections.abc import Iterable, Mapping
@@ -49,6 +53,10 @@ TOKEN_VARIABLE = "GIT_TOKEN"
 INSTRUCTIONS_KEY = "agent-instructions.md"
 SETUP_SCRIPT_KEY = "setup.sh"
 _TEXT_KEYS = (INSTRUCTIONS_KEY, SETUP_SCRIPT_KEY)
+# The repository's MCP servers, as JSON. Settings → MCP servers edits them,
+# not this module, so saving the variables keeps them as they are.
+MCP_SERVERS_KEY = "mcp-servers.json"
+_NOT_VARIABLES = (*_TEXT_KEYS, MCP_SERVERS_KEY)
 # Agents read the instructions at the start of every session.
 TEXT_LIMIT = 64 * 1024
 # On the runner Pod's host container: one line per repository the session
@@ -314,8 +322,16 @@ def _updated_at(secret: Any) -> str | None:
 
 
 def _names(secret: Any) -> list[str]:
-    """The names of the Secret's variables, without its instructions and script."""
-    return sorted(name for name in secret.data or {} if name not in _TEXT_KEYS)
+    """The names of the Secret's variables, without its instructions, script and MCP servers."""
+    return sorted(name for name in secret.data or {} if name not in _NOT_VARIABLES)
+
+
+def mcp_server_names(secret: Any) -> list[str]:
+    """The names of the repository's MCP servers, sorted."""
+    text = _text(secret, MCP_SERVERS_KEY)
+    if text is None:
+        return []
+    return sorted(server["name"] for server in json.loads(text).get("servers", []))
 
 
 def _text(secret: Any, key: str) -> str | None:
@@ -330,6 +346,7 @@ def _entry(secret: Any) -> dict[str, Any]:
         "names": _names(secret),
         "instructions": _text(secret, INSTRUCTIONS_KEY),
         "setup_script": _text(secret, SETUP_SCRIPT_KEY),
+        "mcp_servers": mcp_server_names(secret),
         "updated_at": _updated_at(secret),
         "updated_by": annotations.get(UPDATED_BY_ANNOTATION),
     }
@@ -342,7 +359,7 @@ def list_repositories(core: Any) -> list[dict[str, Any]]:
     :param core: A Kubernetes ``CoreV1Api``.
     :returns: e.g. ``[{"repository": "github.com/kunlabora/roadpass",
         "names": ["GOVFLANDERS_NPM_TOKEN"], "instructions": "Use pnpm…",
-        "setup_script": None, "updated_at": "2026-10-08T…",
+        "setup_script": None, "mcp_servers": ["figma"], "updated_at": "2026-10-08T…",
         "updated_by": "levi"}]``, sorted by repository. Never a variable's
         value; the instructions and the script come back to be edited.
     """
@@ -462,7 +479,8 @@ def save_repository(
         blank removes them, and :data:`KEEP` leaves them as they are.
     :param setup_script: The repository's setup script, likewise.
     :returns: The repository's entry, as in :func:`list_repositories`.
-    :raises ValueError: When there'd be nothing left to store, on a name
+    :raises ValueError: When there'd be nothing left to store (the
+        repository's MCP servers count), on a name
         :func:`check_variable_name` rejects, ``None`` for a variable the
         repository doesn't have, or text over :data:`TEXT_LIMIT` bytes.
     """
@@ -488,6 +506,8 @@ def save_repository(
             data[variable] = current_data[variable]
         else:
             raise ValueError(f"{variable} has no value yet")
+    if MCP_SERVERS_KEY in current_data:
+        data[MCP_SERVERS_KEY] = current_data[MCP_SERVERS_KEY]
     for text_key, text in texts.items():
         if text is KEEP:
             if text_key in current_data:

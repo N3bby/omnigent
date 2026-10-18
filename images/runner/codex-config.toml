@@ -1,2 +1,5 @@
 cli_auth_credentials_store = "file"
 forced_login_method = "chatgpt"
+# Sign-ins to MCP servers (docs/features/mcp-servers.md) go in the session's
+# CODEX_HOME, on its home volume, not in a keyring that the Pod doesn't keep.
+mcp_oauth_credentials_store = "file"

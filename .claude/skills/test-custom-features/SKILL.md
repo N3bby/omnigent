@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, and the sandbox picker under the composer. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, agent instructions and setup script, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, and the sandbox picker under the composer. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -93,6 +93,7 @@ PASS  images/server/patches/0015-environment-menu.patch
 PASS  images/server/patches/0016-startup-progress.patch
 PASS  images/server/patches/0017-codex-bypass-default.patch
 PASS  images/server/patches/0018-binary-preview-gzip.patch
+PASS  images/server/patches/0019-mcp-servers.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -121,6 +122,7 @@ PASS  images/server/web-patches/0024-admin-settings-nav.patch
 PASS  images/server/web-patches/0025-codex-bypass-default.patch
 PASS  images/server/web-patches/0026-workspace-rail-shift.patch
 PASS  images/server/web-patches/0027-shortcut-key-width.patch
+PASS  images/server/web-patches/0028-mcp-servers.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -164,7 +166,7 @@ python -m unittest discover -s tests
 ```
 
 **Expected:** `configuration and manifests for <env> are valid` for both, and
-the unit tests end in `OK` (152 tests, 12 skipped, on 2026-10-16). Warnings that
+the unit tests end in `OK` (173 tests, 16 skipped, on 2026-10-18). Warnings that
 `ansible-playbook` or `shellcheck` isn't installed are fine. The tests cover
 the rendered settings behind several features, such as idle-session timing and
 the per-session home volume. They are the local part of the `Validate`
@@ -369,6 +371,12 @@ PASS  codex wrapper records the account it starts with
 PASS  claude-native reports its account to the composer
 PASS  codex-native reports its account to the composer
 PASS  the Pod mounts the active subscriptions (managed in Settings: <claude codex, or none>)
+== MCP servers
+PASS  MCP server launcher matches images/runner/mcp-servers.py
+PASS  claude wrapper adds the MCP servers
+PASS  codex wrapper adds the MCP servers
+PASS  the Pod mounts the MCP servers (in Settings: <name(agents) …, or none>; this session's repositories: <name(agents) …, or none>)
+PASS  Claude Code gets the MCP servers as --mcp-config
 
 runner checks: passed
 ```
@@ -414,6 +422,9 @@ What a failure usually means:
 | `… wrapper records the account it starts with` | a wrapper lost its `omnigent-subscription` record; see `images/runner/claude-wrapper.sh` and `codex-wrapper.sh` |
 | `… reports its account to the composer` | `images/runner/patches/0010-subscription-in-use.patch` was dropped or upstream moved the forwarders; see step 2 |
 | `the Pod mounts the active subscriptions` | `images/server/patches/0013-subscriptions.patch` was dropped, or this session predates the deploy |
+| `MCP server launcher matches …`, `… wrapper adds the MCP servers` | the file changed in this checkout after the image was built, `images/runner/Dockerfile` no longer copies `mcp-servers.py`, or a wrapper lost its `mcp-servers.py exec` call |
+| `the Pod mounts the MCP servers` | `images/server/patches/0019-mcp-servers.patch` was dropped, or this session predates the deploy |
+| `Claude Code gets the MCP servers as --mcp-config` (the last line is SKIP when no server is on for Claude Code, and missing without servers) | `mcp-servers.py` couldn't read `/run/omnigent/mcp-servers/servers.json` or write `/run/omnigent-mcp-servers/claude.json`; the `got:` text says why |
 | `a Codex session's CODEX_HOME has the AGENTS.md` | upstream stopped linking `AGENTS.md` into each session's private `CODEX_HOME` (`_CODEX_HOME_GLOBAL_INSTRUCTION_FILES` in `omnigent/inner/codex_executor.py`) |
 
 ## 5. Live checks
@@ -493,6 +504,7 @@ settings.
 | Model picker | Start a new session (don't send it) with the Kubernetes sandbox and Claude Code: the model menu lists models, such as Opus and Sonnet, and never says `Models unavailable`. Repeat for Codex. Then discard it. |
 | Repository variables page | If you're an admin, Settings has **Repository variables** under Admin. It lists repositories with their variable names and `••••••••`, never a value. Don't add, edit or remove anything. Not an admin: record SKIP. |
 | Subscriptions page | If you're an admin, Settings has **Subscriptions** under Admin. Opening it directly (`https://<hostname>/settings/subscriptions`, not through the nav) shows the page rather than a permission message. Claude and Codex each list their accounts with the active one selected and marked **Active**, or say **No accounts yet**. Nothing on the page shows a token. Don't switch, add, edit or remove anything. Not an admin: record SKIP. |
+| MCP servers page | If you're an admin, Settings has **MCP servers** under Admin. Opening it directly (`https://<hostname>/settings/mcp-servers`) shows the page rather than a permission message. Servers are grouped under **Every session** and **Sessions on** each repository. Each server is a card with its name, `HTTP · <host>` or `Command`, which agents get it (or `Off`), and its URL or command line; header and variable names show `••••••••`, never a value. The **Every session** servers match step 4's `in Settings:` list, and this session's repositories' match its `this session's repositories:` list. Without servers it says **No MCP servers yet**. Don't add, edit or remove anything. Not an admin: record SKIP. |
 | Subscription in the composer | If Settings has a Claude account, this session's composer shows a key and the name of the account Claude Code started with, left of the model picker (on a phone, the name without the key). It's the account the `selection.json` from step 4 names for `claude`, unless Settings switched since this session started; then a dot is on the key. Tapping it opens **Claude account** with the name and what it means. Close it with Escape. Without a Claude account in Settings there's no tag. |
 | A project's repositories | Open a project's ⋯ menu in the sidebar and choose **Project settings**. With **Host** on the Kubernetes sandbox or no default, the dialog has a **Repositories** field, with a **Choose a repository…** picker when GitHub is connected and a field to paste a URL; with the sandbox there's no **Working directory**. Close it with **Cancel**, without saving. No project: record SKIP. |
 | Environment menu | In this session's composer, the monitor icon left of the permission picker has a solid green dot while you work. Its menu is headed **Agent Sandbox** with `omnigent-<8 hex>` (the `joined as` short name from step 4) and a green **Running** badge, then `Agent  Working · Claude Code` (or `· Codex`), `Pod  Up <time> · <n> CPU, <n> GB` (within a few seconds of opening; compare `cat /sys/fs/cgroup/memory.current`), `VM disk  <used> of <total> GB` with a bar (`df -h /` in this Pod shows the same disk), `Idle stop  Not while the agent is working`, **Copy SSH command**, **Keep running** with a `›`, **Restart agent** (`keeps the Pod`) and **Stop sandbox** (`keeps files`) in red. Choose **Copy SSH command**: a check replaces the copy icon, and the clipboard holds `ssh root@omnigent-<8 hex>`, the short name without `.ts.net`. Hover **Keep running**: its submenu says `Don't stop this Pod when it's idle, so dev servers keep running.` and lists **Usual idle timeout** (ticked, unless someone chose otherwise), **For 2 hours**, **For 8 hours** and **Until I stop it**. Close the menus with Escape; don't choose anything in them, or Restart agent or Stop sandbox. Without Tailscale there's no Copy SSH command, and the header shows the host's name. |

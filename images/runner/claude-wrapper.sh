@@ -71,6 +71,25 @@ omnigent_wait_for_repo_setup
 omnigent_agent_instructions /etc/claude-code/CLAUDE.md \
     || echo "claude-wrapper: could not add the repository instructions to /etc/claude-code/CLAUDE.md" >&2
 
+# The MCP servers from Settings → MCP servers, global and the session's
+# repositories', once there are any (docs/features/mcp-servers.md).
+# mcp-servers.py adds them in front of the arguments, and starts Claude
+# without them if it can't.
+mcp_servers="${OMNIGENT_MCP_SERVERS_FILE:-/run/omnigent/mcp-servers/servers.json}"
+has_mcp_servers() {
+    [ -s "$mcp_servers" ] && return 0
+    for file in "${OMNIGENT_REPO_ENV_DIR:-/run/omnigent/repo-env}"/*/mcp-servers.json; do
+        [ -s "$file" ] && return 0
+    done
+    return 1
+}
+claude_real() {
+    if has_mcp_servers; then
+        exec /opt/venv/bin/python /usr/local/lib/omnigent/mcp-servers.py exec claude /usr/local/bin/claude-real -- "$@"
+    fi
+    exec /usr/local/bin/claude-real "$@"
+}
+
 # Keep bypass in Claude's shift+tab cycle whatever mode the session launches
 # in, so the web picker can always switch back to it, e.g. after approving a
 # plan moved the session to auto. Subcommands such as `claude mcp` accept it.
@@ -78,7 +97,7 @@ omnigent_agent_instructions /etc/claude-code/CLAUDE.md \
 # OMNIGENT_CLAUDE_BYPASS_PERMISSIONS from the env of the Claude terminals it
 # launches, so the file is how a terminal sees the deployment's setting.
 if grep -q '"defaultMode":"bypassPermissions"' "$managed" 2>/dev/null; then
-    exec /usr/local/bin/claude-real --allow-dangerously-skip-permissions "$@"
+    claude_real --allow-dangerously-skip-permissions "$@"
 fi
 
-exec /usr/local/bin/claude-real "$@"
+claude_real "$@"

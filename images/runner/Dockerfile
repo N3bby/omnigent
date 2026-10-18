@@ -111,3 +111,6 @@ RUN /tmp/omnigent-shell/install.sh && rm -rf /tmp/omnigent-shell
 
 COPY subscriptions.py /usr/local/lib/omnigent/subscriptions.py
 COPY subscription-login.py /usr/local/lib/omnigent/subscription-login.py
+# Settings → MCP servers: the wrappers start each agent through it
+# (docs/features/mcp-servers.md).
+COPY mcp-servers.py /usr/local/lib/omnigent/mcp-servers.py

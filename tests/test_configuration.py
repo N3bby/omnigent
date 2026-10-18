@@ -75,9 +75,8 @@ class ConfigurationTests(unittest.TestCase):
     def test_claude_wrapper_keeps_bypass_switchable(self) -> None:
         # The web picker can only switch back to bypass if it's in the cycle.
         wrapper = (ROOT / "images" / "runner" / "claude-wrapper.sh").read_text()
-        self.assertIn(
-            'exec /usr/local/bin/claude-real --allow-dangerously-skip-permissions "$@"', wrapper
-        )
+        self.assertIn('claude_real --allow-dangerously-skip-permissions "$@"', wrapper)
+        self.assertIn('exec /usr/local/bin/claude-real "$@"', wrapper)
         # Claude Code's auto-updater would replace the wrapper or shadow it.
         self.assertIn("export DISABLE_AUTOUPDATER=1\n", wrapper)
 

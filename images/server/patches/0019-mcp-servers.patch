@@ -1,0 +1,88 @@
+Mount Settings -> MCP servers: its routes, and its Secret in every runner Pod.
+
+omnigent_mcp_servers_api is this deployment's module, which the server image
+installs next to omnigent_mcp_servers. Admin checks use the same sources as
+/v1/me's is_admin, like the subscriptions routes. Every runner Pod's host
+container gets the omnigent-mcp-servers Secret read-only at
+/run/omnigent/mcp-servers; the volume is optional, so Pods start as before
+until a server is saved, and Kubernetes updates the mount when one changes.
+The agent wrappers read it (images/runner/mcp-servers.py).
+Applies after 0018-binary-preview-gzip.patch. Base: omnigent v0.18.0 (a8676d23e88d).
+
+diff --git a/omnigent/onboarding/sandboxes/kubernetes.py b/omnigent/onboarding/sandboxes/kubernetes.py
+index 0059024..dd87814 100644
+--- a/omnigent/onboarding/sandboxes/kubernetes.py
++++ b/omnigent/onboarding/sandboxes/kubernetes.py
+@@ -63,6 +63,7 @@ from omnigent_repo_env import checkouts_env as _repo_env_checkouts
+ from omnigent_repo_env import clone_command as _repo_env_clone_command
+ from omnigent_repo_env import pod_volumes as _repo_env_volumes
+ from omnigent_subscriptions import pod_volumes as _subscription_volumes
++from omnigent_mcp_servers import pod_volumes as _mcp_server_volumes
+ 
+ from omnigent.host.identity import (
+     HOST_ID_ENV_VAR,
+@@ -936,6 +937,8 @@ def build_job_manifest(
+     # them too: a repository's GIT_TOKEN variable replaces the GitHub App token.
+     repo_env_volumes, repo_env_mounts = _repo_env_volumes(repo.url for repo in repos)
+     subscription_volumes, subscription_mounts = _subscription_volumes()
++    # Settings → MCP servers, for every session's Claude Code and Codex.
++    mcp_server_volumes, mcp_server_mounts = _mcp_server_volumes()
+ 
+     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
+     if repos:
+@@ -1037,6 +1040,7 @@ def build_job_manifest(
+             *secret_volume_mounts,
+             *repo_env_mounts,
+             *subscription_mounts,
++            *mcp_server_mounts,
+         ],
+     }
+     if harness_secret:
+@@ -1058,7 +1062,14 @@ def build_job_manifest(
+             "fsGroupChangePolicy": "OnRootMismatch",
+             "seccompProfile": {"type": "RuntimeDefault"},
+         },
+-        "volumes": [home_volume, *pvc_volumes, *secret_volumes, *repo_env_volumes, *subscription_volumes],
++        "volumes": [
++            home_volume,
++            *pvc_volumes,
++            *secret_volumes,
++            *repo_env_volumes,
++            *subscription_volumes,
++            *mcp_server_volumes,
++        ],
+         "initContainers": [init_container],
+         "containers": [host_container],
+     }
+diff --git a/omnigent/server/app.py b/omnigent/server/app.py
+index bd886a9..01a9f89 100644
+--- a/omnigent/server/app.py
++++ b/omnigent/server/app.py
+@@ -128,6 +128,7 @@ from omnigent_repo_env_api import create_repo_env_router
+ import omnigent_startup as _startup
+ from omnigent_startup_api import create_startup_router
+ from omnigent_subscriptions_api import create_subscriptions_router
++from omnigent_mcp_servers_api import create_settings_mcp_servers_router
+ from omnigent.server.routes.terminal_attach import create_terminal_attach_router
+ from omnigent.server.routes.usage import create_usage_router
+ from omnigent.server.runner_session_init import (
+@@ -3421,6 +3422,19 @@ def create_app(
+         prefix="/v1",
+         tags=["subscriptions"],
+     )
++    # This deployment's Settings → MCP servers, for every runner's agents.
++    app.include_router(
++        create_settings_mcp_servers_router(
++            auth_provider=auth_provider,
++            is_admin=lambda user_id: (
++                (permission_store is not None and permission_store.is_admin(user_id))
++                or admin_list.is_admin(user_id)
++            ),
++            multi_user=permission_store is not None,
++        ),
++        prefix="/v1",
++        tags=["mcp_servers"],
++    )
+     # First-class projects (owner-private session containers). Mounted only
+     # when a project store is wired; the endpoints self-scope to the caller.
+     if project_store is not None:

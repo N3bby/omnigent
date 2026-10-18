@@ -304,6 +304,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(entry, {
             "repository": ROADPASS, "names": ["TOKEN", "URL"],
             "instructions": None, "setup_script": None,
+            "instructions": None, "mcp_servers": [],
             "updated_at": "2026-10-08T12:00:00+00:00", "updated_by": "levi",
         })
 

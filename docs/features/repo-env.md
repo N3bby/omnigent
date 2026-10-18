@@ -105,6 +105,10 @@ There's nothing to turn off. A repository without variables starts as before.
   `omnigent-repo-env-kunlabora-roadpass-66ad182d`. The annotation
   `omnigent.dev/repository` holds the repository, such as
   `github.com/kunlabora/roadpass`.
+  The same Secret holds the repository's
+  [MCP servers](mcp-servers.md#a-repositorys-servers) as `mcp-servers.json`,
+  which Settings → MCP servers edits. The card counts them, saving the
+  variables keeps them, and removing the repository removes them.
 - **The Settings page** (`images/server/web-patches/0005-repo-variables-page.patch`)
   calls `/v1/repo-env`, which `images/server/omnigent_repo_env_api.py`
   serves (mounted by `images/server/patches/0006-repo-env-routes.patch`).

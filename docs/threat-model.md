@@ -16,6 +16,9 @@ A compromised runner **can**:
   one up
 - read the [repository variables](features/repo-env.md) of the repositories
   its session started with
+- read the headers and variables of every
+  [MCP server in Settings](features/mcp-servers.md) for every session, and
+  of the servers of the repositories its session started with, and use them
 - use the GitHub access of the person who started the session, for as long
   as its short-lived token is valid
 - reach anything on the network: the internet, and other services in the
@@ -95,6 +98,13 @@ the runner namespace, which limits what a compromised server could do there.
   variable's value back to the browser, and only admins can change variables.
 - **Agent logins are shared.** Every runner uses the same Claude token and
   Codex login, so one compromised runner can use them.
+- **MCP servers' keys are shared too.** Every runner Pod mounts all the
+  servers for every session from Settings → MCP servers, values included,
+  whichever agents a server is switched on for. A repository's servers go by
+  repository name, like its variables. Give each one a key with as little
+  access as the server allows. Only admins can see or change them, and the
+  page never sends a value back to the browser. See
+  [MCP servers](features/mcp-servers.md).
 - **Agents skip permission prompts** by default (`claude_bypass_permissions`
   and `codex_bypass_approvals`). Turning these off makes the agents ask
   again, but since the agent is root in its pod it could change that setting

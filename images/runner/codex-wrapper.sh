@@ -19,6 +19,24 @@ real_codex=/usr/local/bin/codex-real
 # in the project directory, where the mise shims come first on PATH.
 node=/usr/local/bin/node
 shared_auth=/mnt/codex-home/auth.json
+# The MCP servers from Settings → MCP servers, global and the session's
+# repositories', once there are any (docs/features/mcp-servers.md).
+# mcp-servers.py adds them to a session's Codex, and starts Codex without
+# them if it can't.
+mcp_servers="${OMNIGENT_MCP_SERVERS_FILE:-/run/omnigent/mcp-servers/servers.json}"
+has_mcp_servers() {
+    [ -s "$mcp_servers" ] && return 0
+    for file in "${OMNIGENT_REPO_ENV_DIR:-/run/omnigent/repo-env}"/*/mcp-servers.json; do
+        [ -s "$file" ] && return 0
+    done
+    return 1
+}
+codex_real() {
+    if has_mcp_servers; then
+        exec /opt/venv/bin/python /usr/local/lib/omnigent/mcp-servers.py exec codex "$node" "$real_codex" -- "$@"
+    fi
+    exec "$node" "$real_codex" "$@"
+}
 # A remote TUI belongs to the already-running app-server. Keep its login link;
 # changing that link could make the old server refresh into another account's file.
 remote=0
@@ -74,11 +92,11 @@ if [ -n "${CODEX_HOME:-}" ]; then
                 echo "codex-wrapper: could not record the account in $CODEX_HOME/omnigent-subscription" >&2
             fi
             if [ "${OMNIGENT_CODEX_BYPASS_APPROVALS:-0}" = "1" ]; then
-                exec "$node" "$real_codex" --dangerously-bypass-approvals-and-sandbox "$@"
+                codex_real --dangerously-bypass-approvals-and-sandbox "$@"
             fi
             ;;
     esac
 fi
 
-exec "$node" "$real_codex" "$@"
+codex_real "$@"
 

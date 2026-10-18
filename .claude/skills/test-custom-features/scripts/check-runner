@@ -358,6 +358,39 @@ if [[ -d /run/omnigent/subscriptions ]]; then
 else
   fail "the Pod mounts the active subscriptions" "no /run/omnigent/subscriptions; this session predates the deploy"
 fi
+echo "== MCP servers"
+check "MCP server launcher matches images/runner/mcp-servers.py" cmp -s "$root/images/runner/mcp-servers.py" /usr/local/lib/omnigent/mcp-servers.py
+check "claude wrapper adds the MCP servers" grep -q 'mcp-servers.py exec claude' /usr/local/bin/claude
+check "codex wrapper adds the MCP servers" grep -q 'mcp-servers.py exec codex' /usr/local/bin/codex
+if [[ -d /run/omnigent/mcp-servers ]]; then
+  # Names only: the headers and variables next to them are never printed.
+  servers="$(python3 -c '
+import json, sys
+servers = json.load(open(sys.argv[1]))["servers"]
+print(" ".join("%s(%s)" % (s["name"], ",".join(s["agents"]) or "off") for s in servers) or "none")
+' /run/omnigent/mcp-servers/servers.json 2>/dev/null || echo none)"
+  repository_servers="$(python3 -c '
+import json, sys
+servers = [s for path in sys.argv[1:] for s in json.load(open(path))["servers"]]
+print(" ".join("%s(%s)" % (s["name"], ",".join(s["agents"]) or "off") for s in servers) or "none")
+' /run/omnigent/repo-env/*/mcp-servers.json 2>/dev/null || echo none)"
+  pass "the Pod mounts the MCP servers (in Settings: $servers; this session's repositories: $repository_servers)"
+  if [[ "$servers $repository_servers" != "none none" ]]; then
+    # What the claude wrapper would start, with echo in place of Claude.
+    config="$(OMNIGENT_MCP_CONFIG_DIR="$work/mcp" /opt/venv/bin/python /usr/local/lib/omnigent/mcp-servers.py exec claude /bin/echo -- -p 2>&1)"
+    case "$config" in
+      "-p") skip "Claude Code gets the MCP servers as --mcp-config" "none is switched on for Claude Code" ;;
+      "--mcp-config="*" -p")
+        config="${config#--mcp-config=}"
+        check "Claude Code gets the MCP servers as --mcp-config" \
+          python3 -c 'import json, sys; json.load(open(sys.argv[1]))["mcpServers"]' "${config% -p}"
+        ;;
+      *) fail "Claude Code gets the MCP servers as --mcp-config" "got: ${config:-nothing}" ;;
+    esac
+  fi
+else
+  fail "the Pod mounts the MCP servers" "no /run/omnigent/mcp-servers; this session predates the deploy"
+fi
 
 echo
 if ((failed)); then echo "runner checks: FAILED"; else echo "runner checks: passed"; fi
