@@ -33,7 +33,9 @@ Pod without it.
 6. **Save.**
 
 The page lists the servers for every session first, then each repository's
-under its name.
+under its name. Each server has an icon so you can tell them apart: the logo
+of the service it's for, such as Figma or GitHub, or its initial on a colour
+of its own. The editor shows the icon as you type.
 
 ![Adding a server for kunlabora/roadpass: its URL and an Authorization header](../images/mcp-servers-repository.webp)
 
@@ -157,6 +159,13 @@ delete the session.
 - **Omnigent's model probes don't start them**, so they don't slow down the
   model picker.
 - **Up to 32 servers** for every session, and up to 32 per repository.
+- **About 40 services have a logo**, such as Figma, GitHub, Linear, Sentry,
+  Notion, Jira, Postgres and Docker. A server gets one when its name, its
+  URL's host or its arguments name the service, in that order; the command
+  itself, like `npx` or `docker`, doesn't count. Name a server after its
+  service to get its logo. The logos are
+  [Simple Icons](https://simpleicons.org), which are public domain, and are
+  part of the web UI: the page loads nothing from elsewhere.
 
 ## Turning it off
 
@@ -177,7 +186,8 @@ Agents then start exactly as they did before this feature.
   it was read; otherwise the page asks you to reload. Removing a repository's
   last server removes its Secret when nothing else is left in it.
 - **The Settings page** (`images/server/web-patches/0028-mcp-servers.patch`)
-  calls `/v1/mcp-servers`, which `images/server/omnigent_mcp_servers_api.py`
+  takes its logos from `web/src/lib/mcpServerIcons.ts` and calls
+  `/v1/mcp-servers`, which `images/server/omnigent_mcp_servers_api.py`
   serves (mounted by `images/server/patches/0019-mcp-servers.patch`). Every
   route is admin-only, and no response contains a header's or variable's
   value. The server's existing permissions on Secrets in `omnigent-sandboxes`
