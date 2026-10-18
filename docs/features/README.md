@@ -14,7 +14,7 @@ What you see and choose while talking to an agent.
 | [Usage limits in the UI](usage-limits.md) | Your Claude and Codex usage, right in the composer | No |
 | [Fast mode from the chat](fast-mode.md) | Send `/fast` to switch Claude's or Codex's fast mode, and see when it's on | Fast mode is off until you send `/fast` |
 | [Model picker straight away](model-picker.md) | Choose a model before your first session has run | No |
-| [Fuzzy file search with @](fuzzy-file-mentions.md) | Type `@auth` to find a file anywhere in the workspace, like in Claude Code | No |
+| [Fuzzy file search with @](fuzzy-file-mentions.md) | Type `@auth` to find a file anywhere in the workspace and write it into your message, like in Claude Code | No |
 | [The environment menu](environment-menu.md) | See whether the sandbox is running, starting or stopped, copy its SSH command, restart the agent, or stop the sandbox and keep its files | Nothing to turn off |
 | [The startup card](startup-progress.md) | Each step of a sandbox's start as it happens, why it failed in plain words, and the whole startup log | Nothing to turn off |
 | [Start without a message](start-without-message.md) | Start a session from the New session screen with an empty composer, so its sandbox and @ file search are ready before you ask anything | Nothing to turn off |

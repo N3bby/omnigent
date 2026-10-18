@@ -72,7 +72,7 @@ and web sets:
 
 ```bash
 OMNIGENT_SKIP_WEB_UI=true mise exec uv@<uv> -- uv sync --extra all
-OMNIGENT_DATA_DIR=../dev-data PYTHONPATH=<this repo>/images/server \
+OMNIGENT_DATA_DIR=<this repo>/.generated/dev-data PYTHONPATH=<this repo>/images/server \
   mise exec uv@<uv> -- uv run omnigent server --port 7767 &
 cd web && OMNIGENT_URL=http://127.0.0.1:7767 \
   mise exec node@<node> pnpm@<pnpm> -- pnpm run dev --host 0.0.0.0 --port 7173 &
@@ -94,10 +94,12 @@ descriptive alt text, like the existing ones.
 
 For runner patches, set up a second checkout the same way with the runner
 set, and connect its host to that server. Give it its own data and config directories: your
-session's own runner is an Omnigent host too.
+session's own runner is an Omnigent host too. Use absolute paths: a runner
+opens its log after changing into the session's workspace, so a relative data
+directory makes every session fail to start.
 
 ```bash
-OMNIGENT_DATA_DIR=../host-data OMNIGENT_CONFIG_HOME=../host-config OMNIGENT_HOST_NO_OPEN=1 \
+OMNIGENT_DATA_DIR=<this repo>/.generated/host-data OMNIGENT_CONFIG_HOME=<this repo>/.generated/host-config OMNIGENT_HOST_NO_OPEN=1 \
   mise exec uv@<uv> -- uv run omnigent host --server http://127.0.0.1:7767 --non-interactive &
 ```
 

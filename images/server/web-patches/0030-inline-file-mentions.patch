@@ -1,0 +1,1001 @@
+Write "@" file mentions into the message, as in Claude Code.
+
+Upstream's "@" menu turns a pick into a chip under the composer and sends it
+as an "[Attached: <path>]" line before the message, so "add a test to
+@src/app.ts" can't be written: the path leaves the sentence. A pick from the
+menu now replaces the "@" token with "@src/app.ts" (a folder gets a trailing
+"/", a path with a space is quoted) and a space, and the message is sent as
+typed. Claude Code reads a mentioned file itself; Codex and the other agents
+run in the workspace and open the path. The rest of a token the caret sat
+inside is replaced too, so "@readm|e" becomes "@readme.md". In the composer
+a path mention is coloured, drawn by a copy of the text behind the
+transparent textarea, as upstream colours a slash command; that copy now
+takes the textarea's exact box and scroll, since a padded theme moved
+upstream's off the caret. The user bubble shows a path mention as inline
+code, which opens the file when clicked and keeps "__init__.py" from turning
+bold; "@alice" and code stay as typed. The menu says "insert" instead of
+"attach". The file viewer's "Attach to agent" still adds a chip for a line
+range, sent as before. The new-session screen's "@" menu writes into the
+text the same way, and drops its chips.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0029.
+
+diff --git a/web/src/components/FileMentionMenu.tsx b/web/src/components/FileMentionMenu.tsx
+index b76f38c10..59d3e1eab 100644
+--- a/web/src/components/FileMentionMenu.tsx
++++ b/web/src/components/FileMentionMenu.tsx
+@@ -29,7 +29,7 @@ interface FileMentionMenuProps {
+   loading?: boolean;
+   /** Open (drill into) a folder by its workspace-relative path. */
+   onOpenDir: (path: string) => void;
+-  /** Attach a file (isDir=false) or whole folder (isDir=true) as a unit. */
++  /** Insert a file (isDir=false) or whole folder (isDir=true) as an ``@`` mention. */
+   onAttach: (path: string, isDir: boolean) => void;
+ }
+ 
+@@ -65,8 +65,8 @@ function highlighted(text: string, offset: number, positions: Set<number>): Reac
+ /**
+  * Floating drill-down file/folder browser shown when the user types ``@`` in
+  * a native coding-agent session. Folders open (drill in) on click so nested
+- * files are reachable; a file attaches on click, and a folder's ``+`` button
+- * attaches the whole directory as a unit. Mirrors {@link SlashCommandMenu}'s
++ * files are reachable; a file is inserted on click, and a folder's ``+``
++ * button inserts the whole directory as a unit. Mirrors {@link SlashCommandMenu}'s
+  * keep-the-active-row-visible behaviour. Exported for direct unit testing.
+  */
+ export function FileMentionMenu({
+@@ -98,7 +98,7 @@ export function FileMentionMenu({
+                 ? `/${currentDir}`
+                 : "Workspace"}
+           </span>
+-          <span className="shrink-0 text-[10px]">↵ open · ⇥ attach</span>
++          <span className="shrink-0 text-[10px]">↵ open · ⇥ insert</span>
+         </div>
+         {entries.length === 0 && loading ? (
+           <div className="px-1.5 py-1 text-ui text-muted-foreground">Loading…</div>
+@@ -130,7 +130,7 @@ export function FileMentionMenu({
+                     onMouseDown={(e) => e.preventDefault()}
+                     onClick={() => (isDir ? onOpenDir(entry.path) : onAttach(entry.path, false))}
+                     className="flex min-w-0 flex-1 items-center gap-2 hover:text-foreground"
+-                    title={isDir ? `Open ${entry.name}` : `Attach ${entry.name}`}
++                    title={isDir ? `Open ${entry.name}` : `Insert ${entry.name}`}
+                   >
+                     {isDir ? (
+                       <FolderIcon className="size-3.5 shrink-0 text-slate-500 dark:text-slate-400" />
+@@ -158,8 +158,8 @@ export function FileMentionMenu({
+                       onMouseDown={(e) => e.preventDefault()}
+                       onClick={() => onAttach(entry.path, true)}
+                       className="flex shrink-0 items-center gap-0.5 rounded-md border border-border px-1.5 py-0.5 text-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+-                      aria-label={`Attach whole folder ${entry.name}`}
+-                      title={`Attach whole folder ${entry.name}`}
++                      aria-label={`Insert whole folder ${entry.name}`}
++                      title={`Insert whole folder ${entry.name}`}
+                     >
+                       <PlusIcon className="size-3" />
+                       folder
+diff --git a/web/src/components/chat/chatBubbleParts.tsx b/web/src/components/chat/chatBubbleParts.tsx
+index 30da5c4c3..cc7555564 100644
+--- a/web/src/components/chat/chatBubbleParts.tsx
++++ b/web/src/components/chat/chatBubbleParts.tsx
+@@ -53,7 +53,7 @@ import { isSystemUserContent, parseSystemMessage } from "@/lib/systemMessage";
+ import { Button } from "@/components/ui/button";
+ import { BrandLogo } from "@/components/BrandLogo";
+ import { cn } from "@/lib/utils";
+-import { mentionItemPath, type MentionItem } from "@/lib/composerMentions";
++import { markMentionPaths, mentionItemPath, type MentionItem } from "@/lib/composerMentions";
+ import type { ImageContentBlock, MessageContentBlock } from "@/lib/blocks";
+ import {
+   attachmentLabel,
+@@ -884,7 +884,7 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
+                       mode="static"
+                       remarkRehypeOptions={USER_MESSAGE_REMARK_REHYPE_OPTIONS}
+                     >
+-                      {visibleText}
++                      {markMentionPaths(visibleText)}
+                     </FilePathAwareMessageResponse>
+                   )}
+                   {/* Gradient fade at the bottom of collapsed prompts to signal
+diff --git a/web/src/components/composer/ComposerHighlightBackdrop.tsx b/web/src/components/composer/ComposerHighlightBackdrop.tsx
+new file mode 100644
+index 000000000..02ef3b78d
+--- /dev/null
++++ b/web/src/components/composer/ComposerHighlightBackdrop.tsx
+@@ -0,0 +1,85 @@
++import { type ReactNode, type RefObject, useLayoutEffect, useRef } from "react";
++
++import { mentionSegments } from "@/lib/composerMentions";
++
++/**
++ * How an ``@`` path mention looks in the composer. Colour and background only:
++ * padding or a bolder weight would change the text's width and move the
++ * textarea's caret away from the letters drawn here.
++ */
++const MENTION_CLASS =
++  "rounded-sm bg-brand-accent/15 text-brand-accent [box-decoration-break:clone]";
++
++/** True when the text has an ``@`` path mention to highlight. */
++export function hasMentionPaths(text: string): boolean {
++  return text.includes("@") && mentionSegments(text).some((s) => s.path !== undefined);
++}
++
++/** The text with each ``@`` path mention wrapped in a highlight. */
++export function MentionHighlights({ text }: { text: string }): ReactNode {
++  let offset = 0;
++  return mentionSegments(text).map((s) => {
++    const at = offset;
++    offset += s.text.length;
++    if (s.path === undefined) return s.text;
++    return (
++      <span key={at} data-composer-mention={s.path} className={MENTION_CLASS}>
++        {s.text}
++      </span>
++    );
++  });
++}
++
++/**
++ * A copy of the composer's text drawn behind its textarea, for colouring parts
++ * of it: a textarea paints all its text one colour, so the caller makes the
++ * textarea's text transparent (keeping its caret) while this is mounted.
++ * ``children`` is ``text`` drawn with its highlights. It takes the textarea's
++ * exact box and typography, and its scroll, so every letter lands under the
++ * textarea's own, however the theme pads the composer.
++ */
++export function ComposerHighlightBackdrop({
++  text,
++  textarea,
++  children,
++  ...props
++}: {
++  text: string;
++  textarea: RefObject<HTMLTextAreaElement | null>;
++  children: ReactNode;
++  "data-testid"?: string;
++}) {
++  const ref = useRef<HTMLDivElement>(null);
++  useLayoutEffect(() => {
++    const ta = textarea.current;
++    const copy = ref.current;
++    if (!ta || !copy) return;
++    const place = () => {
++      copy.style.top = `${ta.offsetTop}px`;
++      copy.style.left = `${ta.offsetLeft}px`;
++      copy.style.width = `${ta.clientWidth}px`;
++      copy.style.height = `${ta.clientHeight}px`;
++      copy.scrollTop = ta.scrollTop;
++    };
++    place();
++    const resized = new ResizeObserver(place);
++    resized.observe(ta);
++    ta.addEventListener("scroll", place);
++    return () => {
++      resized.disconnect();
++      ta.removeEventListener("scroll", place);
++    };
++  }, [textarea, text]);
++  return (
++    <div
++      ref={ref}
++      aria-hidden
++      className="composer-input-text pointer-events-none absolute overflow-hidden whitespace-pre-wrap break-words text-ui text-foreground"
++      {...props}
++    >
++      {children}
++      {/* A last empty line still takes its height, as in the textarea. */}
++      {text.endsWith("\n") && " "}
++    </div>
++  );
++}
+diff --git a/web/src/hooks/useMentionBrowser.ts b/web/src/hooks/useMentionBrowser.ts
+index c53f52843..f31fafe50 100644
+--- a/web/src/hooks/useMentionBrowser.ts
++++ b/web/src/hooks/useMentionBrowser.ts
+@@ -1,13 +1,12 @@
+ import { type KeyboardEvent, type RefObject, useRef, useState } from "react";
+ 
+-import type { MentionItem, MentionState } from "@/lib/composerMentions";
+-import { composerAttachmentKey } from "@/store/chatStore";
++import { type MentionItem, type MentionState, mentionToken } from "@/lib/composerMentions";
+ import type { WorkspaceFile } from "@/hooks/useWorkspaceChangedFiles";
+ 
+ /**
+  * Inputs the host composer supplies. The data source (workspace API vs. host
+  * filesystem) and the mention-token state live in the composer — only the
+- * stateful glue (selection index, tagged chips, attach/drill/remove handlers,
++ * stateful glue (selection index, tagged chips, insert/drill/remove handlers,
+  * keyboard navigation, top-row preselect) is shared here, so the two composers
+  * can't drift.
+  */
+@@ -31,7 +30,7 @@ export interface MentionBrowser {
+   mentionOpen: boolean;
+   mentionedItems: MentionItem[];
+   setMentionedItems: React.Dispatch<React.SetStateAction<MentionItem[]>>;
+-  /** Attach a file (isDir=false) or whole folder (isDir=true) as a chip. */
++  /** Write ``@<path>`` for a file or ``@<path>/`` for a whole folder into the text. */
+   attachMention: (path: string, isDir: boolean) => void;
+   /** Drill into a folder: rewrite the token to ``@<dir>/`` and keep browsing. */
+   openMentionDir: (path: string) => void;
+@@ -44,9 +43,11 @@ export interface MentionBrowser {
+ 
+ /**
+  * Shared ``@``-file-mention controller for the in-session composer and the
+- * new-session launcher. Owns the selection index, the tagged-chip list, and
+- * the attach/drill/remove + keyboard behaviour; the composer owns the token
+- * state and supplies the directory listing (its data source differs).
++ * new-session launcher. Owns the selection index, the tagged-chip list (only
++ * the file viewer's "Attach to agent" fills it: a pick from the menu is
++ * written into the text as ``@<path>``), and the insert/drill/remove +
++ * keyboard behaviour; the composer owns the token state and supplies the
++ * directory listing (its data source differs).
+  */
+ export function useMentionBrowser(params: MentionBrowserParams): MentionBrowser {
+   const {
+@@ -78,21 +79,20 @@ export function useMentionBrowser(params: MentionBrowserParams): MentionBrowser
+ 
+   const attachMention = (path: string, isDir: boolean) => {
+     if (!mention) return;
+-    setText(text.slice(0, mention.start) + text.slice(mention.end));
+-    // Dedup on the shared attachment key (path + dir-ness + range) — the same
+-    // identity the store queue uses — so the "@" menu and the file viewer's
+-    // "Attach to agent" never disagree about what counts as a duplicate.
+-    const item: MentionItem = { path, isDir };
+-    const itemKey = composerAttachmentKey(item);
+-    setMentionedItems((prev) =>
+-      prev.some((it) => composerAttachmentKey(it) === itemKey) ? prev : [...prev, item],
+-    );
++    // Write the mention into the text, as Claude Code does, so "add this to
++    // @src/app.ts" reads the way it was typed. The rest of a token the caret
++    // sat inside goes too, and a space follows unless one already does.
++    const tokenEnd = mention.end + (/^\S*/.exec(text.slice(mention.end))?.[0].length ?? 0);
++    const after = text.slice(tokenEnd);
++    const token = mentionToken(path, isDir);
++    setText(text.slice(0, mention.start) + token + (/^\s/.test(after) ? "" : " ") + after);
+     setMention(null);
+     setMentionIndex(-1);
+-    // Restore the caret to where the token was so typing continues naturally.
++    // Put the caret after the mention and its space so typing continues.
++    const caret = mention.start + token.length + 1;
+     queueMicrotask(() => {
+       const ta = textareaRef.current;
+-      if (ta) ta.setSelectionRange(mention.start, mention.start);
++      if (ta) ta.setSelectionRange(caret, caret);
+       ta?.focus();
+     });
+   };
+@@ -134,7 +134,7 @@ export function useMentionBrowser(params: MentionBrowserParams): MentionBrowser
+       setMentionIndex((i) => (i <= 0 ? mentionEntries.length - 1 : i - 1));
+       return true;
+     }
+-    // Enter: open a folder (drill in) or attach a file. Tab: attach the
++    // Enter: open a folder (drill in) or insert a file. Tab: insert the
+     // highlighted row as a unit — whole folder or file — without drilling.
+     if (e.key === "Enter" && !e.shiftKey && !isMobile && active) {
+       e.preventDefault();
+diff --git a/web/src/lib/composerMentions.ts b/web/src/lib/composerMentions.ts
+index ab14e4062..1f83003fc 100644
+--- a/web/src/lib/composerMentions.ts
++++ b/web/src/lib/composerMentions.ts
+@@ -38,6 +38,93 @@ export function mentionItemPath(item: MentionItem): string {
+   return item.isDir ? `${item.path}/` : item.path;
+ }
+ 
++/**
++ * The text a pick from the ``@`` menu writes into the composer: ``@src/app.ts``,
++ * ``@src/`` for a whole folder, and ``@"my notes.md"`` when the path has a
++ * space, the forms Claude Code's own ``@`` mentions take. Claude Code reads
++ * the file when the message reaches it; other agents see the path.
++ */
++export function mentionToken(path: string, isDir: boolean): string {
++  const target = isDir ? `${path}/` : path;
++  return /\s/.test(target) ? `@"${target}"` : `@${target}`;
++}
++
++// An "@" mention: at the start or after whitespace, then a quoted path or a
++// run without whitespace. Sentence punctuation after it isn't part of the path.
++const MENTION_PATH_RE = /(^|\s)(@(?:"([^"\n]+)"|([^\s@`"]+?)))(?=[.,;:!?)\]]*(?:\s|$))/g;
++// Fenced code blocks and inline code spans, which keep their text as is.
++const CODE_FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
++const INLINE_CODE_RE = /(`+)[^`]*?\1/g;
++
++/** A run of text, or an ``@`` path mention with the path it names. */
++export interface MentionSegment {
++  text: string;
++  path?: string;
++}
++
++/**
++ * Split text into plain runs and ``@`` path mentions, for showing mentions
++ * apart from the rest. Only path-shaped mentions count (one with a ``/`` or
++ * ``.``, or a quoted one), so ``@alice`` stays prose. Text in code blocks and
++ * code spans is left alone. Joining every segment's ``text`` gives the input.
++ */
++export function mentionSegments(text: string): MentionSegment[] {
++  const out: MentionSegment[] = [];
++  const plain = (t: string) => {
++    if (!t) return;
++    const last = out[out.length - 1];
++    if (last && last.path === undefined) last.text += t;
++    else out.push({ text: t });
++  };
++  const prose = (t: string) => {
++    let last = 0;
++    for (const m of t.matchAll(MENTION_PATH_RE)) {
++      const path = m[3] ?? m[4] ?? "";
++      if (m[3] === undefined && !/[/.]/.test(path)) continue;
++      const at = m.index + m[1].length;
++      plain(t.slice(last, at));
++      out.push({ text: m[2], path });
++      last = at + m[2].length;
++    }
++    plain(t.slice(last));
++  };
++  let fence: string | null = null;
++  text.split("\n").forEach((line, i) => {
++    if (i > 0) plain("\n");
++    const opener = CODE_FENCE_RE.exec(line)?.[1];
++    if (fence) {
++      if (opener && opener[0] === fence[0] && opener.length >= fence.length) fence = null;
++      plain(line);
++      return;
++    }
++    if (opener) {
++      fence = opener;
++      plain(line);
++      return;
++    }
++    let last = 0;
++    for (const span of line.matchAll(INLINE_CODE_RE)) {
++      prose(line.slice(last, span.index));
++      plain(span[0]);
++      last = span.index + span[0].length;
++    }
++    prose(line.slice(last));
++  });
++  return out;
++}
++
++/**
++ * Show each ``@path`` mention in a sent message as an inline code path, so the
++ * user bubble draws it like one, opens the file when clicked, and Markdown
++ * can't read a ``__init__.py`` as bold.
++ */
++export function markMentionPaths(text: string): string {
++  if (!text.includes("@")) return text;
++  return mentionSegments(text)
++    .map((s) => (s.path === undefined ? s.text : `@\`${s.path}\``))
++    .join("");
++}
++
+ // Token preceding the caret: an "@" at the start of the inspected string or
+ // after whitespace, followed by a run with no whitespace and no further "@".
+ // (``^`` anchors to the start of the sliced ``before`` text, not a line — a
+diff --git a/web/src/pages/ChatPage.mention.test.tsx b/web/src/pages/ChatPage.mention.test.tsx
+index c882ce1c9..264c313aa 100644
+--- a/web/src/pages/ChatPage.mention.test.tsx
++++ b/web/src/pages/ChatPage.mention.test.tsx
+@@ -113,6 +113,7 @@ vi.mock("@/lib/agentLabels", async (importOriginal) => ({
+ }));
+ 
+ import { Composer, detectMentionAt, mentionMarkerFor } from "./ChatPage";
++import { markMentionPaths, mentionSegments, mentionToken } from "@/lib/composerMentions";
+ 
+ function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) {
+   return {
+@@ -229,6 +230,43 @@ describe("mentionMarkerFor", () => {
+   });
+ });
+ 
++describe("mentionToken", () => {
++  it("writes a file, a folder and a path with spaces the way Claude Code does", () => {
++    expect(mentionToken("src/a.ts", false)).toBe("@src/a.ts");
++    expect(mentionToken("src", true)).toBe("@src/");
++    expect(mentionToken("docs/my notes.md", false)).toBe('@"docs/my notes.md"');
++  });
++});
++
++describe("mentionSegments", () => {
++  it("splits out path mentions, keeping every character", () => {
++    const text = 'see @src/a.ts, @"my notes.md" and @bob\n`@b.ts`';
++    const segments = mentionSegments(text);
++    expect(segments.map((s) => s.text).join("")).toBe(text);
++    expect(segments.filter((s) => s.path).map((s) => [s.text, s.path])).toEqual([
++      ["@src/a.ts", "src/a.ts"],
++      ['@"my notes.md"', "my notes.md"],
++    ]);
++  });
++});
++
++describe("markMentionPaths", () => {
++  it("turns path mentions into code paths, leaving punctuation after them", () => {
++    expect(markMentionPaths("add a test to @src/a.ts.")).toBe("add a test to @`src/a.ts`.");
++    expect(markMentionPaths("@omnigent/__init__.py and @src/")).toBe(
++      "@`omnigent/__init__.py` and @`src/`",
++    );
++    expect(markMentionPaths('see @"docs/my notes.md"')).toBe("see @`docs/my notes.md`");
++  });
++
++  it("leaves people, emails and code alone", () => {
++    expect(markMentionPaths("ask @alice, mail bob@x.com")).toBe("ask @alice, mail bob@x.com");
++    expect(markMentionPaths("run `cat @a.ts` now")).toBe("run `cat @a.ts` now");
++    const fenced = "```\n@a.ts\n```\n@b.ts";
++    expect(markMentionPaths(fenced)).toBe("```\n@a.ts\n```\n@`b.ts`");
++  });
++});
++
+ describe("Composer @-file-mention browser (native sessions)", () => {
+   // Each test gets a fresh conversation id and a cleared draft store: the
+   // module-scoped ``sessionDrafts`` map (persisted to localStorage) is keyed by
+@@ -254,60 +292,75 @@ describe("Composer @-file-mention browser (native sessions)", () => {
+     renderWithTooltips(<Composer {...composerProps()} />);
+     type("@");
+     expect(screen.getByTitle("Open src")).toBeInTheDocument();
+-    expect(screen.getByTitle("Attach readme.md")).toBeInTheDocument();
++    expect(screen.getByTitle("Insert readme.md")).toBeInTheDocument();
+   });
+ 
+-  it("opens a folder to reveal nested files, then delivers the chosen file", () => {
++  it("opens a folder to reveal nested files, then writes the chosen one into the text", () => {
+     const onSend = vi.fn();
+     renderWithTooltips(<Composer {...composerProps({ onSend })} />);
+ 
+-    type("@src");
++    type("explain @src");
+     // Nested files are NOT visible until the folder is opened (drill-down).
+-    expect(screen.queryByTitle("Attach server.ts")).not.toBeInTheDocument();
++    expect(screen.queryByTitle("Insert server.ts")).not.toBeInTheDocument();
+     fireEvent.click(screen.getByTitle("Open src"));
+ 
+-    // Now inside src: nested files appear.
+-    fireEvent.click(screen.getByTitle("Attach server.ts"));
+-    expect(screen.getByText("@src/server.ts")).toBeInTheDocument();
++    // Now inside src: nested files appear. A pick stays in the text, as in
++    // Claude Code, followed by a space to type on after.
++    fireEvent.click(screen.getByTitle("Insert server.ts"));
++    expect(textarea().value).toBe("explain @src/server.ts ");
++    expect(screen.queryByLabelText("Remove server.ts")).not.toBeInTheDocument();
+ 
+-    type("explain this");
++    type("explain @src/server.ts please");
+     fireEvent.submit(textarea().closest("form")!);
+ 
+-    // The WHY: the agent reads the on-disk nested file from this exact marker.
+-    // No File is uploaded (second arg undefined).
+-    expect(onSend).toHaveBeenCalledWith("[Attached: src/server.ts]\n\nexplain this", undefined);
++    // Sent as typed: the agent reads the on-disk file the mention names.
++    expect(onSend).toHaveBeenCalledWith("explain @src/server.ts please", undefined);
+   });
+ 
+-  it("attaches a whole folder as a single trailing-slash marker", () => {
++  it("inserts a whole folder with a trailing slash", () => {
+     const onSend = vi.fn();
+     renderWithTooltips(<Composer {...composerProps({ onSend })} />);
+ 
+     type("@src");
+-    fireEvent.click(screen.getByLabelText("Attach whole folder src"));
+-    expect(screen.getByText("@src/")).toBeInTheDocument();
++    fireEvent.click(screen.getByLabelText("Insert whole folder src"));
++    expect(textarea().value).toBe("@src/ ");
++  });
+ 
+-    type("review the module");
+-    fireEvent.submit(textarea().closest("form")!);
++  it("replaces the rest of the token the caret is in, and keeps the text after it", () => {
++    renderWithTooltips(<Composer {...composerProps()} />);
++    // The caret sits after "@rea" in "add @readm to it".
++    fireEvent.change(textarea(), {
++      target: { value: "add @readm to it", selectionStart: 8 },
++    });
++    fireEvent.click(screen.getByTitle("Insert readme.md"));
++    expect(textarea().value).toBe("add @readme.md to it");
++  });
++
++  it("colours a path mention in the composer, and leaves other text alone", () => {
++    renderWithTooltips(<Composer {...composerProps()} />);
++    type("ask @alice");
++    expect(screen.queryByTestId("composer-highlight-overlay")).not.toBeInTheDocument();
++    expect(textarea()).not.toHaveClass("text-transparent");
+ 
+-    // A folder is delivered with a trailing "/" so the agent opens the dir.
+-    expect(onSend).toHaveBeenCalledWith("[Attached: src/]\n\nreview the module", undefined);
++    type("@");
++    fireEvent.click(screen.getByTitle("Insert readme.md"));
++    // The textarea hands its letters to the backdrop, which colours the path.
++    const overlay = screen.getByTestId("composer-highlight-overlay");
++    expect(overlay.textContent).toBe("@readme.md ");
++    expect(overlay.querySelector("[data-composer-mention]")).toHaveTextContent("@readme.md");
++    expect(textarea()).toHaveClass("text-transparent");
+   });
+ 
+-  it.each([
+-    ["claude-native", "[Attached: src/server.ts]\n\ngo"],
+-    ["pi-native", "[Attached: src/server.ts]\n\ngo"],
+-    ["cursor-native", "[Attached: src/server.ts]\n\ngo"],
+-    ["codex-native", "[Attached file: src/server.ts]\n\ngo"],
+-  ])("delivers the harness-correct marker on %s", (harness, expected) => {
++  it.each(["claude-native", "codex-native"])("sends the mention as typed on %s", (harness) => {
+     useChatStore.setState({ sessionHarness: harness });
+     const onSend = vi.fn();
+     renderWithTooltips(<Composer {...composerProps({ onSend })} />);
+     type("@src");
+     fireEvent.click(screen.getByTitle("Open src"));
+-    fireEvent.click(screen.getByTitle("Attach server.ts"));
+-    type("go");
++    fireEvent.click(screen.getByTitle("Insert server.ts"));
++    type("@src/server.ts go");
+     fireEvent.submit(textarea().closest("form")!);
+-    expect(onSend).toHaveBeenCalledWith(expected, undefined);
++    expect(onSend).toHaveBeenCalledWith("@src/server.ts go", undefined);
+   });
+ 
+   it("drains a file-viewer 'Attach to agent' line range into a chip and marker", () => {
+@@ -367,7 +420,7 @@ describe("Composer @-file-mention browser (native sessions)", () => {
+     // Row 0 (src, folders-first) is preselected; move to row 1 (readme.md).
+     fireEvent.keyDown(ta, { key: "ArrowDown" });
+     fireEvent.keyDown(ta, { key: "Enter" });
+-    expect(screen.getByText("@readme.md")).toBeInTheDocument();
++    expect(textarea().value).toBe("@readme.md ");
+   });
+ 
+   it("ArrowUp from the top row wraps to the last row", () => {
+@@ -376,28 +429,26 @@ describe("Composer @-file-mention browser (native sessions)", () => {
+     // From row 0, ArrowUp wraps to the last row (readme.md), not -1.
+     fireEvent.keyDown(textarea(), { key: "ArrowUp" });
+     fireEvent.keyDown(textarea(), { key: "Enter" });
+-    expect(screen.getByText("@readme.md")).toBeInTheDocument();
++    expect(textarea().value).toBe("@readme.md ");
+   });
+ 
+   it("Enter on a directory row drills in rather than attaching", () => {
+     renderWithTooltips(<Composer {...composerProps()} />);
+     type("@");
+     // Row 0 is the "src" folder: Enter must open it (reveal nested files), and
+-    // must NOT produce a chip — drilling is navigation, not attachment. (The
+-    // token becomes "@src/" in the textarea; a chip would instead surface a
+-    // "Remove src" button, which must be absent.)
++    // leave the token open as "@src/" rather than finishing the mention.
+     fireEvent.keyDown(textarea(), { key: "Enter" });
+-    expect(screen.getByTitle("Attach server.ts")).toBeInTheDocument();
+-    expect(screen.queryByLabelText("Remove src")).not.toBeInTheDocument();
++    expect(screen.getByTitle("Insert server.ts")).toBeInTheDocument();
++    expect(textarea().value).toBe("@src/");
+   });
+ 
+-  it("Tab attaches the highlighted folder as a whole-directory unit", () => {
++  it("Tab inserts the highlighted folder as a whole-directory unit", () => {
+     renderWithTooltips(<Composer {...composerProps()} />);
+     type("@");
+-    // Tab on the "src" folder attaches it as a unit (trailing-slash chip),
++    // Tab on the "src" folder inserts it as a unit (trailing slash),
+     // distinct from Enter's drill-in.
+     fireEvent.keyDown(textarea(), { key: "Tab" });
+-    expect(screen.getByText("@src/")).toBeInTheDocument();
++    expect(textarea().value).toBe("@src/ ");
+   });
+ 
+   it("Escape closes the mention menu", () => {
+@@ -410,25 +461,6 @@ describe("Composer @-file-mention browser (native sessions)", () => {
+ 
+   // ── Chip lifecycle + dedup (M8, M2) ──────────────────────────────────────
+ 
+-  it("removes a tagged chip when its ✕ is clicked", () => {
+-    renderWithTooltips(<Composer {...composerProps()} />);
+-    type("@");
+-    fireEvent.click(screen.getByTitle("Attach readme.md"));
+-    expect(screen.getByText("@readme.md")).toBeInTheDocument();
+-    fireEvent.click(screen.getByLabelText("Remove readme.md"));
+-    expect(screen.queryByText("@readme.md")).not.toBeInTheDocument();
+-  });
+-
+-  it("dedups re-attaching the same file via '@' to a single chip", () => {
+-    renderWithTooltips(<Composer {...composerProps()} />);
+-    type("@");
+-    fireEvent.click(screen.getByTitle("Attach readme.md"));
+-    type("@");
+-    fireEvent.click(screen.getByTitle("Attach readme.md"));
+-    // Same path + dir-ness + (no) range → same identity key → one chip.
+-    expect(screen.getAllByText("@readme.md")).toHaveLength(1);
+-  });
+-
+   it("keeps two distinct line ranges of the same file as separate chips", () => {
+     // WHY (M2): the dedup key is path + dir-ness + line range, NOT path alone.
+     // A path-only key would silently drop the second range — but two ranges of
+@@ -530,10 +562,11 @@ describe("Composer @-file-mention fuzzy search (native sessions)", () => {
+     type("@auth");
+     expect(screen.getByText("Search workspace")).toBeInTheDocument();
+     expect(rowTexts()[0]).toBe("auth.tssrc/lib/");
+-    fireEvent.click(screen.getByTitle("Attach auth.ts"));
+-    type("check this");
++    fireEvent.click(screen.getByTitle("Insert auth.ts"));
++    expect(textarea().value).toBe("@src/lib/auth.ts ");
++    type("@src/lib/auth.ts check this");
+     fireEvent.submit(textarea().closest("form")!);
+-    expect(onSend).toHaveBeenCalledWith("[Attached: src/lib/auth.ts]\n\ncheck this", undefined);
++    expect(onSend).toHaveBeenCalledWith("@src/lib/auth.ts check this", undefined);
+   });
+ 
+   it("matches characters in order even when they aren't together", () => {
+@@ -565,14 +598,11 @@ describe("Composer @-file-mention fuzzy search (native sessions)", () => {
+     expect(textarea().value).toBe("@src/lib/");
+   });
+ 
+-  it("attaches a whole folder from the results with Tab", () => {
+-    const onSend = vi.fn();
+-    renderWithTooltips(<Composer {...composerProps({ onSend })} />);
++  it("inserts a whole folder from the results with Tab", () => {
++    renderWithTooltips(<Composer {...composerProps()} />);
+     type("@lib");
+     fireEvent.keyDown(textarea(), { key: "Tab" });
+-    type("look");
+-    fireEvent.submit(textarea().closest("form")!);
+-    expect(onSend).toHaveBeenCalledWith("[Attached: src/lib/]\n\nlook", undefined);
++    expect(textarea().value).toBe("@src/lib/ ");
+   });
+ 
+   it("filters the folder meanwhile, and swallows Enter, while the index loads", () => {
+@@ -580,7 +610,7 @@ describe("Composer @-file-mention fuzzy search (native sessions)", () => {
+     const onSend = vi.fn();
+     renderWithTooltips(<Composer {...composerProps({ onSend })} />);
+     type("@read");
+-    expect(screen.getByTitle("Attach readme.md")).toBeInTheDocument();
++    expect(screen.getByTitle("Insert readme.md")).toBeInTheDocument();
+     type("@deep");
+     expect(screen.getByText("Loading…")).toBeInTheDocument();
+     fireEvent.keyDown(textarea(), { key: "Enter" });
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index c802bacdd..13b0a147e 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -40,6 +40,11 @@ import {
+   ComposerSendButton,
+ } from "@/components/composer/ChatComposer";
+ import { ComposerMentionChips } from "@/components/composer/ComposerMentionChips";
++import {
++  ComposerHighlightBackdrop,
++  MentionHighlights,
++  hasMentionPaths,
++} from "@/components/composer/ComposerHighlightBackdrop";
+ import { ComposerAddMenu } from "@/components/composer/ComposerAddMenu";
+ import { BackgroundTaskIndicator } from "@/components/composer/BackgroundTaskIndicator";
+ import { SubagentTaskIndicator } from "@/components/composer/SubagentTaskIndicator";
+@@ -2284,9 +2289,9 @@ function ComposerImpl(
+   // Active "@"-file-mention being typed, plus its highlighted row and the
+   // workspace paths the user has already tagged. ``@``-mention is wired for
+   // the native coding-agent sessions (see ``mentionEnabled``): those harnesses
+-  // run in the workspace and read a file from an "[Attached: …]" marker, so a
+-  // tagged path is delivered by prepending that marker at send time — no
+-  // upload, the agent reads the on-disk file directly.
++  // run in the workspace, so a pick is written into the text as ``@<path>``,
++  // as in Claude Code, and the agent reads the on-disk file. A line range
++  // from "Attach to agent" is a chip, delivered as an "[Attached: …]" marker.
+   // Active "@"-mention token (owned here; the shared useMentionBrowser hook
+   // owns the selection index, tagged chips, and attach/drill/keyboard glue).
+   const [mention, setMention] = useState<MentionState | null>(null);
+@@ -2351,7 +2356,6 @@ function ComposerImpl(
+   const dictation = useDictationInsert(value, setValue, textareaRef);
+   // Highlight overlay mirroring the textarea; scroll-synced so the tinted
+   // `/skill` token stays aligned once the draft grows past the visible rows.
+-  const backdropRef = useRef<HTMLDivElement>(null);
+   const isStreaming = status === "streaming";
+ 
+   // Read-only when either the user lacks a write grant OR the session
+@@ -2733,6 +2737,9 @@ function ComposerImpl(
+     files.length === 0 &&
+     hasCommandPrefix &&
+     splitSlashCommand(value, slashCommandNames) !== null;
++  // Colour "@" path mentions in the draft, as the sent message shows them.
++  const composerHasMentions = mentionEnabled && draft.quotes.length === 0 && hasMentionPaths(value);
++  const composerHighlighted = composerIsCommand || composerHasMentions;
+   const toggleCodexPlanMode = async () => {
+     if (planModeBusy) return;
+     setCommandError(null);
+@@ -3410,7 +3417,7 @@ function ComposerImpl(
+     }
+ 
+     setCommandError(null);
+-    // Prepend each "@"-tagged path as an attachment marker on its own line —
++    // Prepend each "Attach to agent" chip as an attachment marker on its own line —
+     // the same format the native executors emit for attachments and that
+     // title-seeding strips (_ATTACHMENT_MARKER_RE). Wording is harness-aware
+     // (codex says "Attached file:"). Folders carry a trailing "/" so the
+@@ -3717,10 +3724,6 @@ function ComposerImpl(
+             dismissMention();
+           },
+           onPaste,
+-          onScroll: (e) => {
+-            // Keep the overlay's scroll position locked to the textarea's.
+-            if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop;
+-          },
+           "aria-label": "Message the agent",
+           placeholder: composerLockedByBtw
+             ? "Side chat open — press Esc to close"
+@@ -3746,9 +3749,9 @@ function ComposerImpl(
+           "data-has-draft": hasDraft ? "true" : undefined,
+           className: cn(
+             draft.quotes.length > 0 && "max-h-none overflow-y-hidden",
+-            // Hand glyph painting to the overlay while a command is drafted;
+-            // the caret stays visible via caret-foreground.
+-            composerIsCommand && "text-transparent caret-foreground",
++            // Hand glyph painting to the overlay while a command or a mention
++            // is drafted; the caret stays visible via caret-foreground.
++            composerHighlighted && "text-transparent caret-foreground",
+           ),
+         }}
+         slots={{
+@@ -3841,31 +3844,32 @@ function ComposerImpl(
+                 </div>
+               )}
+               {/* Highlight overlay: a textarea can only paint its text one color, so
+-            to tint just the command or skill token we hide the textarea's own glyphs
+-            (text-transparent, caret kept visible) and render an aligned mirror
+-            behind it. Same box/typography so wrapping matches the textarea
+-            exactly. Only mounted while the draft is a command. */}
++            to tint just the command or skill token, or the "@" mentions, we hide
++            the textarea's own glyphs (text-transparent, caret kept visible) and
++            render an aligned mirror behind it. Only mounted while there's
++            something to tint. */}
+             </>
+           ),
+-          inputBackdrop: composerIsCommand && (
+-            <div
+-              ref={backdropRef}
+-              aria-hidden
++          inputBackdrop: composerHighlighted && (
++            <ComposerHighlightBackdrop
++              textarea={tailTextareaRef}
++              text={value}
+               data-testid="composer-highlight-overlay"
+-              className="composer-input-text pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 pt-3 pb-1 text-ui text-foreground"
+             >
+               {(() => {
+-                const split = splitSlashCommand(value, slashCommandNames);
+-                if (!split) return value;
++                const split = composerIsCommand
++                  ? splitSlashCommand(value, slashCommandNames)
++                  : null;
++                if (!split) return <MentionHighlights text={value} />;
+                 return (
+                   <>
+                     {split.before}
+                     <span className="text-brand-accent">{split.token}</span>
+-                    {split.after}
++                    <MentionHighlights text={split.after} />
+                   </>
+                 );
+               })()}
+-            </div>
++            </ComposerHighlightBackdrop>
+           ),
+           attachments: (
+             <>
+@@ -3875,9 +3879,8 @@ function ComposerImpl(
+               {attachmentError !== null && (
+                 <ComposerFeedbackRow tone="error">{attachmentError}</ComposerFeedbackRow>
+               )}
+-              {/* "@"-mention chips — one per tagged workspace file/folder. Each is
+-            delivered as a "[Attached: <path>]" marker at send time. Ranged
+-            spans (from "Attach to agent") show their line range. */}
++              {/* "Attach to agent" chips, each delivered as a "[Attached: <path>]"
++            marker at send time, with its line range. "@" picks are in the text. */}
+               <ComposerMentionChips
+                 items={mentionedItems}
+                 onRemove={removeMentionedItem}
+diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
+index 1efa4d1da..651d7cb1d 100644
+--- a/web/src/shell/NewChatDialog.test.tsx
++++ b/web/src/shell/NewChatDialog.test.tsx
+@@ -8622,7 +8622,7 @@ describe("NewChatLandingScreen paste", () => {
+ // The "@"-file-mention browser on the launcher mirrors the in-session
+ // composer, but its file source is the *host filesystem* (no session/runner
+ // exists yet) and its paths are converted from the host's absolute form to
+-// workspace-relative for the chip and the "[Attached: …]" marker.
++// workspace-relative for the "@<path>" written into the text.
+ describe("NewChatLandingScreen @-file-mention", () => {
+   const ROOT = "/Users/corey/repo";
+   function dir(path: string): HostFilesystemEntry {
+@@ -8678,7 +8678,7 @@ describe("NewChatLandingScreen @-file-mention", () => {
+     fireEvent.change(input(), { target: { value: "@", selectionStart: 1 } });
+     // Host absolute paths are shown as workspace-relative rows (folders first).
+     expect(screen.getByTitle("Open omnigent")).toBeInTheDocument();
+-    expect(screen.getByTitle("Attach README.md")).toBeInTheDocument();
++    expect(screen.getByTitle("Insert README.md")).toBeInTheDocument();
+   });
+ 
+   it("does not accept the highlighted mention when Enter is pressed on mobile", async () => {
+@@ -8712,7 +8712,7 @@ describe("NewChatLandingScreen @-file-mention", () => {
+     expect(screen.queryByTitle("Open omnigent")).not.toBeInTheDocument();
+   });
+ 
+-  it("drills into a folder and delivers the chosen file as a workspace-relative marker", async () => {
++  it("drills into a folder and writes the chosen file into the text, workspace-relative", async () => {
+     authenticatedFetchMock.mockResolvedValue({
+       ok: true,
+       json: async () => ({ id: "conv_new" }),
+@@ -8724,21 +8724,21 @@ describe("NewChatLandingScreen @-file-mention", () => {
+ 
+     fireEvent.change(input(), { target: { value: "@", selectionStart: 1 } });
+     // Nested files are hidden until the folder is opened (drill-down).
+-    expect(screen.queryByTitle("Attach cli.py")).not.toBeInTheDocument();
++    expect(screen.queryByTitle("Insert cli.py")).not.toBeInTheDocument();
+     fireEvent.click(screen.getByTitle("Open omnigent"));
+-    fireEvent.click(screen.getByTitle("Attach cli.py"));
+-    // The chip shows the workspace-relative path, not the host-absolute one.
+-    expect(screen.getByText("@omnigent/cli.py")).toBeInTheDocument();
++    fireEvent.click(screen.getByTitle("Insert cli.py"));
++    // The text gets the workspace-relative path, not the host-absolute one, so
++    // the runner (rooted at the workspace) reads the on-disk file.
++    expect((input() as HTMLTextAreaElement).value).toBe("@omnigent/cli.py ");
+ 
+-    fireEvent.change(input(), { target: { value: "explain this", selectionStart: 12 } });
++    fireEvent.change(input(), {
++      target: { value: "@omnigent/cli.py explain this", selectionStart: 29 },
++    });
+     fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+ 
+-    // The contract: the first message carries "[Attached: <relpath>]" so the
+-    // runner (rooted at the workspace) reads the on-disk file — relative, never
+-    // the "/Users/corey/repo/…" absolute path the host filesystem returned.
+     await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalled());
+     const [, payload] = setPendingInitialPromptMock.mock.calls[0]!;
+-    expect((payload as { text: string }).text).toBe("[Attached: omnigent/cli.py]\n\nexplain this");
++    expect((payload as { text: string }).text).toBe("@omnigent/cli.py explain this");
+   });
+ 
+   it("suppresses stale parent rows while a drilled directory is still loading", async () => {
+@@ -8775,40 +8775,19 @@ describe("NewChatLandingScreen @-file-mention", () => {
+     // Drilled-but-loading: the loading row shows and the parent's stale rows are
+     // gone (without the isPlaceholderData guard they'd appear as the child's).
+     expect(screen.getByText("Loading…")).toBeInTheDocument();
+-    expect(screen.queryByTitle("Attach README.md")).not.toBeInTheDocument();
++    expect(screen.queryByTitle("Insert README.md")).not.toBeInTheDocument();
+     expect(screen.queryByTitle("Open omnigent")).not.toBeInTheDocument();
+   });
+ 
+-  it("attaches a whole folder with a trailing-slash marker", async () => {
+-    authenticatedFetchMock.mockResolvedValue({
+-      ok: true,
+-      json: async () => ({ id: "conv_new" }),
+-    } as unknown as Response);
+-    renderLanding();
+-    await waitFor(() =>
+-      expect(screen.getByTestId("new-chat-landing-workspace-chip").textContent).toContain("repo"),
+-    );
+-
+-    fireEvent.change(input(), { target: { value: "@", selectionStart: 1 } });
+-    // The folder row's "+" button attaches the directory as a unit.
+-    fireEvent.click(screen.getByLabelText("Attach whole folder omnigent"));
+-    expect(screen.getByText("@omnigent/")).toBeInTheDocument();
+-
+-    fireEvent.change(input(), { target: { value: "review it", selectionStart: 9 } });
+-    fireEvent.click(screen.getByTestId("new-chat-landing-submit"));
+-
+-    await waitFor(() => expect(setPendingInitialPromptMock).toHaveBeenCalled());
+-    const [, payload] = setPendingInitialPromptMock.mock.calls[0]!;
+-    expect((payload as { text: string }).text).toBe("[Attached: omnigent/]\n\nreview it");
+-  });
+-
+-  it("removes a tagged chip when its ✕ is clicked", () => {
++  it("inserts a whole folder with a trailing slash", () => {
+     renderLanding();
+     fireEvent.change(input(), { target: { value: "@", selectionStart: 1 } });
+-    fireEvent.click(screen.getByTitle("Attach README.md"));
+-    expect(screen.getByText("@README.md")).toBeInTheDocument();
+-    fireEvent.click(screen.getByLabelText("Remove README.md"));
+-    expect(screen.queryByText("@README.md")).not.toBeInTheDocument();
++    // The folder row's "+" button inserts the directory as a unit.
++    fireEvent.click(screen.getByLabelText("Insert whole folder omnigent"));
++    expect((input() as HTMLTextAreaElement).value).toBe("@omnigent/ ");
++    // The folder is coloured in the composer, drawn by a backdrop behind it.
++    expect(document.querySelector('[data-composer-mention="omnigent/"]')).not.toBeNull();
++    expect(input()).toHaveClass("text-transparent");
+   });
+ });
+ 
+diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
+index f63e15191..5749911db 100644
+--- a/web/src/shell/NewChatDialog.tsx
++++ b/web/src/shell/NewChatDialog.tsx
+@@ -46,7 +46,6 @@ import {
+   ComposerFeedbackRow,
+   ComposerSendButton,
+ } from "@/components/composer/ChatComposer";
+-import { ComposerMentionChips } from "@/components/composer/ComposerMentionChips";
+ import { useQuery, useQueryClient } from "@tanstack/react-query";
+ import {
+   LaptopIcon,
+@@ -105,6 +104,11 @@ import { composerContextToLabels } from "@/lib/composerContextAdapters";
+ import { randomUUID } from "@/lib/randomUUID";
+ import { readSubmitWithModEnter } from "@/lib/composerSendShortcutPreferences";
+ import { ComposerAttachments } from "@/components/ComposerAttachments";
++import {
++  ComposerHighlightBackdrop,
++  MentionHighlights,
++  hasMentionPaths,
++} from "@/components/composer/ComposerHighlightBackdrop";
+ import { recordOptimisticTitle } from "@/lib/optimisticTitles";
+ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+ import {
+@@ -316,7 +320,6 @@ import { FileMentionMenu } from "@/components/FileMentionMenu";
+ import { FileDropOverlay } from "@/components/FileDropOverlay";
+ import { useMentionBrowser } from "@/hooks/useMentionBrowser";
+ import {
+-  buildMentionPreamble,
+   detectMentionAt,
+   type MentionState,
+   parseMentionToken,
+@@ -4987,8 +4990,8 @@ export function NewChatLandingScreen() {
+   // Only for native terminal agents on a real local host with an absolute
+   // workspace. No session/runner exists yet, so the listing comes from the
+   // host filesystem endpoint (absolute paths) rather than the session-scoped
+-  // workspace API; each tagged path is delivered as an "[Attached: …]" marker
+-  // prepended to the first message, which the runner reads from that workspace.
++  // workspace API; a pick is written into the text as "@<path>", which the
++  // runner reads from that workspace.
+   const [mention, setMention] = useState<MentionState | null>(null);
+   const mentionEnabled =
+     isNativeTerminalAgent && !sandboxSelected && !!selectedHostId && workspaceValid;
+@@ -5050,10 +5053,8 @@ export function NewChatLandingScreen() {
+   // host-filesystem source + token state above are launcher-specific.
+   const {
+     mentionIndex,
+-    mentionedItems,
+     attachMention,
+     openMentionDir,
+-    removeMentionedItem,
+     handleKeyDown: handleMentionKeyDown,
+     dismiss: dismissMention,
+   } = useMentionBrowser({
+@@ -5064,6 +5065,8 @@ export function NewChatLandingScreen() {
+     setText: setMessage,
+     textareaRef,
+   });
++  // Colour "@" path mentions in the draft, as the session's composer does.
++  const messageHasMentions = mentionEnabled && hasMentionPaths(message);
+ 
+   const workspaceTarget = JSON.stringify([projectParam, selectedHostId, sandboxSelected]);
+   const [workspaceReadyTarget, setWorkspaceReadyTarget] = useState<string | null>(null);
+@@ -5659,15 +5662,10 @@ export function NewChatLandingScreen() {
+       const defaultModelRow = pickerModelOptions.find((option) => option.isDefault);
+       const resolvedDefaultModel = defaultModelRow?.model ?? defaultModelRow?.id ?? null;
+ 
+-      // Prepend each "@"-tagged path as an attachment marker on its own line —
+-      // the same wording the native executors emit and that title-seeding
+-      // strips. The runner, rooted at this workspace, reads the on-disk file
+-      // from the marker; no upload happens. Folders carry a trailing "/".
+-      // Computed BEFORE the create so `smart_routing_message` classifies the
+-      // prompt the agent actually receives, not the raw textarea value.
+-      const initialPrompt =
+-        buildMentionPreamble(mentionedItems, selectedAgent?.harness ?? null) +
+-        sanitizeInitialPrompt(message);
++      // "@" picks are already in the text as "@<path>"; the runner, rooted at
++      // this workspace, reads the on-disk file. Computed BEFORE the create so
++      // `smart_routing_message` classifies the prompt the agent receives.
++      const initialPrompt = sanitizeInitialPrompt(message);
+       // Native terminal agents open terminal-first: `omnigent.ui: terminal`
+       // tells the UI to render the terminal wrapper, and `omnigent.wrapper`
+       // selects which CLI bridge the runner launches — the values are the
+@@ -6954,8 +6952,15 @@ export function NewChatLandingScreen() {
+                 rows: 1,
+                 autoFocus: !isMobileViewport,
+                 "data-testid": "new-chat-landing-input",
++                // The backdrop paints the text while it has a mention to colour.
++                className: messageHasMentions ? "text-transparent caret-foreground" : undefined,
+               }}
+               slots={{
++                inputBackdrop: messageHasMentions && (
++                  <ComposerHighlightBackdrop textarea={textareaRef} text={message}>
++                    <MentionHighlights text={message} />
++                  </ComposerHighlightBackdrop>
++                ),
+                 beforeInput: (
+                   <>
+                     {/* Skill suggestions — floats above the composer box. */}
+@@ -7018,10 +7023,6 @@ export function NewChatLandingScreen() {
+                         }
+                       }}
+                     />
+-                    {/* "@"-mention chips — one per tagged workspace file/folder. Each is
+-                delivered as an "[Attached: <path>]" marker prepended to the
+-                first message at create time. */}
+-                    <ComposerMentionChips items={mentionedItems} onRemove={removeMentionedItem} />
+                     {/* Pending attachments — image thumbnails (click to view) + file rows. */}
+                     <ComposerAttachments files={files} onRemove={removeFile} />
+                     {/* Rejected-attachment feedback: unsupported type or too large */}
