@@ -1,0 +1,1676 @@
+Show images, video and audio inline in the chat, lay images in a row out as
+a grid, and let the lightbox pinch-zoom and page through them.
+
+Upstream renders markdown images with Streamdown's harden pass set to allow
+no image prefixes, so every `![alt](…)` became "[Image blocked: alt]", and a
+workspace path could never load anyway: the file lives in the sandbox.
+
+- An image that names a workspace file (absolute, relative or `file:`) is
+  moved off `src` before harden (markWorkspaceMedia) and loaded through the
+  filesystem API's raw download as a Blob (fetchWorkspaceFileBlob), which
+  works in the native shells and lets Safari play a video the endpoint can't
+  serve with range requests. https and data images render as written; plain
+  http stays blocked (blockPlainHttpImages), so an agent can't make the
+  viewer's browser send requests to devices on their own network.
+- A path or URL ending in a video or audio extension plays in a native
+  player (ChatMarkdownMedia, lib/mediaKind).
+- Two or more images separated only by whitespace or blank lines become one
+  grid (groupMediaGalleries). Streamdown parses each block alone, so
+  parseMarkdownIntoMediaBlocks keeps a run of image-only blocks together.
+- The shared lightbox (ImageLightbox) zooms with a two-finger pinch on a
+  touch screen, double-tap, and a wheel or trackpad pinch at the cursor;
+  keeps a zoomed image within its edges; pages through a grid's images, and
+  a user message's attachments, with arrows, the arrow keys or a swipe; and
+  closes with a downward swipe.
+
+Upstream's two tests that remote images stay blocked now check that https
+renders and plain http doesn't.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0032.
+diff --git a/web/src/components/ImageLightbox.test.tsx b/web/src/components/ImageLightbox.test.tsx
+index f2c0602..166b57a 100644
+--- a/web/src/components/ImageLightbox.test.tsx
++++ b/web/src/components/ImageLightbox.test.tsx
+@@ -156,3 +156,79 @@ describe("dismissing the lightbox by clicking outside the image", () => {
+     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+   });
+ });
++
++describe("touch gestures", () => {
++  /** Open the preview and return its stage, with jsdom's missing capture stubbed. */
++  function openStage(ui = <ZoomableImage src="/pic.png" alt="diagram" />) {
++    render(<ImageLightboxProvider>{ui}</ImageLightboxProvider>);
++    fireEvent.click(screen.getAllByRole("button", { name: /^Zoom image/ })[0]);
++    const stage = screen.getAllByRole("img").at(-1)!.parentElement!;
++    stage.setPointerCapture = vi.fn();
++    return stage;
++  }
++
++  const touch = (pointerId: number, clientX: number, clientY: number) => ({
++    pointerId,
++    pointerType: "touch",
++    clientX,
++    clientY,
++  });
++
++  const zoomLabel = () => screen.getByRole("button", { name: "Reset zoom" });
++
++  it("takes every touch itself, so a pinch zooms the image and not the page", () => {
++    expect(openStage()).toHaveClass("touch-none");
++  });
++
++  it("zooms in with a double-tap and back out with another", () => {
++    const stage = openStage();
++    const tap = () => {
++      fireEvent.pointerDown(stage, touch(1, 50, 50));
++      fireEvent.pointerUp(stage, touch(1, 50, 50));
++    };
++    tap();
++    tap();
++    expect(zoomLabel()).toHaveTextContent("250%");
++    tap();
++    tap();
++    expect(zoomLabel()).toHaveTextContent("100%");
++  });
++
++  it("zooms with a two-finger pinch, with the fingers' spread", () => {
++    const stage = openStage();
++    fireEvent.pointerDown(stage, touch(1, 100, 100));
++    fireEvent.pointerDown(stage, touch(2, 200, 100));
++    fireEvent.pointerMove(stage, touch(1, 50, 100));
++    fireEvent.pointerMove(stage, touch(2, 250, 100));
++    expect(zoomLabel()).toHaveTextContent("200%");
++    fireEvent.pointerUp(stage, touch(1, 50, 100));
++    fireEvent.pointerUp(stage, touch(2, 250, 100));
++    // Lifting the fingers neither resets the zoom nor dismisses the preview.
++    fireEvent.click(stage);
++    expect(zoomLabel()).toHaveTextContent("200%");
++    expect(screen.getByRole("dialog")).toBeInTheDocument();
++  });
++
++  it("pages through a gallery with a swipe", () => {
++    const stage = openStage(
++      <div data-media-gallery="">
++        <ZoomableImage src="/one.png" alt="one" />
++        <ZoomableImage src="/two.png" alt="two" />
++      </div>,
++    );
++    expect(screen.getByRole("dialog")).toHaveTextContent("1 / 2");
++    fireEvent.pointerDown(stage, touch(1, 300, 100));
++    fireEvent.pointerMove(stage, touch(1, 150, 110));
++    fireEvent.pointerUp(stage, touch(1, 150, 110));
++    expect(screen.getByRole("dialog")).toHaveTextContent("2 / 2");
++    expect(screen.getAllByRole("img", { name: "two" }).at(-1)).toHaveAttribute("src", "/two.png");
++  });
++
++  it("closes with a downward swipe", () => {
++    const stage = openStage();
++    fireEvent.pointerDown(stage, touch(1, 100, 100));
++    fireEvent.pointerMove(stage, touch(1, 105, 300));
++    fireEvent.pointerUp(stage, touch(1, 105, 300));
++    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
++  });
++});
+diff --git a/web/src/components/ImageLightbox.tsx b/web/src/components/ImageLightbox.tsx
+index 5860f19..7d28884 100644
+--- a/web/src/components/ImageLightbox.tsx
++++ b/web/src/components/ImageLightbox.tsx
+@@ -4,12 +4,13 @@ import {
+   useCallback,
+   useContext,
+   useEffect,
++  useLayoutEffect,
+   useMemo,
+   useRef,
+   useState,
+ } from "react";
+ import * as DialogPrimitive from "radix-ui/dialog";
+-import { XIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
++import { ChevronLeftIcon, ChevronRightIcon, XIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
+ 
+ import { getEmbedRoot } from "@/lib/host";
+ import { Button } from "@/components/ui/button";
+@@ -19,21 +20,41 @@ import { cn } from "@/lib/utils";
+ const MIN_ZOOM = 1;
+ const MAX_ZOOM = 8;
+ const ZOOM_STEP = 0.25;
++/** The zoom a double-click or double-tap jumps to from fit. */
++const DOUBLE_TAP_ZOOM = 2.5;
+ 
+ /** Pointer travel that separates a pan from a click, in CSS pixels. */
+ const DRAG_SLOP_PX = 4;
++/** Longest gap between the taps of a double-tap, and their furthest spread. */
++const DOUBLE_TAP_MS = 300;
++const DOUBLE_TAP_SLOP_PX = 30;
++/** Horizontal swipe that pages to the next image, and downward one that closes. */
++const SWIPE_PAGE_PX = 60;
++const SWIPE_CLOSE_PX = 120;
++
++/**
++ * Marks a container whose zoomable images the lightbox pages through: opening
++ * one of them lets the viewer step to the others with the arrows, the arrow
++ * keys or a swipe.
++ */
++export const MEDIA_GALLERY_ATTR = "data-media-gallery";
+ 
+ function clampZoom(z: number) {
+   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+ }
+ 
++function clampRange(value: number, limit: number) {
++  return Math.min(limit, Math.max(-limit, value));
++}
++
+ interface LightboxImage {
+   src: string;
+   alt: string;
+ }
+ 
+ interface LightboxContextValue {
+-  open: (image: LightboxImage) => void;
++  /** Opens `image`, paging through `gallery` (which holds it) when given. */
++  open: (image: LightboxImage, gallery?: LightboxImage[]) => void;
+ }
+ 
+ // No-op fallback so image components keep working (just non-zoomable) when
+@@ -50,6 +71,20 @@ export interface ZoomableImageProps extends React.ComponentProps<"img"> {
+   /** Display source. May be undefined while the image is still resolving. */
+   src?: string;
+   alt: string;
++  /** Classes for the wrapping button, e.g. to fill a grid cell. */
++  buttonClassName?: string;
++}
++
++/** The loaded images of the gallery around `element`, in document order. */
++function galleryImages(element: Element): LightboxImage[] | undefined {
++  const gallery = element.closest(`[${MEDIA_GALLERY_ATTR}]`);
++  if (!gallery) return undefined;
++  const images: LightboxImage[] = [];
++  for (const img of gallery.querySelectorAll<HTMLImageElement>("img[data-lightbox-item]")) {
++    const src = img.getAttribute("src");
++    if (src) images.push({ src, alt: img.alt });
++  }
++  return images.length > 1 ? images : undefined;
+ }
+ 
+ /**
+@@ -58,97 +93,295 @@ export interface ZoomableImageProps extends React.ComponentProps<"img"> {
+  * to a button); the inner `<img>` keeps its `role="img"` and alt-derived name,
+  * so screen readers and tests still see a real image. Activation is a no-op
+  * until `src` resolves. `className` styles the inner `<img>` (sizing,
+- * `object-contain`, etc.) — the button is a layout-transparent wrapper.
++ * `object-contain`, etc.) — the button is a layout-transparent wrapper. Inside
++ * a {@link MEDIA_GALLERY_ATTR} container the lightbox pages through the
++ * container's other images too.
+  */
+-export function ZoomableImage({ src, alt, className, ...imgProps }: ZoomableImageProps) {
++export function ZoomableImage({
++  src,
++  alt,
++  className,
++  buttonClassName,
++  ...imgProps
++}: ZoomableImageProps) {
+   const { open } = useLightbox();
+   return (
+     <button
+       type="button"
+       aria-label={alt ? `Zoom image: ${alt}` : "Zoom image"}
+-      className="m-0 inline-flex max-w-full cursor-zoom-in appearance-none border-0 bg-transparent p-0 leading-none"
+-      onClick={() => {
+-        if (src) open({ src, alt });
++      className={cn(
++        "m-0 inline-flex max-w-full cursor-zoom-in appearance-none border-0 bg-transparent p-0 leading-none",
++        buttonClassName,
++      )}
++      onClick={(event) => {
++        if (src) open({ src, alt }, galleryImages(event.currentTarget));
+       }}
+     >
+-      <img {...imgProps} src={src} alt={alt} className={className} />
++      <img {...imgProps} data-lightbox-item="" src={src} alt={alt} className={className} />
+     </button>
+   );
+ }
+ 
++/** The image's zoom and its pan offset from centre, in CSS pixels. */
++interface View {
++  scale: number;
++  x: number;
++  y: number;
++}
++
++const FIT: View = { scale: MIN_ZOOM, x: 0, y: 0 };
++
++/** One pointer gesture on the stage, from its first pointer down to its last up. */
++interface Gesture {
++  /** Where each pointer down on the stage is now. */
++  pointers: Map<number, { x: number; y: number }>;
++  /** The view, and the pointers' centre and spread, when the pointer count last changed. */
++  startView: View;
++  startX: number;
++  startY: number;
++  startDistance: number;
++  /** Whether the pointers moved beyond a tap, or two of them pinched. */
++  moved: boolean;
++  pinched: boolean;
++}
++
++function pointerCentre(pointers: Gesture["pointers"]) {
++  const points = [...pointers.values()].slice(0, 2);
++  const x = points.reduce((sum, p) => sum + p.x, 0) / points.length;
++  const y = points.reduce((sum, p) => sum + p.y, 0) / points.length;
++  const distance =
++    points.length === 2 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : 0;
++  return { x, y, distance };
++}
++
+ /**
+  * The zoomable image inside the lightbox card. Holds its own zoom/pan state and
+  * is keyed by `src` in the provider so that state resets per image.
+  *
+- * Zoom: scroll wheel (anchored at the cursor), the +/- toolbar buttons, or
+- * double-click to toggle between fit and 2x. Pan: drag while zoomed in. The
+- * image is `object-contain` within a fixed-size viewport that clips overflow,
+- * so the zoomed image never escapes the card. A click on the empty stage
+- * around the image dismisses the preview.
++ * Zoom: scroll wheel or trackpad pinch (anchored at the cursor), a two-finger
++ * pinch on a touch screen (anchored between the fingers), the +/- toolbar
++ * buttons or keys, or a double-click/double-tap to toggle between fit and
++ * 2.5x at that point. Pan: drag while zoomed in, kept within the image's
++ * edges. At fit, a horizontal swipe pages through a gallery and a downward
++ * one closes the preview. The stage takes every touch itself
++ * (`touch-action: none`), so a pinch zooms the image, not the page. A click
++ * on the empty stage around the image dismisses the preview.
+  */
+-function ZoomViewer({ image, onClose }: { image: LightboxImage; onClose: () => void }) {
++function ZoomViewer({
++  image,
++  onClose,
++  onPrevious,
++  onNext,
++}: {
++  image: LightboxImage;
++  onClose: () => void;
++  onPrevious?: () => void;
++  onNext?: () => void;
++}) {
+   const viewportRef = useRef<HTMLDivElement>(null);
+-  const [zoom, setZoom] = useState(1);
+-  const [offset, setOffset] = useState({ x: 0, y: 0 });
+-  // Active pointer drag (panning); null when not dragging.
+-  const dragRef = useRef<{
+-    pointerId: number;
+-    startX: number;
+-    startY: number;
+-    originX: number;
+-    originY: number;
+-  } | null>(null);
++  const imageRef = useRef<HTMLImageElement>(null);
++  const [view, setView] = useState<View>(FIT);
++  // Eases discrete steps (buttons, double-tap, snapping back after a swipe);
++  // a continuous wheel or touch gesture follows the input directly.
++  const [animate, setAnimate] = useState(true);
++  const viewRef = useRef(view);
++  useLayoutEffect(() => {
++    viewRef.current = view;
++  }, [view]);
++  const gestureRef = useRef<Gesture | null>(null);
+   // Whether the current gesture panned, so its closing click isn't a dismiss.
+   const pannedRef = useRef(false);
++  const lastTapRef = useRef<{ time: number; x: number; y: number } | null>(null);
+ 
+-  const resetView = useCallback(() => {
+-    setZoom(1);
+-    setOffset({ x: 0, y: 0 });
++  /** Keeps the zoomed image covering the stage rather than drifting off it. */
++  const clampView = useCallback((next: View): View => {
++    const scale = clampZoom(next.scale);
++    if (scale <= MIN_ZOOM) return FIT;
++    const img = imageRef.current;
++    const viewport = viewportRef.current;
++    if (!img || !viewport) return { ...next, scale };
++    const maxX = Math.max(0, (img.offsetWidth * scale - viewport.clientWidth) / 2);
++    const maxY = Math.max(0, (img.offsetHeight * scale - viewport.clientHeight) / 2);
++    return { scale, x: clampRange(next.x, maxX), y: clampRange(next.y, maxY) };
+   }, []);
+ 
+-  const applyZoom = useCallback((next: number) => setZoom(clampZoom(next)), []);
++  /**
++   * `from` zoomed to `scale`, then panned by (`panX`, `panY`), so the image
++   * point under the client point (`clientX`, `clientY`) ends up that far from
++   * it; the stage centre when omitted.
++   */
++  const zoomAt = useCallback(
++    (from: View, scale: number, clientX?: number, clientY?: number, panX = 0, panY = 0): View => {
++      const rect = viewportRef.current?.getBoundingClientRect();
++      const centreX = rect ? rect.left + rect.width / 2 : 0;
++      const centreY = rect ? rect.top + rect.height / 2 : 0;
++      const anchorX = (clientX ?? centreX) - centreX;
++      const anchorY = (clientY ?? centreY) - centreY;
++      const next = clampZoom(scale);
++      const ratio = next / from.scale;
++      return clampView({
++        scale: next,
++        x: anchorX - (anchorX - from.x) * ratio + panX,
++        y: anchorY - (anchorY - from.y) * ratio + panY,
++      });
++    },
++    [clampView],
++  );
++
++  const stepZoom = useCallback(
++    (delta: number) => {
++      setAnimate(true);
++      setView((v) => zoomAt(v, v.scale + delta));
++    },
++    [zoomAt],
++  );
++
++  const resetView = useCallback(() => {
++    setAnimate(true);
++    setView(FIT);
++  }, []);
+ 
+   // Wheel-to-zoom. Attached as a non-passive native listener so preventDefault
+   // works (React's onWheel is passive and would warn), keeping the page behind
+-  // the modal from scrolling while zooming.
++  // the modal from scrolling while zooming. Proportional to the delta, so a
++  // trackpad pinch (a wheel with ctrlKey and small deltas) zooms smoothly.
++  // Safari's own gesture events would zoom the page instead; cancel them.
+   useEffect(() => {
+     const el = viewportRef.current;
+     if (!el) return;
+     const onWheel = (e: WheelEvent) => {
+       e.preventDefault();
+-      setZoom((z) => clampZoom(z - Math.sign(e.deltaY) * ZOOM_STEP * 2));
++      const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002));
++      setAnimate(false);
++      setView((v) => zoomAt(v, v.scale * factor, e.clientX, e.clientY));
+     };
++    const cancel = (e: Event) => e.preventDefault();
+     el.addEventListener("wheel", onWheel, { passive: false });
+-    return () => el.removeEventListener("wheel", onWheel);
+-  }, []);
++    el.addEventListener("gesturestart", cancel);
++    el.addEventListener("gesturechange", cancel);
++    return () => {
++      el.removeEventListener("wheel", onWheel);
++      el.removeEventListener("gesturestart", cancel);
++      el.removeEventListener("gesturechange", cancel);
++    };
++  }, [zoomAt]);
+ 
+-  // Drop pan offset whenever zoom returns to fit.
++  // Keyboard zoom, alongside the provider's arrow keys and Escape.
+   useEffect(() => {
+-    if (zoom === MIN_ZOOM) setOffset({ x: 0, y: 0 });
+-  }, [zoom]);
++    const onKeyDown = (e: KeyboardEvent) => {
++      if (e.metaKey || e.ctrlKey || e.altKey) return;
++      if (e.key === "+" || e.key === "=") stepZoom(ZOOM_STEP * 2);
++      else if (e.key === "-") stepZoom(-ZOOM_STEP * 2);
++      else if (e.key === "0") resetView();
++    };
++    document.addEventListener("keydown", onKeyDown);
++    return () => document.removeEventListener("keydown", onKeyDown);
++  }, [resetView, stepZoom]);
++
++  /** Restarts the gesture from the current view and pointers. */
++  const rebase = (gesture: Gesture) => {
++    const centre = pointerCentre(gesture.pointers);
++    gesture.startView = viewRef.current;
++    gesture.startX = centre.x;
++    gesture.startY = centre.y;
++    gesture.startDistance = centre.distance;
++  };
+ 
+   const onPointerDown = (e: React.PointerEvent) => {
+-    pannedRef.current = false;
+-    if (zoom <= MIN_ZOOM) return;
+-    dragRef.current = {
+-      pointerId: e.pointerId,
+-      startX: e.clientX - offset.x,
+-      startY: e.clientY - offset.y,
+-      originX: e.clientX,
+-      originY: e.clientY,
+-    };
++    if (e.button !== 0 && e.pointerType === "mouse") return;
++    let gesture = gestureRef.current;
++    if (!gesture) {
++      pannedRef.current = false;
++      gesture = {
++        pointers: new Map(),
++        startView: viewRef.current,
++        startX: 0,
++        startY: 0,
++        startDistance: 0,
++        moved: false,
++        pinched: false,
++      };
++      gestureRef.current = gesture;
++    }
++    gesture.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
++    if (gesture.pointers.size === 2) gesture.pinched = true;
++    rebase(gesture);
++    setAnimate(false);
+     e.currentTarget.setPointerCapture(e.pointerId);
+   };
++
+   const onPointerMove = (e: React.PointerEvent) => {
+-    const drag = dragRef.current;
+-    if (!drag) return;
+-    if (Math.hypot(e.clientX - drag.originX, e.clientY - drag.originY) > DRAG_SLOP_PX) {
+-      pannedRef.current = true;
++    const gesture = gestureRef.current;
++    if (!gesture?.pointers.has(e.pointerId)) return;
++    gesture.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
++    const centre = pointerCentre(gesture.pointers);
++    const dx = centre.x - gesture.startX;
++    const dy = centre.y - gesture.startY;
++    if (!gesture.moved && Math.hypot(dx, dy) <= DRAG_SLOP_PX && !gesture.pinched) return;
++    gesture.moved = true;
++    pannedRef.current = true;
++    const start = gesture.startView;
++    if (gesture.pointers.size >= 2 && gesture.startDistance > 0) {
++      // Pinch: scale with the fingers' spread, about the point between them,
++      // and pan with that point as it moves.
++      const scale = (start.scale * centre.distance) / gesture.startDistance;
++      setView(zoomAt(start, scale, gesture.startX, gesture.startY, dx, dy));
++    } else if (start.scale > MIN_ZOOM) {
++      setView(clampView({ ...start, x: start.x + dx, y: start.y + dy }));
++    } else if (!gesture.pinched) {
++      // At fit, the image follows a swipe; releasing decides what it does.
++      setView({ scale: MIN_ZOOM, x: dx, y: Math.max(0, dy) });
++    }
++  };
++
++  const onPointerEnd = (e: React.PointerEvent) => {
++    const gesture = gestureRef.current;
++    if (!gesture?.pointers.has(e.pointerId)) return;
++    gesture.pointers.delete(e.pointerId);
++    if (gesture.pointers.size > 0) {
++      // A finger lifted off a pinch: carry on panning with the one left.
++      rebase(gesture);
++      return;
++    }
++    gestureRef.current = null;
++    setAnimate(true);
++    const start = gesture.startView;
++    if (!gesture.moved) {
++      if (e.type === "pointerup") detectDoubleTap(e.clientX, e.clientY);
++      return;
++    }
++    if (gesture.pinched || start.scale > MIN_ZOOM) return;
++    const dx = e.clientX - gesture.startX;
++    const dy = e.clientY - gesture.startY;
++    if (Math.abs(dx) > SWIPE_PAGE_PX && Math.abs(dx) > Math.abs(dy)) {
++      const page = dx < 0 ? onNext : onPrevious;
++      if (page) {
++        page();
++        return;
++      }
++    } else if (dy > SWIPE_CLOSE_PX && dy > Math.abs(dx)) {
++      onClose();
++      return;
+     }
+-    setOffset({ x: e.clientX - drag.startX, y: e.clientY - drag.startY });
++    setView(FIT);
+   };
+-  const endDrag = (e: React.PointerEvent) => {
+-    if (dragRef.current?.pointerId === e.pointerId) dragRef.current = null;
++
++  // Two taps (or clicks) close together in time and place toggle the zoom
++  // there. Detected from pointer events rather than `dblclick`, which a touch
++  // screen doesn't fire reliably once the stage takes its own touches.
++  const detectDoubleTap = (x: number, y: number) => {
++    const now = Date.now();
++    const last = lastTapRef.current;
++    if (
++      last &&
++      now - last.time < DOUBLE_TAP_MS &&
++      Math.hypot(x - last.x, y - last.y) < DOUBLE_TAP_SLOP_PX
++    ) {
++      lastTapRef.current = null;
++      setView((v) => (v.scale > MIN_ZOOM ? FIT : zoomAt(v, DOUBLE_TAP_ZOOM, x, y)));
++      return;
++    }
++    lastTapRef.current = { time: now, x, y };
+   };
+ 
+   // A click on the stage dismisses, but only a real one: a click whose target
+@@ -160,42 +393,70 @@ function ZoomViewer({ image, onClose }: { image: LightboxImage; onClose: () => v
+     onClose();
+   };
+ 
+-  const zoomed = zoom > MIN_ZOOM;
++  const zoomed = view.scale > MIN_ZOOM;
++  const dragging = gestureRef.current !== null;
+ 
+   return (
+     <>
+       <div
+         ref={viewportRef}
+-        className="absolute inset-0 flex items-center justify-center overflow-hidden"
++        className="absolute inset-0 flex touch-none items-center justify-center overflow-hidden overscroll-contain"
+         onClick={onStageClick}
+-        onDoubleClick={() => applyZoom(zoomed ? MIN_ZOOM : 2)}
+         onPointerDown={onPointerDown}
+         onPointerMove={onPointerMove}
+-        onPointerUp={endDrag}
+-        onPointerCancel={endDrag}
+-        style={{ cursor: zoomed ? (dragRef.current ? "grabbing" : "grab") : "zoom-in" }}
++        onPointerUp={onPointerEnd}
++        onPointerCancel={onPointerEnd}
++        style={{ cursor: zoomed ? (dragging ? "grabbing" : "grab") : "zoom-in" }}
+       >
+         <img
++          ref={imageRef}
+           src={image.src}
+           alt={image.alt}
+           draggable={false}
+-          className="max-h-[92vh] max-w-[94vw] origin-center object-contain select-none"
++          className="max-h-[92dvh] max-w-[94vw] origin-center object-contain select-none"
+           style={{
+-            transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
+-            // Don't fight the drag with a transition while panning, but ease
++            transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
++            // Don't fight a drag or pinch with a transition, but ease
+             // discrete zoom steps.
+-            transition: dragRef.current ? "none" : "transform 120ms ease-out",
++            transition: animate ? "transform 120ms ease-out" : "none",
+           }}
+         />
+       </div>
++      {onPrevious && (
++        <Button
++          variant="ghost"
++          size="icon"
++          aria-label="Previous image"
++          onClick={onPrevious}
++          className="absolute top-1/2 -translate-y-1/2 rounded-full bg-background/70 hover:bg-background/90"
++          style={{ left: "calc(0.75rem + var(--omnigent-safe-left, 0px))" }}
++        >
++          <ChevronLeftIcon />
++        </Button>
++      )}
++      {onNext && (
++        <Button
++          variant="ghost"
++          size="icon"
++          aria-label="Next image"
++          onClick={onNext}
++          className="absolute top-1/2 -translate-y-1/2 rounded-full bg-background/70 hover:bg-background/90"
++          style={{ right: "calc(0.75rem + var(--omnigent-safe-right, 0px))" }}
++        >
++          <ChevronRightIcon />
++        </Button>
++      )}
+       {/* Zoom toolbar — bottom-center pill. */}
+-      <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-background/80 p-1 shadow-sm ring-1 ring-foreground/10 backdrop-blur-xs">
++      <div
++        className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-background/80 p-1 shadow-sm ring-1 ring-foreground/10 backdrop-blur-xs"
++        style={{ bottom: "calc(0.75rem + var(--omnigent-safe-bottom, 0px))" }}
++      >
+         <Button
+           variant="ghost"
+           size="icon-sm"
+           aria-label="Zoom out"
+-          disabled={zoom <= MIN_ZOOM}
+-          onClick={() => applyZoom(zoom - ZOOM_STEP * 2)}
++          disabled={view.scale <= MIN_ZOOM}
++          onClick={() => stepZoom(-ZOOM_STEP * 2)}
+         >
+           <ZoomOutIcon />
+         </Button>
+@@ -205,14 +466,14 @@ function ZoomViewer({ image, onClose }: { image: LightboxImage; onClose: () => v
+           className="min-w-[3ch] cursor-pointer text-center text-sm tabular-nums text-muted-foreground hover:text-foreground"
+           onClick={resetView}
+         >
+-          {Math.round(zoom * 100)}%
++          {Math.round(view.scale * 100)}%
+         </button>
+         <Button
+           variant="ghost"
+           size="icon-sm"
+           aria-label="Zoom in"
+-          disabled={zoom >= MAX_ZOOM}
+-          onClick={() => applyZoom(zoom + ZOOM_STEP * 2)}
++          disabled={view.scale >= MAX_ZOOM}
++          onClick={() => stepZoom(ZOOM_STEP * 2)}
+         >
+           <ZoomInIcon />
+         </Button>
+@@ -229,19 +490,36 @@ function ZoomViewer({ image, onClose }: { image: LightboxImage; onClose: () => v
+  * affordances.
+  */
+ export function ImageLightboxProvider({ children }: { children: React.ReactNode }) {
+-  const [image, setImage] = useState<LightboxImage | null>(null);
++  const [shown, setShown] = useState<{ images: LightboxImage[]; index: number } | null>(null);
++  const image = shown ? shown.images[shown.index] : null;
+ 
+-  const open = useCallback((img: LightboxImage) => setImage(img), []);
+-  const close = useCallback(() => setImage(null), []);
++  const open = useCallback((img: LightboxImage, gallery?: LightboxImage[]) => {
++    const index = gallery?.findIndex((item) => item.src === img.src) ?? -1;
++    setShown(gallery && index >= 0 ? { images: gallery, index } : { images: [img], index: 0 });
++  }, []);
++  const close = useCallback(() => setShown(null), []);
+   const value = useMemo(() => ({ open }), [open]);
++  const page = useCallback(
++    (step: number) =>
++      setShown((current) => {
++        if (!current) return current;
++        const index = current.index + step;
++        return index >= 0 && index < current.images.length ? { ...current, index } : current;
++      }),
++    [],
++  );
++  const previous = useCallback(() => page(-1), [page]);
++  const next = useCallback(() => page(1), [page]);
++  const hasPrevious = !!shown && shown.index > 0;
++  const hasNext = !!shown && shown.index < shown.images.length - 1;
+ 
+   return (
+     <LightboxContext.Provider value={value}>
+       {children}
+       <DialogPrimitive.Root
+         open={image !== null}
+-        onOpenChange={(next) => {
+-          if (!next) setImage(null);
++        onOpenChange={(isOpen) => {
++          if (!isOpen) setShown(null);
+         }}
+       >
+         <DialogPrimitive.Portal container={getEmbedRoot() ?? undefined}>
+@@ -269,12 +547,35 @@ export function ImageLightboxProvider({ children }: { children: React.ReactNode
+             // image is the stage's own handler, which can tell a click on the
+             // image or a finished pan from a real one.
+             onInteractOutside={(e) => e.preventDefault()}
++            onKeyDown={(e) => {
++              if (e.key === "ArrowLeft" && hasPrevious) previous();
++              else if (e.key === "ArrowRight" && hasNext) next();
++            }}
+           >
+             <DialogPrimitive.Title className="sr-only">
+               {image?.alt || "Image preview"}
+             </DialogPrimitive.Title>
+             {/* key by src so zoom/pan state resets when a new image opens. */}
+-            {image && <ZoomViewer key={image.src} image={image} onClose={close} />}
++            {image && (
++              <ZoomViewer
++                key={image.src}
++                image={image}
++                onClose={close}
++                onPrevious={hasPrevious ? previous : undefined}
++                onNext={hasNext ? next : undefined}
++              />
++            )}
++            {shown && shown.images.length > 1 && (
++              <div
++                className="absolute rounded-full bg-background/70 px-2.5 py-1 text-sm tabular-nums text-muted-foreground"
++                style={{
++                  top: "calc(0.75rem + var(--omnigent-safe-top, 0px))",
++                  left: "calc(0.75rem + var(--omnigent-safe-left, 0px))",
++                }}
++              >
++                {shown.index + 1} / {shown.images.length}
++              </div>
++            )}
+             <DialogPrimitive.Close asChild>
+               <Button
+                 variant="ghost"
+diff --git a/web/src/components/ai-elements/message.test.tsx b/web/src/components/ai-elements/message.test.tsx
+index 2d1100b..17215f5 100644
+--- a/web/src/components/ai-elements/message.test.tsx
++++ b/web/src/components/ai-elements/message.test.tsx
+@@ -96,11 +96,16 @@ class VisibleIntersectionObserver {
+ }
+ 
+ describe("MessageResponse", () => {
+-  it("blocks external image markdown and renders a placeholder", async () => {
+-    render(<MessageResponse>{"![leak](https://attacker.example/pixel.png)"}</MessageResponse>);
++  it("renders https image markdown but blocks plain http", async () => {
++    render(
++      <MessageResponse>
++        {"![shown](https://example.com/pixel.png) ![leak](http://192.168.1.1/pixel.png)"}
++      </MessageResponse>,
++    );
+ 
+-    expect(document.querySelector('img[src^="https://attacker.example"]')).toBeNull();
+     expect(await screen.findByText("[Image blocked: leak]")).toBeTruthy();
++    expect(document.querySelector('img[src="https://example.com/pixel.png"]')).not.toBeNull();
++    expect(document.querySelector('img[src^="http://"]')).toBeNull();
+   });
+ 
+   it("re-renders when rendering props change even if the text is unchanged", async () => {
+diff --git a/web/src/components/ai-elements/message.tsx b/web/src/components/ai-elements/message.tsx
+index 9bbc6d5..988cc8d 100644
+--- a/web/src/components/ai-elements/message.tsx
++++ b/web/src/components/ai-elements/message.tsx
+@@ -39,6 +39,7 @@ import { FullscreenIcon, isMermaidPre, MermaidBlock, MERMAID_NO_FULLSCREEN } fro
+ import {
+   CHAT_LINK_SAFETY,
+   FILE_LINK_STREAMDOWN_REHYPE_PLUGINS,
++  parseMarkdownIntoMediaBlocks,
+   SECURE_STREAMDOWN_REHYPE_PLUGINS,
+   STREAMDOWN_PLUGINS,
+ } from "./streamdown-security";
+@@ -644,11 +645,13 @@ export const MessageResponse = memo(
+           // Let links open on a plain click (and cmd/ctrl-click in a new tab)
+           // instead of Streamdown's default "Open external link?" modal.
+           linkSafety={CHAT_LINK_SAFETY}
++          // Keep a run of image-only paragraphs in one block, so its images
++          // can share a grid (see groupMediaGalleries).
++          parseMarkdownIntoBlocksFn={parseMarkdownIntoMediaBlocks}
+           {...props}
+           components={messageComponents}
+           controls={messageControls}
+           mermaid={mermaidOptions}
+-          // Block remote image fetches that can exfiltrate data through URLs.
+           rehypePlugins={
+             markFileLinks ? FILE_LINK_STREAMDOWN_REHYPE_PLUGINS : SECURE_STREAMDOWN_REHYPE_PLUGINS
+           }
+diff --git a/web/src/components/ai-elements/reasoning.test.tsx b/web/src/components/ai-elements/reasoning.test.tsx
+index aa0720b..dab5720 100644
+--- a/web/src/components/ai-elements/reasoning.test.tsx
++++ b/web/src/components/ai-elements/reasoning.test.tsx
+@@ -14,16 +14,19 @@ function renderReasoning(isStreaming: boolean, expandable = true) {
+ }
+ 
+ describe("Reasoning — auto-expand", () => {
+-  it("blocks external image markdown and renders a placeholder", async () => {
++  it("renders https image markdown but blocks plain http", async () => {
+     render(
+       <Reasoning isStreaming={true}>
+         <ReasoningTrigger />
+-        <ReasoningContent>{"![leak](https://attacker.example/pixel.png)"}</ReasoningContent>
++        <ReasoningContent>
++          {"![shown](https://example.com/pixel.png) ![leak](http://192.168.1.1/pixel.png)"}
++        </ReasoningContent>
+       </Reasoning>,
+     );
+ 
+-    expect(document.querySelector('img[src^="https://attacker.example"]')).toBeNull();
+     expect(await screen.findByText("[Image blocked: leak]")).toBeTruthy();
++    expect(document.querySelector('img[src="https://example.com/pixel.png"]')).not.toBeNull();
++    expect(document.querySelector('img[src^="http://"]')).toBeNull();
+   });
+ 
+   it("renders explicit inline TeX delimiters inside reasoning content", async () => {
+diff --git a/web/src/components/ai-elements/streamdown-security.ts b/web/src/components/ai-elements/streamdown-security.ts
+index f642c24..2123577 100644
+--- a/web/src/components/ai-elements/streamdown-security.ts
++++ b/web/src/components/ai-elements/streamdown-security.ts
+@@ -1,7 +1,14 @@
+ import { cjk } from "@streamdown/cjk";
+ import { createMathPlugin } from "@streamdown/math";
+ import { mermaid } from "@streamdown/mermaid";
+-import { defaultRehypePlugins, type LinkSafetyConfig, type StreamdownProps } from "streamdown";
++import {
++  defaultRehypePlugins,
++  parseMarkdownIntoBlocks,
++  type LinkSafetyConfig,
++  type StreamdownProps,
++} from "streamdown";
++import { MEDIA_GALLERY_ATTR } from "@/components/ImageLightbox";
++import { mediaKind } from "@/lib/mediaKind";
+ import { lazyCodePlugin } from "./lazyCodePlugin";
+ 
+ type StreamdownRehypePlugins = NonNullable<StreamdownProps["rehypePlugins"]>;
+@@ -37,6 +44,14 @@ export const FILE_LINK_STREAMDOWN_REHYPE_PLUGINS = createStreamdownRehypePlugins
+ // from its (unhardened) href so it matches the real filename on disk.
+ export const WORKSPACE_FILE_LINK_ATTR = "data-omnigent-file";
+ 
++// Attribute carrying the workspace path a markdown image names, percent-decoded,
++// for the `img` renderer to load through the session's filesystem API.
++export const WORKSPACE_MEDIA_ATTR = "data-omnigent-media";
++
++// Where a workspace image's src is parked once its path moves to the data
++// attribute: a 1x1 transparent GIF, which harden passes as a data image.
++const PARKED_MEDIA_SRC = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEAAAAALAAAAAABAAEAAAIBTAA7";
++
+ // An href that can only be a protocol URL, a protocol-relative URL, or an
+ // in-page anchor, never a path to a file in the session workspace. The
+ // lookahead keeps a cited position off the scheme branch: `notes.md:12` is a
+@@ -88,10 +103,21 @@ interface HastElement {
+ // extra confirmation click.
+ export const CHAT_LINK_SAFETY: LinkSafetyConfig = { enabled: false };
+ 
+-/** Preserves local file URIs and basename citations through sanitization. */
++/**
++ * Preserves local file URIs (of links and images) and basename citations
++ * through sanitization.
++ */
+ export function rewriteFileUriLinks() {
+   return (tree: HastElement) => {
+     visitElements(tree, (node) => {
++      // An image's `file:` URI names a workspace file like a link's does;
++      // sanitize would drop it, leaving markWorkspaceMedia nothing to load.
++      const src = node.tagName === "img" ? node.properties?.src : undefined;
++      if (typeof src === "string" && /^file:/i.test(src)) {
++        const path = fileUriToLocalPath(src);
++        if (path) node.properties = { ...node.properties, src: path };
++        return;
++      }
+       if (node.tagName !== "a") return;
+       const href = node.properties?.href;
+       if (typeof href !== "string") return;
+@@ -203,6 +229,196 @@ function decodeFilePath(path: string): string {
+   return splitWorkspaceFileCitation(decoded).hasPosition ? path : decoded;
+ }
+ 
++/**
++ * Moves the src of every markdown image that names a workspace file onto
++ * {@link WORKSPACE_MEDIA_ATTR} and parks the src on a blank data image.
++ *
++ * Harden can't judge a path (it has no origin to resolve it against) and
++ * would replace the image with "[Image blocked: …]"; nor could the browser
++ * load it, as the file lives in the session's sandbox. The `img` renderer
++ * fetches it through the filesystem API instead. A `file:` URI arrives here
++ * already rewritten to its path by {@link rewriteFileUriLinks}. Query and
++ * fragment are dropped: a file path carries neither.
++ */
++export function markWorkspaceMedia() {
++  return (tree: HastElement) => {
++    visitElements(tree, (node) => {
++      if (node.tagName !== "img") return;
++      const src = node.properties?.src;
++      if (typeof src !== "string" || !src) return;
++      if (NON_FILE_HREF.test(src)) return;
++      const path = src.split(/[?#]/)[0];
++      if (!path) return;
++      let decoded = path;
++      try {
++        decoded = decodeURIComponent(path);
++      } catch {
++        // A lone `%` is a legal filename character; keep the raw text.
++      }
++      node.properties = {
++        ...node.properties,
++        src: PARKED_MEDIA_SRC,
++        [WORKSPACE_MEDIA_ATTR]: decoded,
++      };
++    });
++  };
++}
++
++/**
++ * Blocks images over plain `http:`, which harden's wildcard would let through.
++ *
++ * Only an https image renders: a plain-http URL could make the viewer's
++ * browser send a GET to a device on their own network, which an agent in the
++ * sandbox can't reach, while the TLS handshake of an https URL fails before
++ * any request reaches a device without a valid certificate. A relative src is
++ * all harden needs to block it, with its usual "[Image blocked: …]".
++ */
++export function blockPlainHttpImages() {
++  return (tree: HastElement) => {
++    visitElements(tree, (node) => {
++      if (node.tagName !== "img") return;
++      const src = node.properties?.src;
++      if (typeof src !== "string" || !/^\s*http:/i.test(src)) return;
++      node.properties = { ...node.properties, src: "insecure-image" };
++    });
++  };
++}
++
++interface HastParent {
++  type: string;
++  tagName?: string;
++  properties?: Record<string, unknown>;
++  children?: HastNode[];
++}
++type HastNode = HastParent & { value?: string };
++
++function isBlankText(node: HastNode): boolean {
++  return node.type === "text" && !node.value?.trim();
++}
++
++/** Whether an `img` element shows an image, rather than playing a video or audio. */
++function isImage(node: HastNode): boolean {
++  const src = node.properties?.[WORKSPACE_MEDIA_ATTR] ?? node.properties?.src;
++  return typeof src !== "string" || mediaKind(src) === "image";
++}
++
++/** The images a paragraph holds when it holds nothing else, or null. */
++function paragraphMedia(node: HastNode): HastNode[] | null {
++  if (node.type !== "element" || node.tagName !== "p") return null;
++  const media: HastNode[] = [];
++  for (const child of node.children ?? []) {
++    if (isBlankText(child) || (child.type === "element" && child.tagName === "br")) continue;
++    if (child.type === "element" && child.tagName === "img" && isImage(child)) {
++      media.push(child);
++      continue;
++    }
++    // A linked image, such as a badge or a thumbnail linking to the original.
++    const linked = child.children?.filter((grandchild) => !isBlankText(grandchild)) ?? [];
++    if (
++      child.tagName === "a" &&
++      linked.length === 1 &&
++      linked[0].tagName === "img" &&
++      isImage(linked[0])
++    ) {
++      media.push(child);
++      continue;
++    }
++    return null;
++  }
++  return media.length > 0 ? media : null;
++}
++
++/**
++ * Lays out two or more images in a row as one grid instead of one per line.
++ * A video or audio file keeps a line of its own, where its player fits.
++ *
++ * Images separated only by whitespace, line breaks or blank lines, so one
++ * paragraph of images or several image-only paragraphs in a row, become a
++ * single `div` carrying {@link MEDIA_GALLERY_ATTR}, which index.css lays out
++ * as a grid and the lightbox pages through. Streamdown parses each top-level block on its own, so images in
++ * separate paragraphs reach this pass together only through
++ * {@link parseMarkdownIntoMediaBlocks}.
++ */
++export function groupMediaGalleries() {
++  const group = (parent: HastParent) => {
++    const children = parent.children;
++    if (!children) return;
++    for (const child of children) group(child);
++    const grouped: HastNode[] = [];
++    let index = 0;
++    while (index < children.length) {
++      const first = paragraphMedia(children[index]);
++      if (!first) {
++        grouped.push(children[index]);
++        index += 1;
++        continue;
++      }
++      const media = [...first];
++      let end = index + 1;
++      let next = end;
++      while (next < children.length) {
++        if (isBlankText(children[next])) {
++          next += 1;
++          continue;
++        }
++        const more = paragraphMedia(children[next]);
++        if (!more) break;
++        media.push(...more);
++        next += 1;
++        end = next;
++      }
++      if (media.length < 2) {
++        grouped.push(children[index]);
++        index += 1;
++        continue;
++      }
++      grouped.push({
++        type: "element",
++        tagName: "div",
++        properties: { [MEDIA_GALLERY_ATTR]: "" },
++        children: media,
++      });
++      index = end;
++    }
++    parent.children = grouped;
++  };
++  return (tree: HastParent) => group(tree);
++}
++
++// A block holding nothing but images (`![a](x.png)`, optionally linked).
++const MEDIA_ONLY_BLOCK = /^\s*(?:\[?!\[[^\]\n]*\]\([^)\n]*\)(?:\]\([^)\n]*\))?\s*)+$/;
++
++/**
++ * Streamdown's block split, with each run of image-only blocks kept as one
++ * block so {@link groupMediaGalleries} sees the whole run. Streamdown renders
++ * every block through its own pipeline, so images in paragraphs separated by
++ * a blank line would otherwise never share a grid.
++ */
++export function parseMarkdownIntoMediaBlocks(markdown: string): string[] {
++  const blocks: string[] = [];
++  // Whitespace blocks after an image-only block, held back until the next
++  // block shows whether the run goes on.
++  let gap = "";
++  let afterMedia = false;
++  for (const block of parseMarkdownIntoBlocks(markdown)) {
++    if (afterMedia && !block.trim()) {
++      gap += block;
++      continue;
++    }
++    const media = MEDIA_ONLY_BLOCK.test(block);
++    if (afterMedia && media) {
++      blocks[blocks.length - 1] += gap + block;
++    } else {
++      if (gap) blocks.push(gap);
++      blocks.push(block);
++    }
++    gap = "";
++    afterMedia = media;
++  }
++  if (gap) blocks.push(gap);
++  return blocks;
++}
++
+ function visitElements(node: HastElement, visitor: (node: HastElement) => void): void {
+   if (node.type === "element") visitor(node);
+   for (const child of node.children ?? []) {
+@@ -245,16 +461,22 @@ function createStreamdownRehypePlugins(markFileLinks: boolean): StreamdownRehype
+     // which drops the marker attribute as unknown. Sanitize has also already
+     // stripped any dangerous href, leaving nothing to hand over for such a link.
+     if (markFileLinks) {
+-      plugins.push(markWorkspaceFileLinks);
++      plugins.push(markWorkspaceFileLinks, markWorkspaceMedia);
+     }
++    plugins.push(blockPlainHttpImages, groupMediaGalleries);
+ 
+     if (!isStreamdownHardenPlugin(plugin)) {
+       throw new Error("Streamdown harden plugin must be a [plugin, options] tuple");
+     }
+ 
++    // Images from any https URL, and data images, render inline. Agents in
++    // this deployment run with network access and no permission prompts, so an
++    // image URL is no exfiltration channel they lack. Plain http was blocked by
++    // blockPlainHttpImages, and workspace paths moved off `src` by
++    // markWorkspaceMedia; any other path stays blocked.
+     plugins.push([
+       plugin[0],
+-      { ...plugin[1], allowedImagePrefixes: [] },
++      { ...plugin[1], allowedImagePrefixes: ["*"], allowDataImages: true },
+     ] satisfies StreamdownPluginTuple);
+   }
+ 
+diff --git a/web/src/components/blocks/ChatMarkdown.media.test.tsx b/web/src/components/blocks/ChatMarkdown.media.test.tsx
+new file mode 100644
+index 0000000..a5319c5
+--- /dev/null
++++ b/web/src/components/blocks/ChatMarkdown.media.test.tsx
+@@ -0,0 +1,197 @@
++// Images, video and audio in chat markdown: workspace files load through the
++// filesystem API, images in a row share a grid, and the lightbox pages
++// through that grid.
++
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { parseMarkdownIntoMediaBlocks } from "@/components/ai-elements/streamdown-security";
++import { ImageLightboxProvider } from "@/components/ImageLightbox";
++import { FileViewerContext } from "@/shell/FileViewerContext";
++import { FilePathAwareMessageResponse } from "./ChatMarkdown";
++
++vi.mock("@/lib/host", async (importOriginal) => ({
++  ...(await importOriginal<object>()),
++  getEmbedRoot: () => null,
++}));
++
++vi.mock("@/hooks/useFileContent", async (importOriginal) => ({
++  ...(await importOriginal<object>()),
++  fetchWorkspaceFileBlob: vi.fn(),
++}));
++import { fetchWorkspaceFileBlob } from "@/hooks/useFileContent";
++
++const fetchBlob = vi.mocked(fetchWorkspaceFileBlob);
++
++const FILE_VIEWER = {
++  openFile: () => {},
++  openGithubTab: () => {},
++  isChangedPath: () => false,
++  conversationId: "conv_1" as string | undefined,
++  workspaceRoot: "/home/u/ws" as string | null,
++  workspaceHome: "/home/u",
++};
++
++beforeEach(() => {
++  fetchBlob.mockReset();
++  fetchBlob.mockImplementation(async (_conversationId, path) => new Blob([path]));
++  let next = 0;
++  vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: () => `blob:media-${next++}` }));
++  URL.revokeObjectURL = vi.fn();
++  // Fetch is stubbed so a file link's existence check never leaves the test.
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async () => new Response("{}", { status: 404 })),
++  );
++});
++
++afterEach(cleanup);
++
++function renderMarkdown(markdown: string, viewer: typeof FILE_VIEWER = FILE_VIEWER) {
++  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
++  return render(
++    <QueryClientProvider client={client}>
++      <ImageLightboxProvider>
++        <FileViewerContext.Provider value={viewer}>
++          <FilePathAwareMessageResponse>{markdown}</FilePathAwareMessageResponse>
++        </FileViewerContext.Provider>
++      </ImageLightboxProvider>
++    </QueryClientProvider>,
++  );
++}
++
++describe("workspace media in chat markdown", () => {
++  it("loads an absolute workspace image through the filesystem API", async () => {
++    renderMarkdown("![after](/home/u/ws/shots/after.png)");
++
++    const img = await screen.findByRole("img", { name: "after" });
++    expect(img).toHaveAttribute("src", expect.stringMatching(/^blob:media-/));
++    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "shots/after.png");
++    expect(screen.queryByText(/Image blocked/)).toBeNull();
++  });
++
++  it("resolves a relative path against the workspace root", async () => {
++    renderMarkdown("![shot](./my%20shot.png)");
++
++    await screen.findByRole("img", { name: "shot" });
++    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "my shot.png");
++  });
++
++  it("loads a file URI like the absolute path it names", async () => {
++    renderMarkdown("![shot](file:///home/u/ws/a.png)");
++
++    await screen.findByRole("img", { name: "shot" });
++    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "a.png");
++  });
++
++  it("plays a video file in a native player", async () => {
++    const { container } = renderMarkdown("![demo](/home/u/ws/demo.mp4)");
++
++    await waitFor(() => expect(container.querySelector("video")).not.toBeNull());
++    const video = container.querySelector("video")!;
++    expect(video).toHaveAttribute("src", expect.stringMatching(/^blob:media-/));
++    expect(video).toHaveAttribute("controls");
++    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "demo.mp4");
++  });
++
++  it("plays an audio file in a native player", async () => {
++    const { container } = renderMarkdown("![voice](https://example.com/voice.mp3)");
++
++    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
++    expect(container.querySelector("audio")).toHaveAttribute(
++      "src",
++      "https://example.com/voice.mp3",
++    );
++  });
++
++  it("names a file that can't be loaded instead of showing a broken image", async () => {
++    fetchBlob.mockRejectedValue(new Error("404 Not Found"));
++    renderMarkdown("![missing](/home/u/ws/gone.png)");
++
++    const chip = await screen.findByRole("img", { name: "missing" });
++    expect(chip).toHaveAttribute("title", "Couldn't load /home/u/ws/gone.png");
++    expect(chip.tagName).toBe("SPAN");
++  });
++
++  it("names a workspace image outside a session, where nothing can load it", async () => {
++    renderMarkdown("![orphan](shot.png)", { ...FILE_VIEWER, conversationId: undefined });
++
++    expect((await screen.findByRole("img", { name: "orphan" })).tagName).toBe("SPAN");
++    expect(fetchBlob).not.toHaveBeenCalled();
++  });
++});
++
++describe("images in a row", () => {
++  it("share one grid, across lines and blank lines", async () => {
++    const { container } = renderMarkdown(
++      "Before and after:\n\n![a](https://example.com/a.png)\n\n![b](https://example.com/b.png)\n![c](https://example.com/c.png) ![d](https://example.com/d.png)\n\nThat's all.",
++    );
++
++    await waitFor(() => expect(container.querySelector("[data-media-gallery]")).not.toBeNull());
++    const galleries = container.querySelectorAll("[data-media-gallery]");
++    expect(galleries).toHaveLength(1);
++    expect([...galleries[0].querySelectorAll("img")].map((img) => img.alt)).toEqual([
++      "a",
++      "b",
++      "c",
++      "d",
++    ]);
++    expect(screen.getByText("That's all.")).toBeInTheDocument();
++  });
++
++  it("leave a single image, or images split by text, out of a grid", async () => {
++    const { container } = renderMarkdown(
++      "![a](https://example.com/a.png)\n\nBetween.\n\n![b](https://example.com/b.png)",
++    );
++
++    await screen.findByRole("img", { name: "b" });
++    expect(container.querySelector("[data-media-gallery]")).toBeNull();
++  });
++
++  it("leave video and audio on lines of their own", async () => {
++    const { container } = renderMarkdown(
++      "![a](https://example.com/a.png) ![demo](https://example.com/demo.webm)\n\n![voice](https://example.com/voice.wav)",
++    );
++
++    await waitFor(() => expect(container.querySelector("audio")).not.toBeNull());
++    expect(container.querySelector("video")).not.toBeNull();
++    expect(container.querySelector("[data-media-gallery]")).toBeNull();
++  });
++
++  it("page through the grid in the lightbox", async () => {
++    renderMarkdown(
++      "![one](https://example.com/1.png) ![two](/home/u/ws/2.png) ![three](https://example.com/3.png)",
++    );
++    await screen.findByRole("img", { name: "two" });
++
++    fireEvent.click(screen.getByRole("button", { name: "Zoom image: one" }));
++    const dialog = screen.getByRole("dialog");
++    expect(dialog).toHaveTextContent("1 / 3");
++    expect(screen.queryByRole("button", { name: "Previous image" })).toBeNull();
++
++    fireEvent.click(screen.getByRole("button", { name: "Next image" }));
++    expect(dialog).toHaveTextContent("2 / 3");
++    expect(screen.getAllByRole("img", { name: "two" }).at(-1)).toHaveAttribute(
++      "src",
++      expect.stringMatching(/^blob:media-/),
++    );
++
++    fireEvent.keyDown(screen.getAllByRole("img", { name: "two" }).at(-1)!, { key: "ArrowRight" });
++    expect(dialog).toHaveTextContent("3 / 3");
++    expect(screen.queryByRole("button", { name: "Next image" })).toBeNull();
++  });
++});
++
++describe("parseMarkdownIntoMediaBlocks", () => {
++  it("keeps a run of image-only blocks in one block", () => {
++    expect(
++      parseMarkdownIntoMediaBlocks("Intro\n\n![a](a.png)\n\n[![b](b.png)](b.png)\n\nOutro"),
++    ).toEqual(["Intro", "\n\n", "![a](a.png)\n\n[![b](b.png)](b.png)", "\n\n", "Outro"]);
++  });
++
++  it("leaves text blocks alone", () => {
++    const markdown = "One\n\nTwo ![a](a.png)\n\n![b](b.png)";
++    expect(parseMarkdownIntoMediaBlocks(markdown).join("")).toBe(markdown);
++    expect(parseMarkdownIntoMediaBlocks(markdown)).toContain("![b](b.png)");
++  });
++});
+diff --git a/web/src/components/blocks/ChatMarkdown.tsx b/web/src/components/blocks/ChatMarkdown.tsx
+index 5df1da6..d0acf3a 100644
+--- a/web/src/components/blocks/ChatMarkdown.tsx
++++ b/web/src/components/blocks/ChatMarkdown.tsx
+@@ -7,6 +7,8 @@
+ //   1. Inline-code paths (`` `src/App.tsx` ``): see `WorkspacePathInlineCode`.
+ //   2. Markdown links whose href is a file path: see `WorkspaceFileLink`.
+ //
++// Markdown images, video and audio show inline: see `ChatMarkdownMedia`.
++//
+ // Lives apart from `BlockRenderer` so approval cards can render agent markdown
+ // without importing the block dispatcher that renders them.
+ 
+@@ -21,7 +23,7 @@ import {
+   splitWorkspaceFileCitation,
+   WORKSPACE_FILE_LINK_ATTR,
+ } from "@/components/ai-elements/streamdown-security";
+-import { ZoomableImage } from "@/components/ImageLightbox";
++import { ChatMarkdownMedia } from "@/components/chat/ChatMarkdownMedia";
+ import { useThrottledValue } from "@/hooks/useThrottledValue";
+ import { withBasePath } from "@/lib/basePath";
+ import { isNativeShell } from "@/lib/nativeBridge";
+@@ -413,24 +415,11 @@ function WorkspaceFileLink({
+   );
+ }
+ 
+-// Markdown images open in the shared lightbox on click, matching uploaded and
+-// generated images. (Remote `src`s are still gated by Streamdown's image
+-// security; this only adds the zoom affordance to whatever does render.)
+-function ZoomableMarkdownImage({
+-  src,
+-  alt,
+-  node: _node,
+-  ...props
+-}: WithHastNode<React.ComponentProps<"img">>) {
+-  const resolvedSrc = typeof src === "string" ? src : undefined;
+-  return <ZoomableImage {...props} src={resolvedSrc} alt={alt ?? ""} />;
+-}
+-
+ // Stable module-level override map so MessageResponse's shallow prop compare
+ // never sees a new `components` identity and re-parses needlessly.
+ const FILE_PATH_AWARE_COMPONENTS = {
+   inlineCode: WorkspacePathInlineCode,
+-  img: ZoomableMarkdownImage,
++  img: ChatMarkdownMedia,
+   a: WorkspaceFileLink,
+ };
+ 
+diff --git a/web/src/components/chat/ChatMarkdownMedia.tsx b/web/src/components/chat/ChatMarkdownMedia.tsx
+new file mode 100644
+index 0000000..64a0362
+--- /dev/null
++++ b/web/src/components/chat/ChatMarkdownMedia.tsx
+@@ -0,0 +1,168 @@
++// Images, video and audio in chat markdown (`![alt](path-or-url)`), shown
++// inline. An image opens in the shared lightbox, and paging through the others
++// when it sits in a grid of them (see groupMediaGalleries).
++//
++// A workspace path is loaded through the session's filesystem API: the file
++// lives in the sandbox, which the browser can't reach directly. The bytes come
++// as a Blob rather than as an `<img src>` to the API, because the download
++// endpoint has no range requests, without which Safari won't play a video, and
++// because an embedding host or native shell needs its own auth on the request.
++
++import type React from "react";
++import { useEffect, useState } from "react";
++import { FileAudioIcon, FileVideoIcon, ImageIcon } from "lucide-react";
++import { WORKSPACE_MEDIA_ATTR } from "@/components/ai-elements/streamdown-security";
++import { ZoomableImage } from "@/components/ImageLightbox";
++import { Spinner } from "@/components/ui/spinner";
++import { mediaKind, type MediaKind } from "@/lib/mediaKind";
++import { fetchWorkspaceFileBlob } from "@/hooks/useFileContent";
++import { resolveChatFilePath } from "@/hooks/useWorkspaceChangedFiles";
++import { useFileViewerConversationId, useWorkspacePaths } from "@/shell/FileViewerContext";
++
++function fileName(pathOrUrl: string): string {
++  const path = pathOrUrl.split(/[?#]/)[0].replace(/\/+$/, "");
++  return path.slice(path.lastIndexOf("/") + 1) || pathOrUrl;
++}
++
++type MediaSource = { status: "loading" } | { status: "error" } | { status: "ready"; url: string };
++
++/**
++ * Where the browser can load a markdown image's media from: the URL as
++ * written, or an object URL for the bytes of the workspace file it names,
++ * revoked once the media unmounts.
++ */
++function useMediaSource(workspacePath: string | null, src: string | undefined): MediaSource {
++  const conversationId = useFileViewerConversationId();
++  const { root, home } = useWorkspacePaths();
++  // `./shot.png` is as relative as `shot.png`; the resolver rejects `.`.
++  const cited = workspacePath?.replace(/^(?:\.\/)+/, "") ?? null;
++  const filePath = cited ? (resolveChatFilePath(cited, root, home)?.path ?? null) : null;
++  const key = conversationId && filePath ? `${conversationId}\0${filePath}` : null;
++  const [loaded, setLoaded] = useState<{ key: string; url: string | null } | null>(null);
++
++  useEffect(() => {
++    if (!conversationId || !filePath || !key) return;
++    let cancelled = false;
++    let objectUrl: string | null = null;
++    fetchWorkspaceFileBlob(conversationId, filePath)
++      .then((blob) => {
++        if (cancelled) return;
++        objectUrl = URL.createObjectURL(blob);
++        setLoaded({ key, url: objectUrl });
++      })
++      .catch(() => {
++        if (!cancelled) setLoaded({ key, url: null });
++      });
++    return () => {
++      cancelled = true;
++      if (objectUrl) URL.revokeObjectURL(objectUrl);
++    };
++  }, [conversationId, filePath, key]);
++
++  if (workspacePath === null) return src ? { status: "ready", url: src } : { status: "error" };
++  if (!key) {
++    // An absolute or `~` path can't be resolved until the workspace root is
++    // known; it resolves once the environment metadata loads.
++    const rootPending = root === null && /^[/~]/.test(cited ?? "");
++    return rootPending && conversationId ? { status: "loading" } : { status: "error" };
++  }
++  if (loaded?.key !== key) return { status: "loading" };
++  return loaded.url ? { status: "ready", url: loaded.url } : { status: "error" };
++}
++
++const KIND_ICONS = { image: ImageIcon, video: FileVideoIcon, audio: FileAudioIcon };
++
++/** A compact chip for media that can't be shown, naming what it was. */
++function UnavailableMedia({ kind, name, path }: { kind: MediaKind; name: string; path: string }) {
++  const Icon = KIND_ICONS[kind];
++  return (
++    <span
++      role="img"
++      aria-label={name}
++      title={`Couldn't load ${path}`}
++      className="chat-media-unavailable inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted px-2 py-1 align-middle text-sm text-muted-foreground"
++    >
++      <Icon className="size-3.5 shrink-0" />
++      <span className="truncate">{name}</span>
++    </span>
++  );
++}
++
++/**
++ * The `img` renderer for chat markdown. A path or URL ending in a video or
++ * audio extension plays in a native player; anything else is an image that
++ * opens in the lightbox. A workspace path arrives on
++ * {@link WORKSPACE_MEDIA_ATTR}, moved there by markWorkspaceMedia.
++ */
++export function ChatMarkdownMedia({
++  src,
++  alt,
++  title,
++  ...props
++}: React.ComponentProps<"img"> & { node?: unknown }) {
++  const marked = (props as Record<string, unknown>)[WORKSPACE_MEDIA_ATTR];
++  const workspacePath = typeof marked === "string" ? marked : null;
++  const remoteSrc = typeof src === "string" ? src : undefined;
++  const source = useMediaSource(workspacePath, remoteSrc);
++  const [failedUrl, setFailedUrl] = useState<string | null>(null);
++  const where = workspacePath ?? remoteSrc ?? "";
++  const kind = mediaKind(where);
++  const name = alt || fileName(where) || "image";
++
++  if (source.status === "loading") {
++    return (
++      <span
++        role="status"
++        aria-label={`Loading ${name}`}
++        className="chat-media chat-media-placeholder"
++      >
++        <Spinner />
++      </span>
++    );
++  }
++  if (source.status === "error" || failedUrl === source.url) {
++    return <UnavailableMedia kind={kind} name={name} path={where} />;
++  }
++  const onError = () => setFailedUrl(source.url);
++  if (kind === "video") {
++    return (
++      <video
++        className="chat-media chat-media-video"
++        src={source.url}
++        title={title ?? name}
++        aria-label={name}
++        controls
++        playsInline
++        preload="metadata"
++        onError={onError}
++      />
++    );
++  }
++  if (kind === "audio") {
++    return (
++      <audio
++        className="chat-media chat-media-audio"
++        src={source.url}
++        title={title ?? name}
++        aria-label={name}
++        controls
++        preload="metadata"
++        onError={onError}
++      />
++    );
++  }
++  return (
++    <ZoomableImage
++      src={source.url}
++      alt={alt ?? ""}
++      title={title}
++      buttonClassName="chat-media"
++      className="chat-media-image"
++      // A remote image needn't learn which page shows it.
++      referrerPolicy="no-referrer"
++      loading="lazy"
++      decoding="async"
++      onError={onError}
++    />
++  );
++}
+diff --git a/web/src/components/chat/chatBubbleParts.tsx b/web/src/components/chat/chatBubbleParts.tsx
+index cc75555..22f0c5f 100644
+--- a/web/src/components/chat/chatBubbleParts.tsx
++++ b/web/src/components/chat/chatBubbleParts.tsx
+@@ -795,7 +795,8 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
+                 non-wrapping strip would sit off-screen in the overflow and
+                 look like it never rendered. */}
+             {images.length > 0 && (
+-              <div className="mb-1.5 flex flex-wrap items-start gap-2">
++              // data-media-gallery: the lightbox pages through the attachments.
++              <div className="mb-1.5 flex flex-wrap items-start gap-2" data-media-gallery="">
+                 {keyedAttachments(
+                   images,
+                   (img) => img.file_id ?? img.image_url ?? img.filename,
+diff --git a/web/src/hooks/useFileContent.ts b/web/src/hooks/useFileContent.ts
+index e73f365..f895351 100644
+--- a/web/src/hooks/useFileContent.ts
++++ b/web/src/hooks/useFileContent.ts
+@@ -90,6 +90,25 @@ export function fileContentToBlob(data: FileContentResponse): Blob {
+   return new Blob([data.content], { type: data.content_type ?? "text/plain" });
+ }
+ 
++/**
++ * Fetch a workspace file's complete bytes, for media shown inline in the chat.
++ *
++ * Asks for the raw file (`download=true`) like {@link downloadWorkspaceFile},
++ * so a video isn't cut off at the viewer's read cap, and through
++ * `authenticatedFetch`, which also carries the auth an embedding host or a
++ * native shell needs. The Blob's type is the file's, from the server.
++ *
++ * :param conversationId: The session/conversation ID, e.g. ``"sess_abc123"``.
++ * :param path: Workspace-relative or host-absolute file path.
++ */
++export async function fetchWorkspaceFileBlob(conversationId: string, path: string): Promise<Blob> {
++  const res = await authenticatedFetch(
++    workspaceFileUrl(conversationId, path, { download: "true" }),
++  );
++  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
++  return await res.blob();
++}
++
+ /**
+  * Programmatically trigger a browser file download for the given ``Blob``.
+  *
+diff --git a/web/src/index.css b/web/src/index.css
+index 370ad4a..345d11d 100644
+--- a/web/src/index.css
++++ b/web/src/index.css
+@@ -1562,6 +1562,91 @@ html[data-electron-mac] .breadcrumb-folder {
+   margin-bottom: 0;
+ }
+ 
++/* Images, video and audio in chat markdown (ChatMarkdownMedia). A single
++   image, a video and an audio player are at most as wide as two tiles of a
++   three-image grid (2 x 13rem plus the 0.5rem gap), so a reply's media line up;
++   the lightbox shows an image whole. */
++.message-markdown {
++  --chat-media-width: 26.5rem;
++}
++
++.message-markdown .chat-media-image {
++  max-width: min(100%, var(--chat-media-width));
++  max-height: 20rem;
++  border: 1px solid var(--color-border);
++  border-radius: var(--radius-md);
++}
++
++.message-markdown video.chat-media {
++  display: block;
++  width: 100%;
++  max-width: var(--chat-media-width);
++  max-height: 24rem;
++  margin-block: 0.5rem;
++  border-radius: var(--radius-md);
++  background: black;
++}
++
++.message-markdown audio.chat-media {
++  display: block;
++  width: 100%;
++  max-width: var(--chat-media-width);
++  margin-block: 0.5rem;
++}
++
++.message-markdown .chat-media-placeholder {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  width: 14rem;
++  max-width: 100%;
++  aspect-ratio: 4 / 3;
++  vertical-align: middle;
++  border: 1px solid var(--color-border);
++  border-radius: var(--radius-md);
++  background: var(--color-muted);
++  color: var(--color-muted-foreground);
++}
++
++/* Two or more images in a row share a grid (groupMediaGalleries): as many
++   columns as fit at 10rem or more, so up to three a row in the chat and two
++   on a phone, with more images wrapping onto further rows. Each image fills a 16:10 tile, which a desktop
++   screenshot fits, cropped from the top so a taller one keeps its header;
++   the lightbox shows it whole. */
++.message-markdown [data-media-gallery] {
++  display: grid;
++  grid-template-columns: repeat(auto-fit, minmax(min(10rem, 100%), 1fr));
++  gap: 0.5rem;
++  max-width: 40rem;
++  margin-block: 1rem;
++}
++
++.message-markdown [data-media-gallery] > * {
++  min-width: 0;
++}
++
++.message-markdown [data-media-gallery] :is(.chat-media, .chat-media-unavailable) {
++  display: flex;
++  width: 100%;
++  height: auto;
++  max-height: none;
++  margin: 0;
++  aspect-ratio: 16 / 10;
++}
++
++.message-markdown [data-media-gallery] .chat-media-unavailable {
++  justify-content: center;
++}
++
++.message-markdown [data-media-gallery] .chat-media-image {
++  width: 100%;
++  height: 100%;
++  max-width: none;
++  max-height: none;
++  object-fit: cover;
++  object-position: top;
++}
++
+ /* Use the usable chat column so side panels and split views keep narrow prose. */
+ .chat-conversation-content {
+   container: chat-column / inline-size;
+diff --git a/web/src/lib/mediaKind.ts b/web/src/lib/mediaKind.ts
+new file mode 100644
+index 0000000..6d37dec
+--- /dev/null
++++ b/web/src/lib/mediaKind.ts
+@@ -0,0 +1,26 @@
++// What a markdown image's path or URL names, by its extension: chat markdown
++// plays a video or audio file (`![demo](demo.mp4)`) and shows anything else as
++// an image.
++
++export type MediaKind = "image" | "video" | "audio";
++
++const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "mov", "ogv"]);
++const AUDIO_EXTENSIONS = new Set(["mp3", "m4a", "aac", "wav", "oga", "ogg", "opus", "flac"]);
++
++/** Whether a path or URL names a video, an audio file, or (otherwise) an image. */
++export function mediaKind(pathOrUrl: string): MediaKind {
++  let path = pathOrUrl;
++  if (/^https?:/i.test(path)) {
++    try {
++      path = new URL(path).pathname;
++    } catch {
++      // Not a parseable URL; judge the text as it is.
++    }
++  }
++  path = path.split(/[?#]/)[0];
++  const dot = path.lastIndexOf(".");
++  const extension = dot > path.lastIndexOf("/") ? path.slice(dot + 1).toLowerCase() : "";
++  if (VIDEO_EXTENSIONS.has(extension)) return "video";
++  if (AUDIO_EXTENSIONS.has(extension)) return "audio";
++  return "image";
++}

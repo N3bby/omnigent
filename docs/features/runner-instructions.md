@@ -16,6 +16,9 @@ session's runner, so you don't have to explain it yourself.
 - To link files as a Markdown link to the absolute path, so you can open them
   from the browser, and to keep those files in the home directory, not in
   `/tmp`, where links don't open and files don't survive the Pod stopping.
+- To [show images](inline-media.md), such as screenshots, in the chat rather
+  than link them, several in a row so they share a grid, and that video and
+  audio files play there too.
 - To give the [tailnet address](tailscale.md), not `localhost`, when you ask
   how to reach something running in the session.
 - How to [reach your other devices](tailscale.md#reaching-your-devices-from-a-session)
