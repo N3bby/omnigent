@@ -19,7 +19,7 @@ What you see and choose while talking to an agent.
 | [The startup card](startup-progress.md) | Each step of a sandbox's start as it happens, why it failed in plain words, and the whole startup log | Nothing to turn off |
 | [Start without a message](start-without-message.md) | Start a session from the New session screen with an empty composer, so its sandbox and @ file search are ready before you ask anything | Nothing to turn off |
 | [Your first message survives closing the app](first-message-while-starting.md) | Send a new session's first message and close the app while the sandbox starts: the agent still gets it | Nothing to turn off |
-| [Images, video and audio in the chat](inline-media.md) | An agent's screenshots show in the chat, side by side in a grid, and open full screen to pinch-zoom and swipe through; videos and audio play in place | No |
+| [Images, video and audio in the chat](inline-media.md) | An agent's screenshots show in the chat, side by side in a grid, and open full screen to pinch-zoom and swipe through; videos and audio play in place; in the desktop app, right-click one to copy it | No |
 
 ## Subscriptions
 

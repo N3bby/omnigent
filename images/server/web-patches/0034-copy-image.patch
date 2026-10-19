@@ -1,0 +1,338 @@
+Copy an image in the chat from its right-click menu, in the desktop app.
+
+The desktop app's window has no context menu of its own, so a right-click on
+an image in the chat, or on the image open full screen, did nothing.
+ImageContextMenu wraps both (ZoomableImage's button and ZoomViewer's image)
+in a menu with "Copy image", only in the Electron shell: a browser keeps its
+native menu, which can copy the image already and do more.
+
+copyImage redraws the image on a canvas and writes it as a PNG, the one
+image type every clipboard takes, so a JPEG, WebP, GIF or SVG copies too.
+The PNG goes to the clipboard as a promise, so the write starts inside the
+click's user activation, before the image has loaded. A workspace image is
+a blob: URL and always copies; a remote one needs CORS headers.
+
+The menu is portalled, but React still bubbles its events to the image's
+ancestors, so it stops pointer and key events: otherwise a click on Copy
+image starts a pan on the full-screen stage, and an arrow key pages it.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0033.
+diff --git a/web/src/components/ImageLightbox.test.tsx b/web/src/components/ImageLightbox.test.tsx
+index 166b57a0c..3aa24701a 100644
+--- a/web/src/components/ImageLightbox.test.tsx
++++ b/web/src/components/ImageLightbox.test.tsx
+@@ -1,7 +1,7 @@
+ // Tests for the shared image lightbox: a ZoomableImage renders a button around
+ // an <img>; activating it opens a full-screen Dialog showing the same source,
+ // which closes via Escape, the "x" button, or a click on the empty stage
+-// around the image.
++// around the image. In the desktop app, a right-click offers Copy image.
+ 
+ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+@@ -11,6 +11,9 @@ vi.mock("@/lib/host", () => ({
+   getEmbedRoot: () => null,
+ }));
+ 
++const { copyImage } = vi.hoisted(() => ({ copyImage: vi.fn() }));
++vi.mock("@/lib/clipboard", () => ({ copyImage }));
++
+ import { ImageLightboxProvider, ZoomableImage } from "./ImageLightbox";
+ 
+ afterEach(cleanup);
+@@ -232,3 +235,48 @@ describe("touch gestures", () => {
+     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+   });
+ });
++
++describe("copying an image from its right-click menu", () => {
++  afterEach(() => {
++    delete (window as { omnigentDesktop?: unknown }).omnigentDesktop;
++    copyImage.mockReset();
++  });
++
++  /** Right-clicks `target`; false when the page replaced the native menu. */
++  const rightClick = (target: Element) => fireEvent.contextMenu(target, { button: 2 });
++
++  it("offers Copy image in the desktop app, which has no menu of its own", async () => {
++    (window as { omnigentDesktop?: unknown }).omnigentDesktop = { kind: "electron" };
++    copyImage.mockResolvedValue(undefined);
++    renderWithProvider();
++    expect(rightClick(screen.getByRole("img", { name: "diagram" }))).toBe(false);
++    fireEvent.click(await screen.findByRole("menuitem", { name: "Copy image" }));
++    expect(copyImage).toHaveBeenCalledWith("/pic.png");
++    // Copying neither opens the preview behind the menu.
++    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
++  });
++
++  it("offers it on the image open full screen, without closing or panning it", async () => {
++    (window as { omnigentDesktop?: unknown }).omnigentDesktop = { kind: "electron" };
++    copyImage.mockResolvedValue(undefined);
++    renderWithProvider();
++    fireEvent.click(screen.getByRole("button", { name: "Zoom image: diagram" }));
++    const preview = screen.getAllByRole("img", { name: "diagram" }).at(-1)!;
++    const stage = preview.parentElement!;
++    stage.setPointerCapture = vi.fn();
++    rightClick(preview);
++    const item = await screen.findByRole("menuitem", { name: "Copy image" });
++    fireEvent.pointerDown(item, { pointerId: 1, clientX: 5, clientY: 5 });
++    fireEvent.click(item);
++    expect(copyImage).toHaveBeenCalledWith("/pic.png");
++    // The stage didn't take the click on the menu as the start of a pan.
++    expect(stage.setPointerCapture).not.toHaveBeenCalled();
++    expect(screen.getByRole("dialog")).toBeInTheDocument();
++  });
++
++  it("leaves a browser's own menu, which can copy the image already", () => {
++    renderWithProvider();
++    expect(rightClick(screen.getByRole("img", { name: "diagram" }))).toBe(true);
++    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
++  });
++});
+diff --git a/web/src/components/ImageLightbox.tsx b/web/src/components/ImageLightbox.tsx
+index 7d288843d..2a1ae2b3b 100644
+--- a/web/src/components/ImageLightbox.tsx
++++ b/web/src/components/ImageLightbox.tsx
+@@ -10,10 +10,26 @@ import {
+   useState,
+ } from "react";
+ import * as DialogPrimitive from "radix-ui/dialog";
+-import { ChevronLeftIcon, ChevronRightIcon, XIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
+-
++import {
++  ChevronLeftIcon,
++  ChevronRightIcon,
++  CopyIcon,
++  XIcon,
++  ZoomInIcon,
++  ZoomOutIcon,
++} from "lucide-react";
++import { toast } from "sonner";
++
++import { copyImage } from "@/lib/clipboard";
+ import { getEmbedRoot } from "@/lib/host";
++import { isElectronShell } from "@/lib/nativeBridge";
+ import { Button } from "@/components/ui/button";
++import {
++  ContextMenu,
++  ContextMenuContent,
++  ContextMenuItem,
++  ContextMenuTrigger,
++} from "@/components/ui/context-menu";
+ import { cn } from "@/lib/utils";
+ 
+ // Zoom bounds and step for the lightbox viewer. 1 = fit-to-card.
+@@ -87,6 +103,48 @@ function galleryImages(element: Element): LightboxImage[] | undefined {
+   return images.length > 1 ? images : undefined;
+ }
+ 
++/**
++ * A right-click menu with "Copy image" around `children`, an image or its
++ * button, in the desktop app: its window has no context menu of its own, so a
++ * right-click there did nothing. A browser keeps its native menu, which has
++ * Copy image and more.
++ */
++export function ImageContextMenu({
++  src,
++  children,
++}: {
++  src?: string;
++  children: React.ReactElement;
++}) {
++  if (!src || !isElectronShell()) return children;
++  return (
++    <ContextMenu>
++      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
++      <ContextMenuContent
++        // Above the lightbox, which opens on z-60.
++        className="z-[70]"
++        // The menu is portalled, but React still bubbles its events to the
++        // image's ancestors: keep the lightbox from taking a click on an item
++        // as a pan, or an arrow key as paging.
++        onPointerDown={(e) => e.stopPropagation()}
++        onKeyDown={(e) => e.stopPropagation()}
++      >
++        <ContextMenuItem
++          onSelect={() =>
++            copyImage(src).then(
++              () => toast.success("Copied the image."),
++              () => toast.error("Couldn't copy the image."),
++            )
++          }
++        >
++          <CopyIcon />
++          Copy image
++        </ContextMenuItem>
++      </ContextMenuContent>
++    </ContextMenu>
++  );
++}
++
+ /**
+  * An `<img>` wrapped in a `<button>` that opens it in the shared lightbox. The
+  * button carries the interaction (click + Enter/Space + focus ring, all native
+@@ -106,7 +164,8 @@ export function ZoomableImage({
+ }: ZoomableImageProps) {
+   const { open } = useLightbox();
+   return (
+-    <button
++    <ImageContextMenu src={src}>
++      <button
+       type="button"
+       aria-label={alt ? `Zoom image: ${alt}` : "Zoom image"}
+       className={cn(
+@@ -117,8 +176,9 @@ export function ZoomableImage({
+         if (src) open({ src, alt }, galleryImages(event.currentTarget));
+       }}
+     >
+-      <img {...imgProps} data-lightbox-item="" src={src} alt={alt} className={className} />
+-    </button>
++        <img {...imgProps} data-lightbox-item="" src={src} alt={alt} className={className} />
++      </button>
++    </ImageContextMenu>
+   );
+ }
+ 
+@@ -408,19 +468,21 @@ function ZoomViewer({
+         onPointerCancel={onPointerEnd}
+         style={{ cursor: zoomed ? (dragging ? "grabbing" : "grab") : "zoom-in" }}
+       >
+-        <img
+-          ref={imageRef}
+-          src={image.src}
+-          alt={image.alt}
+-          draggable={false}
+-          className="max-h-[92dvh] max-w-[94vw] origin-center object-contain select-none"
+-          style={{
+-            transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+-            // Don't fight a drag or pinch with a transition, but ease
+-            // discrete zoom steps.
+-            transition: animate ? "transform 120ms ease-out" : "none",
+-          }}
+-        />
++        <ImageContextMenu src={image.src}>
++          <img
++            ref={imageRef}
++            src={image.src}
++            alt={image.alt}
++            draggable={false}
++            className="max-h-[92dvh] max-w-[94vw] origin-center object-contain select-none"
++            style={{
++              transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
++              // Don't fight a drag or pinch with a transition, but ease
++              // discrete zoom steps.
++              transition: animate ? "transform 120ms ease-out" : "none",
++            }}
++          />
++        </ImageContextMenu>
+       </div>
+       {onPrevious && (
+         <Button
+diff --git a/web/src/lib/clipboard.test.ts b/web/src/lib/clipboard.test.ts
+index e348c440d..c8e6d69e3 100644
+--- a/web/src/lib/clipboard.test.ts
++++ b/web/src/lib/clipboard.test.ts
+@@ -1,6 +1,6 @@
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+-import { copyRichText, copyText } from "./clipboard";
++import { copyImage, copyRichText, copyText } from "./clipboard";
+ 
+ const clipboardDescriptor = Object.getOwnPropertyDescriptor(Navigator.prototype, "clipboard");
+ const execCommandDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, "execCommand");
+@@ -167,3 +167,46 @@ describe("copyRichText", () => {
+     expect(writeText).toHaveBeenCalledWith("hi");
+   });
+ });
++
++describe("copyImage", () => {
++  it("writes a PNG before the image has loaded, inside the click's activation", async () => {
++    const write = vi.fn().mockResolvedValue(undefined);
++    Object.defineProperty(Navigator.prototype, "clipboard", {
++      configurable: true,
++      value: { write },
++    });
++    const items: Record<string, unknown>[] = [];
++    vi.stubGlobal(
++      "ClipboardItem",
++      vi.fn(function (item: Record<string, unknown>) {
++        items.push(item);
++      }),
++    );
++    // jsdom has no decode(); this one resolves when the test says so.
++    let loaded!: () => void;
++    const decoding = new Promise<void>((resolve) => {
++      loaded = resolve;
++    });
++    Object.defineProperty(HTMLImageElement.prototype, "decode", {
++      configurable: true,
++      value: () => decoding,
++    });
++
++    const copying = copyImage("blob:shot");
++
++    expect(write).toHaveBeenCalledOnce();
++    expect(Object.keys(items[0])).toEqual(["image/png"]);
++    expect(items[0]["image/png"]).toBeInstanceOf(Promise);
++    await copying;
++    // jsdom has no canvas, so the PNG itself never arrives.
++    loaded();
++    await expect(items[0]["image/png"]).rejects.toThrow();
++    vi.unstubAllGlobals();
++    delete (HTMLImageElement.prototype as { decode?: unknown }).decode;
++  });
++
++  it("fails without the async clipboard", async () => {
++    Object.defineProperty(Navigator.prototype, "clipboard", { configurable: true, value: {} });
++    await expect(copyImage("blob:shot")).rejects.toThrow("Clipboard API not available");
++  });
++});
+diff --git a/web/src/lib/clipboard.ts b/web/src/lib/clipboard.ts
+index 07d53dd8a..9f54014f1 100644
+--- a/web/src/lib/clipboard.ts
++++ b/web/src/lib/clipboard.ts
+@@ -31,6 +31,45 @@ export async function copyRichText({ html, text }: RichTextPayload): Promise<voi
+   throw new Error("Clipboard API not available");
+ }
+ 
++/**
++ * Copies the image at `src` as a PNG, the one image type every clipboard
++ * takes; it's redrawn on a canvas, so a JPEG, WebP, GIF or SVG becomes one
++ * too. The write starts before the image has loaded, with the PNG still a
++ * promise, so it lands inside the click's user-activation window. A remote
++ * image needs CORS headers to be copied; without them it throws.
++ */
++export async function copyImage(src: string): Promise<void> {
++  if (
++    typeof navigator === "undefined" ||
++    !navigator.clipboard?.write ||
++    typeof ClipboardItem !== "function"
++  ) {
++    throw new Error("Clipboard API not available");
++  }
++  await navigator.clipboard.write([new ClipboardItem({ "image/png": imageAsPng(src) })]);
++}
++
++async function imageAsPng(src: string): Promise<Blob> {
++  const image = new Image();
++  // A blob: or data: image is ours anyway; an https one may only be read
++  // back from the canvas if its server allows it.
++  image.crossOrigin = "anonymous";
++  image.src = src;
++  await image.decode();
++  const canvas = document.createElement("canvas");
++  canvas.width = image.naturalWidth;
++  canvas.height = image.naturalHeight;
++  const context = canvas.getContext("2d");
++  if (!context) throw new Error("Canvas not available");
++  context.drawImage(image, 0, 0);
++  return new Promise((resolve, reject) => {
++    canvas.toBlob((blob) => {
++      if (blob) resolve(blob);
++      else reject(new Error("Couldn't encode the image"));
++    }, "image/png");
++  });
++}
++
+ async function writeTextWithClipboardApi(text: string): Promise<boolean> {
+   if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) return false;
+   try {

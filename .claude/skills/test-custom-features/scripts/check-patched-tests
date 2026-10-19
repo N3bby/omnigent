@@ -5,8 +5,8 @@
 # screen's, the MCP servers page's and repository badge's, a first message
 # waiting for its sandbox, the repository picker's Custom tab, the chat
 # stream's reconnect after a network drop, and inline media with the image
-# lightbox, against a fresh, fully patched upstream checkout. Keep logs and
-# JUnit reports.
+# lightbox and its Copy image menu, against a fresh, fully patched upstream
+# checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -119,6 +119,7 @@ PY
       src/components/RepoEnvBadge.test.tsx src/components/RepoCustomForm.test.tsx \
       src/components/blocks/ChatMarkdown.media.test.tsx src/components/ImageLightbox.test.tsx \
       src/components/ai-elements/message.test.tsx src/components/ai-elements/reasoning.test.tsx \
+      src/lib/clipboard.test.ts \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

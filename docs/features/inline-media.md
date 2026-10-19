@@ -3,8 +3,8 @@
 When an agent puts an image in its reply, such as a screenshot it just took,
 you see the image in the chat, not "[Image blocked]". Several images in a row
 sit side by side in a grid. Click one to open it full screen, where you can
-zoom in, with a pinch on a phone, and step to the next one. A video or audio
-file plays in the chat.
+zoom in, with a pinch on a phone, and step to the next one. In the desktop
+app, right-click one to copy it. A video or audio file plays in the chat.
 
 ![A reply in the Codex theme, dark mode: a sign-in screenshot, then a grid of three dashboard screenshots side by side, then a video player](../images/inline-media-chat.webp)
 
@@ -31,6 +31,11 @@ file plays in the chat.
     `2 / 3`. The images you attach to your own message work the same way.
   - **Close it** with the × button, Escape, a click beside the image, or a
     swipe down.
+- **Right-click an image to copy it** in the desktop app, in the chat or
+  open full screen, and choose **Copy image**. "Copied the image." confirms
+  it, and you can paste it anywhere that takes an image, as a PNG. In a
+  browser, the browser's own right-click menu has Copy image already, so
+  you get that one.
 - **Video and audio play in the chat.** `![Demo](demo.mp4)` gets a video
   player, and `![Chime](chime.wav)` an audio player. Video: `.mp4`, `.m4v`,
   `.webm`, `.mov` and `.ogv`. Audio: `.mp3`, `.m4a`, `.aac`, `.wav`, `.ogg`,
@@ -42,6 +47,8 @@ file plays in the chat.
 ![The same reply on a phone: the three dashboard screenshots in a two-column grid, then the video and audio players](../images/inline-media-mobile.webp)
 
 ![A phone screenshot opened full screen and pinched to 202%, with the counter reading 3 / 3](../images/inline-media-mobile-pinch.webp)
+
+![A screenshot open full screen and zoomed to 150% in the desktop app, with a menu holding Copy image where it was right-clicked, and the toast "Copied the image." above it](../images/inline-media-copy-image.webp)
 
 ## Good to know
 
@@ -58,6 +65,9 @@ file plays in the chat.
 - **A video is loaded whole before it plays,** because the file download
   doesn't support seeking into a file. That's fine for screen recordings; a
   very large video takes a while.
+- **Copying an image from another site** works only when that site allows
+  it (CORS); otherwise you see "Couldn't copy the image." Images from the
+  workspace always copy. An animated GIF copies as its first frame.
 - **Plain `http://` images stay blocked**, as "[Image blocked: …]". An image
   loads in your browser, so an `http://` URL could make it send a request to
   a device on your own network, such as a router, which the sandbox can't
@@ -76,6 +86,7 @@ You can't.
 | --- | --- | --- |
 | Runner | `images/runner/agent-instructions.md` | Tells agents to show images with image syntax, several in a row for a grid |
 | Web UI | `images/server/web-patches/0033-inline-media.patch` | Lets https and data images through Streamdown's sanitizer, loads a workspace path through the session's file download, plays video and audio, groups images in a row into a grid, and adds pinch zoom, double-tap, swipes and paging to the shared image viewer |
+| Web UI | `images/server/web-patches/0034-copy-image.patch` | Adds a right-click menu with Copy image to images in the chat and the full-screen viewer, in the desktop app |
 
 Upstream Omnigent sets Streamdown's `allowedImagePrefixes` to nothing, so
 every markdown image became "[Image blocked: …]", and a workspace path
@@ -90,3 +101,9 @@ image-only paragraphs in one block for the grid to see. The full-screen viewer
 is upstream's, which only zoomed with the wheel, buttons and a double-click;
 the patch makes the image take touches itself (`touch-action: none`), so a
 pinch zooms the image instead of the page.
+
+The desktop app's window has no right-click menu of its own, so a
+right-click on an image did nothing there. Patch 0034 adds one, only in the
+desktop app, so a browser keeps its fuller native menu. It draws the image
+on a canvas and puts it on the clipboard as a PNG, the one image type every
+clipboard takes, so a WebP or JPEG copies too.
