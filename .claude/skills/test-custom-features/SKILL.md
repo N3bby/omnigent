@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, and the sandbox picker under the composer. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, and images, video and audio in the chat. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -128,6 +128,7 @@ PASS  images/server/web-patches/0029-first-message-while-starting.patch
 PASS  images/server/web-patches/0030-inline-file-mentions.patch
 PASS  images/server/web-patches/0031-repo-picker-tabs.patch
 PASS  images/server/web-patches/0032-stream-reopen-timeout.patch
+PASS  images/server/web-patches/0033-inline-media.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -187,8 +188,8 @@ compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
 `@` file search, a project's repositories, the environment menu, the
-startup card, the New session screen, MCP servers, a first message waiting for its sandbox or the repository picker's tabs, or changing their native message, composer, file-index, project
-settings, Stop, sandbox lifecycle, sandbox start, chat stream reconnect or runner idle paths:
+startup card, the New session screen, MCP servers, a first message waiting for its sandbox, the repository picker's tabs or images in the chat, or changing their native message, composer, file-index, project
+settings, Stop, sandbox lifecycle, sandbox start, chat stream reconnect, chat markdown, image viewer or runner idle paths:
 
 ```bash
 .claude/skills/test-custom-features/scripts/check-patched-tests
@@ -199,7 +200,7 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx` | 1964 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx` | 2024 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py` | 352 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
@@ -220,7 +221,12 @@ last backend file (2 cases); the repository picker's tabs add
 `RepoCustomForm.test.tsx` (7 cases), three New session cases (the tabs and
 the configured repositories) and two Repository variables page cases for the
 SSH key; the chat's stream reconnect after a network drop
-(`0032-stream-reopen-timeout.patch`) adds 2 cases to `chatStore.test.ts`. These are
+(`0032-stream-reopen-timeout.patch`) adds 2 cases to `chatStore.test.ts`; images,
+video and audio in the chat (`0033-inline-media.patch`) add the last four
+files (60 cases): `ChatMarkdown.media.test.tsx` is new, the lightbox gains
+five touch-gesture cases, and upstream's case in `message.test.tsx` and
+`reasoning.test.tsx` that blocked remote images now checks that https renders
+and plain http doesn't. These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -243,7 +249,7 @@ uv and pnpm's home-directory caches speed up later runs. It uses no CLI login
 and does not change a live session's fast-mode setting.
 
 With the patches applied, upstream's **whole** web suite passes as well
-(11098 passed, 3 expected fail, 1 skipped on `v0.18.0`): patches that change
+(11159 passed, 3 expected fail, 1 skipped on `v0.18.0`, 2026-10-19): patches that change
 upstream behaviour, such as removing Share, update upstream's tests for it.
 To run it, keep the checkout of a failed run, or apply the patches to one
 yourself, and run `pnpm --dir <checkout>/web exec vitest run`. A failure there
@@ -463,11 +469,12 @@ their processes and files directly. They don't start a new Pod.
 
    ```
    Answer from what you already know about this environment, one short line
-   each. Don't run commands or read files for questions 1-3.
+   each. Don't run commands or read files for questions 1-3 and 5.
    1. Which directory survives this Pod stopping?
    2. How would you install a CLI tool that this project doesn't pin?
    3. If you wrote report.md in /home/omnigent/workspace, how would you point me to it?
    4. What URL would I use to reach a dev server you start here on port 3000?
+   5. If you took a screenshot to /home/omnigent/workspace/shot.png, how would you show it to me?
    ```
 
 **Expected:** each replies `created`, `/tmp/feature-check-<agent>` exists in
@@ -488,8 +495,11 @@ The answers to those questions come from
 4. `http://<the joined as name from check-runner>:3000`, not `localhost`.
    The agent may run `tailscale status` for this. Without Tailscale, it should
    say the Pod isn't on the tailnet rather than make up an address.
+5. Image syntax with the absolute path and a description as its alt text,
+   such as `![The screenshot](/home/omnigent/workspace/shot.png)`, not a
+   plain link.
 
-An agent that runs commands or reads its instructions file to answer 1–3, or
+An agent that runs commands or reads its instructions file to answer 1–3 or 5, or
 that answers them generically, didn't get the file: FAIL, and check the
 agent-instructions lines from `check-runner`. Record one result per agent.
 
@@ -758,6 +768,18 @@ after the next message it names `feature-check`. Switch back, then remove
     sandbox joins the tailnet, the phone's VPN reconnects and the chat may
     show **Load failed**, but within about ten seconds of the VPN reconnecting the card carries on
     and the agent answers, without restarting the app. Delete the sessions.
+
+19. **Images, video and audio in the chat:** pinching needs a touch screen,
+    so it's left to you. In a session, ask the agent: `Take screenshots of
+    three different web pages with Playwright, record a short .webm of one,
+    and show them all in your reply.` Without being told how, the agent
+    shows them with image syntax. The screenshots show side by side in a grid
+    (two columns on a phone), with no `[Image blocked]`, and the video
+    plays in the chat. Tap a screenshot: it opens full screen with `1 / 3`.
+    Pinch with two fingers: the image zooms around your fingers and the page
+    doesn't. Drag it: it stops at its edges. Double-tap: it's back to 100%.
+    Swipe left: `2 / 3`. Swipe down: it closes. On desktop, the scroll
+    wheel zooms around the pointer and the arrow keys step through.
 
 ## 7. Clean up
 

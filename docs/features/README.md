@@ -19,6 +19,7 @@ What you see and choose while talking to an agent.
 | [The startup card](startup-progress.md) | Each step of a sandbox's start as it happens, why it failed in plain words, and the whole startup log | Nothing to turn off |
 | [Start without a message](start-without-message.md) | Start a session from the New session screen with an empty composer, so its sandbox and @ file search are ready before you ask anything | Nothing to turn off |
 | [Your first message survives closing the app](first-message-while-starting.md) | Send a new session's first message and close the app while the sandbox starts: the agent still gets it | Nothing to turn off |
+| [Images, video and audio in the chat](inline-media.md) | An agent's screenshots show in the chat, side by side in a grid, and open full screen to pinch-zoom and swipe through; videos and audio play in place | No |
 
 ## Subscriptions
 
@@ -36,7 +37,7 @@ What agents can do in their session, and what happens to it when you leave.
 | [Runtimes from mise](mise-runtimes.md) | `node`, `python` and others follow a project's `.mise.toml` or `.tool-versions` | No |
 | [No permission prompts](no-permission-prompts.md) | Agents work without waiting for approval | Yes, one setting per agent |
 | [Idle sessions stop](idle-sessions.md) | Idle sessions free their CPU and memory, and keep their files | You can change the timing |
-| [Agents know where they're running](runner-instructions.md) | Agents know what the session can do, link files you can open, and give tailnet addresses | You can change the text |
+| [Agents know where they're running](runner-instructions.md) | Agents know what the session can do, link files you can open, show screenshots in the chat, and give tailnet addresses | You can change the text |
 | [MCP servers in Settings](mcp-servers.md) | Give sessions' Claude Code and Codex MCP servers, such as Figma, with their keys: for every session or per repository | Nothing to turn off until you add a server |
 
 ## Repositories

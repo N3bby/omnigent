@@ -74,12 +74,15 @@ and web sets:
 OMNIGENT_SKIP_WEB_UI=true mise exec uv@<uv> -- uv sync --extra all
 OMNIGENT_DATA_DIR=<this repo>/.generated/dev-data PYTHONPATH=<this repo>/images/server \
   mise exec uv@<uv> -- uv run omnigent server --port 7767 &
-cd web && OMNIGENT_URL=http://127.0.0.1:7767 \
+cd web && __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=.ts.net OMNIGENT_URL=http://127.0.0.1:7767 \
   mise exec node@<node> pnpm@<pnpm> -- pnpm run dev --host 0.0.0.0 --port 7173 &
 ```
 
 Vite reloads web changes; restart the server for Python changes. The user can
-open it at port 7173 on the Pod's tailnet address.
+open it at port 7173 on the Pod's tailnet address, without a login: the local
+server runs in single-user mode. Vite answers only the hostnames it allows,
+so without `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS` the tailnet address gets
+"Blocked request. This host is not allowed".
 
 Drive it yourself with Playwright's headless Chromium, not the Omnigent
 browser tools, which control the user's own browser. Install it once with

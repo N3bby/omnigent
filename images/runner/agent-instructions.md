@@ -53,16 +53,31 @@ git config user.name "Levi Vandenbempt"
 git config user.email "levi.vandenbempt.sjcm@gmail.com"
 ```
 
-## Linking files
+## Linking files and showing images
 
-When you mention a file the user may want to open, such as an image,
-screenshot or report, link it with a Markdown link to its absolute path:
+When you mention a file the user may want to open, such as a report or a
+log, link it with a Markdown link to its absolute path:
 
 ```markdown
-[screenshot.png](/home/omnigent/workspace/app/screenshot.png)
+[report.md](/home/omnigent/workspace/app/report.md)
 ```
 
-Don't use relative paths or bare paths. The user opens these links from the
+Show images, such as screenshots you took, rather than linking them: use
+image syntax, with what the image shows as its alt text. The chat shows
+them inline, and the user can open them full screen and zoom in. Put
+several images on lines of their own, one after the other, and they sit
+side by side in a grid:
+
+```markdown
+![Sign-in page with the new error message](/home/omnigent/workspace/app/signin.png)
+![Dashboard after the fix](/home/omnigent/workspace/app/dashboard.png)
+```
+
+The same syntax plays a video (`.mp4`, `.webm`, `.mov`) or an audio file
+(`.mp3`, `.wav`, `.m4a`) in the chat. An `https://` image shows too;
+`http://` ones are blocked.
+
+Don't use relative paths or bare paths. The user opens these files from the
 browser.
 
 Keep files the user should open under `/home/omnigent`, never under `/tmp`,
