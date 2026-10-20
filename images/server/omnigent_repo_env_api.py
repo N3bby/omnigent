@@ -4,12 +4,12 @@ Admins list, save and remove repositories' variables. Values only go from the
 browser to the Secret, never back: listing returns names, and saving a name
 without a value keeps the value it has. The same goes for a repository's SSH
 key, which the new-session form can also set, with a Git token, when an admin
-adds a repository by its URL. A repository's agent instructions and
-setup script aren't secret, so admins read them back to edit them. Anyone
-signed in can list the repositories with variables, which the repository
-picker offers on any host, and see the names of a repository's variables,
-whether it has instructions or a script, and its MCP servers' names, which the
-new-session form shows next to the repository.
+adds a repository by its URL. A repository's agent instructions, setup
+script and exit node aren't secret, so admins read them back to edit them.
+Anyone signed in can list the repositories with variables, which the
+repository picker offers on any host, and see the names of a repository's
+variables, whether it has instructions or a script, its MCP servers' names and
+its exit node, which the new-session form shows next to the repository.
 
 A repository with a ``GIT_TOKEN`` variable is also in the repository picker,
 for everyone who has connected GitHub, and its branches are listed with that
@@ -52,7 +52,9 @@ class SaveRepositoryRequest(BaseModel):
     current one. Names left out are removed. ``instructions`` and
     ``setup_script`` are the whole text, or ``null`` or blank to remove it;
     left out, they stay as they are. ``ssh_key`` is a new private key, or
-    ``null`` to remove it; left out, it stays.
+    ``null`` to remove it; left out, it stays. ``exit_node`` is a Tailscale
+    exit node's name or IP, or ``null`` or blank to remove it; left out, it
+    stays.
     """
 
     repository: str
@@ -60,6 +62,7 @@ class SaveRepositoryRequest(BaseModel):
     instructions: str | None = None
     setup_script: str | None = None
     ssh_key: str | None = None
+    exit_node: str | None = None
 
 
 class SaveCredentialsRequest(BaseModel):
@@ -168,15 +171,16 @@ def create_repo_env_router(
     async def variable_names(request: Request, repository: str) -> dict[str, Any]:
         """
         The names of one repository's variables, whether it has agent
-        instructions, a setup script or an SSH key, and its MCP servers, for
-        anyone signed in. Never a value, the text, the key or a server's keys.
+        instructions, a setup script or an SSH key, its MCP servers and its
+        exit node, for anyone signed in. Never a value, the text, the key or a
+        server's keys.
         """
         await signed_in(request)
         try:
             key = repo_env.repo_key(repository)
         except ValueError:
             return {"repository": None, "names": [], "instructions": False, "setup_script": False,
-                    "mcp_servers": [], "ssh_key": False}
+                    "mcp_servers": [], "ssh_key": False, "exit_node": None}
         summary = await _kubernetes(lambda: repo_env.repository_summary(core(), key))
         return {"repository": key, **summary}
 
@@ -195,11 +199,12 @@ def create_repo_env_router(
         """Store a repository's variables, replacing what it had (admin only)."""
         user_id = await admin(request)
         key = _key(body.repository)
-        # A page from before the instructions, the script or the SSH key keeps them.
+        # A page from before the instructions, the script, the SSH key or the
+        # exit node keeps them.
         sent = body.model_fields_set
         texts = {
             field: getattr(body, field) if field in sent else repo_env.KEEP
-            for field in ("instructions", "setup_script", "ssh_key")
+            for field in ("instructions", "setup_script", "ssh_key", "exit_node")
         }
         return await _kubernetes(
             lambda: repo_env.save_repository(

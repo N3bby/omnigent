@@ -15,8 +15,12 @@ echo "NODE"
 echo
 echo "PLATFORM"
 "${KUBECTL[@]}" get configmap omnigent-platform -n omnigent -o json 2>/dev/null \
-  | jq -r '.data | "k3s \(.k3s), cert-manager \(."cert-manager"), agent-sandbox \(."agent-sandbox" // "none"), revision \(.revision[0:12])"' \
+  | jq -r '.data | "k3s \(.k3s), cert-manager \(."cert-manager"), agent-sandbox \(."agent-sandbox" // "none"), tun-device-plugin \(."tun-device-plugin" // "none"), revision \(.revision[0:12])"' \
   || echo "no platform record; run mise run bootstrap"
+# Runner Pods can't start without a TUN device from this plugin.
+"${KUBECTL[@]}" get daemonset omnigent-tun-device-plugin -n kube-system -o wide 2>/dev/null \
+  || echo "no TUN device plugin; run mise run bootstrap"
+"${KUBECTL[@]}" get nodes -o json | jq -r '.items[] | "\(.metadata.name) TUN devices: \(.status.allocatable["omnigent.dev/tun"] // "none")"'
 
 echo
 echo "SERVER AND DATABASE"

@@ -343,6 +343,16 @@ class ExplainTests(Fixture):
         self.assertEqual((result["step"], result["title"]), ("schedule", "No room on the VM"))
         self.assertIn("enough free memory", result["body"])
 
+    def test_no_tun_device(self) -> None:
+        result = startup.explain(
+            "managed sandbox host startup failed: Kubernetes sandbox pod 'x' did not start within "
+            "300s (last phase 'Pending'; last reason: Unschedulable: 0/1 nodes are available: 1 "
+            "Insufficient omnigent.dev/tun.). Inspect with `kubectl describe pod x -n y`."
+        )
+        self.assertEqual((result["step"], result["title"]), ("schedule", "No TUN device"))
+        self.assertIn("omnigent-tun-device-plugin in kube-system", result["body"])
+        self.assertNotIn("Stop a sandbox", result["body"])
+
     def test_an_image_that_can_not_be_pulled(self) -> None:
         result = startup.explain(
             "managed host wake failed: Kubernetes sandbox pod 'x' did not start within 300s "

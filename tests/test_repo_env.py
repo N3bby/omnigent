@@ -150,6 +150,34 @@ class GitTokenTests(unittest.TestCase):
     def test_an_unusable_url_is_a_plain_clone(self) -> None:
         self.assertEqual(repo_env.clone_command("https://github.com/", "-- url dir", "dir"), "git clone -- url dir")
 
+    def test_a_repository_with_an_exit_node_clones_through_it(self) -> None:
+        urls = ("https://github.com/kunlabora/roadpass.git", "git@github.com:kunlabora/roadpass.git",
+                "https://gitlab.example.org/acme/api.git")
+        for url in urls:
+            with self.subTest(url=url), tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                # Records how it's called, and runs the clone like the runner image's does.
+                (tmp / "bin").mkdir()
+                wrapper = tmp / "bin" / "omnigent-via-exit-node"
+                wrapper.write_text('#!/bin/sh\nfile=$1; shift\necho "via $(cat "$file") $1 $2" >> "$LOG"\nexec "$@"\n')
+                wrapper.chmod(0o755)
+                with mock.patch.object(repo_env, "MOUNT_ROOT", str(tmp / "repo-env")):
+                    path = Path(repo_env.exit_node_file(url))
+                    command = repo_env.clone_command(url, "-q -- url dir", "dir")
+                run = lambda: subprocess.run(  # noqa: E731
+                    ["bash", "-c", command.replace("git clone", "echo plain").replace("git -c", "echo own")],
+                    env={"PATH": f"{tmp / 'bin'}:{os.environ['PATH']}", "LOG": str(tmp / "log")},
+                    capture_output=True, text=True, check=True,
+                )
+                # Without an exit node, the wrapper isn't used.
+                self.assertEqual(run().stdout, "plain -q -- url dir\n")
+                self.assertFalse((tmp / "log").exists())
+                path.parent.mkdir(parents=True)
+                path.write_text("cronos-exit")
+                self.assertEqual(run().stdout, "plain -q -- url dir\n")
+                self.assertEqual((tmp / "log").read_text(), "via cronos-exit echo plain\n")
+                self.assertEqual(path.name, "tailscale-exit-node")
+
     def git(self, tmp: Path, *args: str, stdin: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
         env = {
             "PATH": os.environ["PATH"],
@@ -340,7 +368,7 @@ class SshKeyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(repo_env, "MOUNT_ROOT", str(Path(tmp) / "repo-env")):
                 command = repo_env.clone_command("git@github.com:kunlabora/roadpass.git", "-q -- url dir", "dir")
-            self.assertIn("else git clone -q -- url dir; fi", command)
+            self.assertIn("else via_exit_node git clone -q -- url dir; fi", command)
             result = subprocess.run(["bash", "-c", command.replace("git clone", "echo plain")],
                                     capture_output=True, text=True, check=True)
             self.assertEqual(result.stdout, "plain -q -- url dir\n")
@@ -427,7 +455,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(entry, {
             "repository": ROADPASS, "names": ["TOKEN", "URL"],
             "instructions": None, "setup_script": None,
-            "instructions": None, "mcp_servers": [], "ssh_key": False,
+            "instructions": None, "mcp_servers": [], "ssh_key": False, "exit_node": None,
             "updated_at": "2026-10-08T12:00:00+00:00", "updated_by": "levi",
         })
 
@@ -479,10 +507,10 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(repo_env.variable_names(self.core, ROADPASS), ["TOKEN"])
         self.assertEqual(repo_env.repository_summary(self.core, ROADPASS),
                          {"names": ["TOKEN"], "instructions": True, "setup_script": True, "mcp_servers": [],
-                          "ssh_key": False})
+                          "ssh_key": False, "exit_node": None})
         self.assertEqual(repo_env.repository_summary(self.core, "github.com/a/b"),
                          {"names": [], "instructions": False, "setup_script": False, "mcp_servers": [],
-                          "ssh_key": False})
+                          "ssh_key": False, "exit_node": None})
         # Left out, they stay; blank or None removes them.
         repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None})
         self.assertEqual(set(decoded(self.core)), {"TOKEN", "agent-instructions.md", "setup.sh"})
@@ -494,7 +522,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(decoded(self.core), {"agent-instructions.md": "Rules."})
         repo_env.save_repository(self.core, ROADPASS, {}, instructions=None, setup_script="make\n")
         self.assertEqual(decoded(self.core), {"setup.sh": "make\n"})
-        with self.assertRaisesRegex(ValueError, "at least one variable, agent instructions or a setup script"):
+        with self.assertRaisesRegex(ValueError, "at least one variable, agent instructions, a setup script or an exit node"):
             repo_env.save_repository(self.core, ROADPASS, {}, setup_script="")
         with self.assertRaisesRegex(ValueError, "at most 64 KB"):
             repo_env.save_repository(self.core, ROADPASS, {}, instructions="x" * (64 * 1024 + 1))
@@ -517,6 +545,36 @@ class StoreTests(unittest.TestCase):
         # A repository can have only a key.
         repo_env.save_repository(self.core, "github.com/a/b", {}, ssh_key=key)
         self.assertEqual(decoded(self.core, "github.com/a/b"), {"git-ssh-key": key})
+
+    def test_an_exit_node_is_shown_and_saving_variables_keeps_it(self) -> None:
+        entry = repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc"}, exit_node=" cronos-exit\n")
+        self.assertEqual(decoded(self.core), {"TOKEN": "abc", "tailscale-exit-node": "cronos-exit"})
+        self.assertEqual((entry["names"], entry["exit_node"]), (["TOKEN"], "cronos-exit"))
+        self.assertEqual(repo_env.list_repositories(self.core)[0]["exit_node"], "cronos-exit")
+        self.assertEqual(repo_env.repository_summary(self.core, ROADPASS)["exit_node"], "cronos-exit")
+        self.assertEqual(repo_env.variable_names(self.core, ROADPASS), ["TOKEN"])
+        # Left out, it stays; None or blank removes it.
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None, "MORE": "x"})
+        self.assertEqual(decoded(self.core)["tailscale-exit-node"], "cronos-exit")
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None}, exit_node=" ")
+        self.assertEqual(decoded(self.core), {"TOKEN": "abc"})
+        # A repository can have only an exit node.
+        repo_env.save_repository(self.core, "gitlab.com/acme/api", {}, exit_node="100.101.102.103")
+        self.assertEqual(decoded(self.core, "gitlab.com/acme/api"), {"tailscale-exit-node": "100.101.102.103"})
+
+    def test_an_exit_node_is_a_machine_name_or_address(self) -> None:
+        for text in ("cronos-exit", "cronos-exit.tail1234.ts.net", "100.101.102.103", "fd7a:115c:a1e0::1"):
+            with self.subTest(text=text):
+                self.assertEqual(repo_env.check_exit_node(f" {text} "), text)
+        self.assertIsNone(repo_env.check_exit_node(None))
+        self.assertIsNone(repo_env.check_exit_node(" \n"))
+        for text in ("cronos exit", "-cronos", "$(id)", "a;b", "x" * 254):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(ValueError, "Tailscale machine's name or IP address"):
+                    repo_env.check_exit_node(text)
+        with self.assertRaisesRegex(ValueError, "Tailscale machine"):
+            repo_env.save_repository(self.core, ROADPASS, {}, exit_node="a b")
+        self.assertEqual(self.core.secrets, {})
 
     def test_credentials_from_the_new_session_form_keep_the_rest(self) -> None:
         repo_env.save_repository(self.core, ROADPASS, {"NPM": "n"}, instructions="Rules.")

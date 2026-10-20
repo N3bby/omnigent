@@ -32,6 +32,10 @@ codex_cli: "0.159.1"
 # Joins runner Pods to your tailnet, from pkgs.tailscale.com/stable (amd64).
 tailscale: "1.102.5"
 tailscale_sha256: "65e6d7f19ad7e1c87d20c2a21e92f38a96795cb897af54b04536590e1c148d12"
+# Gives runner Pods /dev/net/tun (kubernetes/platform/tun-device-plugin.yaml),
+# from ghcr.io/squat/generic-device-plugin.
+tun_device_plugin: "0.2.0"
+tun_device_plugin_digest: "sha256:66c8d5c270eb2b721f1064c549b9b7898152a6d2f0163380a5d37dc7636c20ff"
 # Lets agents install the runtimes a project pins, from github.com/jdx/mise
 # releases (linux-x64 binary).
 mise: "2026.10.3"

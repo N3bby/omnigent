@@ -75,6 +75,7 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
         "web_builder_digest", "pnpm", "claude_code", "codex_cli", "tailscale",
         "tailscale_sha256", "jetbrains_idea_build", "jetbrains_idea_download_url",
         "jetbrains_idea_sha256", "jetbrains_idea_path", "mise", "mise_sha256",
+        "tun_device_plugin", "tun_device_plugin_digest",
     }
     missing_versions = sorted(required_versions - versions.keys())
     if missing_versions:

@@ -70,11 +70,12 @@ Turn on its **Git token**: see
 [a repository's own Git token](repo-git-token.md). For its SSH URLs, turn on
 **SSH key**: see [a repository by its URL](custom-repository.md).
 
-## Instructions and a setup script
+## Instructions, a setup script and an exit node
 
 The same page gives a repository your own
-[agent instructions](repo-instructions.md) and a
-[setup script](repo-setup-script.md) that runs before the agent starts.
+[agent instructions](repo-instructions.md), a
+[setup script](repo-setup-script.md) that runs before the agent starts, and
+an [exit node](repo-exit-node.md) its sessions reach the internet through.
 
 ## Good to know
 
@@ -139,6 +140,9 @@ There's nothing to turn off. A repository without variables starts as before.
   `ssh_key: true` instead, and saving the variables keeps it unless the page
   sends a new one or `null`. See
   [how it works](custom-repository.md#how-it-works).
+- **`tailscale-exit-node`**: the repository's
+  [exit node](repo-exit-node.md#how-it-works). It isn't a variable name
+  either, and it isn't secret, so listing returns it as `exit_node`.
 - **`agent-instructions.md` and `setup.sh`**: the same Secret holds the
   repository's [agent instructions](repo-instructions.md#how-it-works) and
   [setup script](repo-setup-script.md#how-it-works) under these keys. They

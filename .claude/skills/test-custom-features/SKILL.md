@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, and images, video and audio in the chat with Copy image. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, and images, video and audio in the chat with Copy image. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -131,6 +131,7 @@ PASS  images/server/web-patches/0032-stream-reopen-timeout.patch
 PASS  images/server/web-patches/0033-inline-media.patch
 PASS  images/server/web-patches/0034-copy-image.patch
 PASS  images/server/web-patches/0035-remove-voice-dictation.patch
+PASS  images/server/web-patches/0036-repo-exit-node.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -202,7 +203,7 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx` | 2415 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx` | 2415 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py` | 352 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
@@ -229,7 +230,10 @@ files (60 cases): `ChatMarkdown.media.test.tsx` is new, the lightbox gains
 five touch-gesture cases, and upstream's case in `message.test.tsx` and
 `reasoning.test.tsx` that blocked remote images now checks that https renders
 and plain http doesn't. Copying an image (`0034-copy-image.patch`) adds
-three lightbox cases and `clipboard.test.ts` (6 cases, 2 of them new). These are
+three lightbox cases and `clipboard.test.ts` (6 cases, 2 of them new). A
+repository's exit node (`0036-repo-exit-node.patch`) adds 4 cases to
+`RepoVariablesPage.test.tsx`, 1 to `RepoEnvBadge.test.tsx`, and
+`repoEnv.test.ts`'s exit node check. These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -348,6 +352,14 @@ PASS  SSH to tailnet names goes through tailscale nc
 PASS  SSH to other hosts doesn't
 PASS  SOCKS5 proxy reaches omnigent-<8 hex>
 PASS  HTTP proxy reaches omnigent-<8 hex>.<tailnet>
+PASS  TUN device: tailscale0 is up
+PASS  the cluster's ranges skip the tailnet
+PASS  tailnet connections reach localhost-only servers
+PASS  resolv.conf uses the MagicDNS forwarder
+PASS  omnigent-<8 hex> resolves by MagicDNS
+PASS  cluster names still resolve
+PASS  a name that's no tailnet machine is NXDOMAIN
+SKIP  exit node (this session's repositories name none)
 == Runtimes from mise
 PASS  login shells put mise shims first on PATH
 PASS  Claude is told to use mise
@@ -560,8 +572,10 @@ Waiting out the timers takes hours, so check the evidence instead:
 Hand these to the user; they need their own devices or VM access:
 
 1. **Tailscale from a laptop on the tailnet:** `ssh root@omnigent-<8 hex>`
-   opens a shell in the session's Pod. Start `python3 -m http.server 3000` in
-   the session, then `curl http://omnigent-<8 hex>:3000` from the laptop.
+   opens a shell in the session's Pod. Start
+   `python3 -m http.server 3000 --bind 127.0.0.1` in the session, then
+   `curl http://omnigent-<8 hex>:3000` from the laptop: it lists the
+   directory, although the server only listens on localhost.
 2. **Gateway:** on desktop, click **Open in Gateway**. Gateway connects as
    `root` and opens the session's repository in IntelliJ.
 3. **Mobile:** the Tailscale name still shows, **Open in Gateway** doesn't, and
@@ -790,6 +804,15 @@ after the next message it names `feature-check`. Switch back, then remove
     full screen, zoom in, right-click it and copy again: the viewer stays
     open at the same zoom. In a browser, a right-click shows the browser's
     own menu instead.
+
+20. **A repository's exit node:** only with an exit node your tailnet policy
+    lets `tag:omnigent-runner` use (`tailscale exit-node list` in a session
+    lists it). In Settings → Repository variables, give a repository that
+    exit node. A new session on it shows `cloning through exit node <name>`
+    in its startup log, and its Tailscale line ends with
+    `through exit node <name>`. In the session, `curl https://ifconfig.me`
+    prints the exit node's address, and step 4's `check-runner` passes
+    `uses this session's repository's exit node`. Switch it off again.
 
 ## 7. Clean up
 

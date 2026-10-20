@@ -28,7 +28,8 @@ curl http://omnigent-e1dcab9b:3000       # a dev server the agent started
 ```
 
 - **Every port is reachable** that a process in the Pod listens on, whether
-  it listens on `localhost` or on all addresses.
+  it listens on `localhost` or on all addresses. That includes ports Docker
+  containers publish.
 - **The short name needs MagicDNS** on your device. The full name works
   either way.
 - **To open the session in IntelliJ**, see
@@ -54,18 +55,37 @@ tagged `tag:agent-target`:
 Every session gets that access, so only give it to devices meant for agents.
 See the [threat model](../threat-model.md#runners-on-your-tailnet).
 
-In the session:
+In the session, tailnet names resolve and tailnet addresses connect from any
+tool, as on your own machine:
 
-- **SSH works as usual:** `ssh root@my-server`, with the short name, the full
-  `.ts.net` name or a `100.x` address.
-- **Other tools go through a proxy** on `localhost:1055`, which speaks SOCKS5
-  and HTTP and resolves MagicDNS names. Without it, tailnet names don't
-  resolve and tailnet addresses don't connect.
-  - curl: `curl --proxy socks5h://localhost:1055 http://my-server:3000`
-  - Chromium or Playwright: `--proxy-server=socks5://localhost:1055`
+```bash
+ssh root@my-server                 # short name, full .ts.net name or 100.x address
+curl http://my-server:3000
+psql -h my-db.tail1234.ts.net
+```
+
+- **MagicDNS works in Docker containers too,** and they reach the tailnet
+  the same way.
+- **Subnet routes work** too, once your tailnet policy lets sessions use
+  them.
+- **The proxy from before still works,** on `localhost:1055`. It speaks
+  SOCKS5 and HTTP, and resolves MagicDNS names: `curl --proxy
+  socks5h://localhost:1055 http://my-server:3000`.
 - **The agent's browser tools** (`browser_navigate` and the others) drive the
   browser in your Omnigent desktop app, so they reach whatever your own device
-  reaches, without the proxy.
+  reaches.
+
+This needs the TUN device that `mise run bootstrap` sets up. A deployment
+that hasn't run bootstrap since, or a Pod that started before it, uses the
+proxy: tailnet names don't resolve and tailnet addresses don't connect
+without it. Only SSH works directly, through `tailscale nc`. Agents check
+which one their session has.
+
+## Exit nodes
+
+A repository can send its sessions' internet traffic through one of your
+tailnet's exit nodes, such as one that reaches a Git server only a VPN may
+reach. See [a repository's exit node](repo-exit-node.md).
 
 ## Set it up
 
@@ -111,11 +131,12 @@ mise run setup-tailscale
 
 Paste the client secret or key when it asks.
 
-### 4. Set your tailnet name and deploy
+### 4. Set your tailnet name, bootstrap and deploy
 
 In `environments/production.toml`, set `tailscale_tailnet` to your tailnet's
 MagicDNS suffix, from the [DNS page](https://login.tailscale.com/admin/dns).
-Then deploy.
+Then run `mise run bootstrap`, which gives runner Pods their TUN device, and
+deploy.
 
 New sessions join straight away. Existing sessions join, and show their name,
 the next time their Pod wakes.
@@ -157,6 +178,15 @@ in `images/runner/shell/`:
   `/run/omnigent-tailscale.log` in the Pod, or `mise run credential-status`
   for the key. The server works the name out itself rather than asking the
   Pod, so the composer shows it even if the Pod couldn't join.
+- **Short names find tailnet machines first.** A name like `my-server` is
+  looked up in the cluster, then in your tailnet, then in the VM's own search
+  domains. A tailnet machine the policy doesn't let sessions see doesn't
+  resolve as a tailnet name.
+- **Names outside the tailnet still resolve through the cluster's DNS,**
+  also when a repository uses an exit node.
+- **A Pod can't start while the TUN device plugin is down.** The startup
+  card then says it's waiting for the TUN device plugin. `mise run status`
+  shows it in `kube-system`.
 
 ## Turning it off
 
@@ -167,22 +197,62 @@ a key.
 
 - **Runner image:** installs the pinned `tailscale` and `tailscaled`
   binaries (`tailscale` and `tailscale_sha256` in `versions.yaml`).
+- **The TUN device:** a user namespace can't create `/dev/net/tun`, and the
+  sandbox guard rules out `hostPath` volumes.
+  - `kubernetes/platform/tun-device-plugin.yaml` runs squat's
+    [generic-device-plugin](https://github.com/squat/generic-device-plugin)
+    in `kube-system`, pinned as `tun_device_plugin_digest` in
+    `versions.yaml`. It offers the node's `/dev/net/tun` as the
+    `omnigent.dev/tun` resource.
+  - The admission policy in `kubernetes/platform/runner-userns.yaml` asks
+    for one for the host container, so the kubelet adds the device.
+  - The device only creates interfaces in the Pod's own network namespace,
+    where the Pod already has `CAP_NET_ADMIN`.
 - **Joining:** `images/runner/tailscale/tailscale-service.sh` starts with the
   Pod, like the Podman service.
   - It joins as `omnigent-` plus the first 8 characters of
-    `OMNIGENT_HOST_ID`, with `--ssh` and the tags in
-    `OMNIGENT_TAILSCALE_TAGS`.
-  - The Pod has no TUN device, so `tailscaled` uses userspace networking.
-    The Pod gets no route to the tailnet and no MagicDNS, so connections out
-    have to go through `tailscaled`.
-- **Connecting out:**
+    `OMNIGENT_HOST_ID`, with `--ssh`, `--accept-routes` and the tags in
+    `OMNIGENT_TAILSCALE_TAGS`. `--reset` drops settings from an earlier
+    start, such as another exit node.
+  - With `/dev/net/tun`, `tailscaled` creates `tailscale0` and routes the
+    Pod's traffic for the tailnet, with `--accept-dns=false` and
+    `--netfilter-mode=off`, so it leaves `/etc/resolv.conf` and Podman's
+    firewall alone.
+  - Without it, `tailscaled` uses userspace networking. The Pod then gets no
+    route to the tailnet and no MagicDNS, so connections out have to go
+    through `tailscaled`.
+- **Routes:** rules at priority 5200, before Tailscale's, send k3s's Pod and
+  Service ranges (`10.42.0.0/16`, `10.43.0.0/16`) to the main table. A
+  subnet route or exit node never takes the Pod's way to the Omnigent server
+  or the cluster's DNS.
+- **Connections in:** `tailscaled` in TUN mode only hands connections to
+  ports listening on its tailnet address. nftables rules
+  (`table ip omnigent-tailscale`) send TCP and UDP from `tailscale0` to
+  `127.0.0.1` instead, with `route_localnet` on `tailscale0`, and so do the
+  Pod's own connections to its tailnet address. So a dev server on
+  `localhost` stays reachable, as with userspace networking. Ports Podman
+  publishes take their own route first.
+- **MagicDNS:** Tailscale's own DNS setup would replace the cluster's DNS
+  with the exit node's while a repository uses one. Instead, `dnsmasq`
+  listens on `169.254.20.10`, on a `dummy` interface of its own:
+  - Names in the tailnet's domain go to `tailscaled`'s resolver
+    (`100.100.100.100`), and everything else to the cluster's DNS.
+  - With `--accept-dns=false`, that resolver answers SERVFAIL for a name
+    that's no machine of the tailnet, and musl stops looking at the next
+    search domain on SERVFAIL. A second `dnsmasq` on `127.0.0.54` answers
+    NXDOMAIN, and `--strict-order` asks it after a SERVFAIL.
+  - `/etc/resolv.conf` is a mount, so it's rewritten in place, once both
+    answer: the forwarder, the Pod's three search domains, then the
+    tailnet's. The original is kept in `/run/omnigent-tailscale.resolv.conf`.
+  - Podman copies it into containers, and they reach the address through
+    the Pod.
+- **Connecting out without the TUN device:**
   - `images/runner/tailscale/ssh-tailnet.conf`, in
     `/etc/ssh/ssh_config.d/`, sends SSH to tailnet hosts through
-    `tailscale nc`, and accepts their host keys the first time.
+    `tailscale nc`, and accepts their host keys the first time. It does so
+    with the TUN device too.
   - `tailscaled` serves a SOCKS5 and an HTTP proxy on `localhost:1055`
-    (`--socks5-server` and `--outbound-http-proxy-listen`). Nothing is set to
-    use it by default, so the rest of the Pod's traffic doesn't depend on
-    Tailscale.
+    (`--socks5-server` and `--outbound-http-proxy-listen`), in both modes.
 - **Leaving:** the admission policy in
   `kubernetes/platform/runner-userns.yaml` gives the Pod a `preStop` hook,
   `images/runner/tailscale/tailscale-logout.sh`.

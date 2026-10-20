@@ -136,6 +136,17 @@ tailnet, and the agent is root in it, so treat the node as untrusted:
 - **Devices your policy allows can get a root shell in the Pod** through
   Tailscale SSH, and reach any port the agent opens. That's the same access
   the agent already has.
+- **Exit nodes your policy lets sessions use are open to every session.** A
+  [repository's exit node](features/repo-exit-node.md) is only a default:
+  the agent is root in its Pod, so it can switch to any exit node the policy
+  allows, or to none. Through one, a compromised runner reaches whatever
+  that exit node's network reaches, such as a VPN's servers. Limit the grant
+  with `via` to the exit nodes sessions need.
+- **Runner Pods have a TUN device.** It only creates network interfaces in
+  the Pod's own network namespace, where the Pod already has
+  `CAP_NET_ADMIN`. The device plugin that hands it out runs privileged in
+  `kube-system`, like the cluster's other node agents, and mounts only the
+  kubelet's device plugin directory and `/dev/net`.
 
 ## GitHub tokens and Vault
 

@@ -2,7 +2,8 @@
 # Run the fast-mode and fuzzy "@" file search backend regressions and related
 # frontend suites, the project repositories frontend suites, the environment
 # menu's backend and frontend suites, the startup card's, the New session
-# screen's, the MCP servers page's and repository badge's, a first message
+# screen's, the MCP servers page's and repository badge's, a repository's exit
+# node on the repository variables page, a first message
 # waiting for its sandbox, the repository picker's Custom tab, the chat
 # stream's reconnect after a network drop, inline media with the image
 # lightbox and its Copy image menu, and the composers without a mic, against a
@@ -116,7 +117,7 @@ PY
       src/hooks/useIsAdmin.test.tsx src/shell/WorkspacePanel.test.tsx src/components/ui/kbd.test.tsx \
       src/pages/McpServersPage.test.tsx src/lib/mcpServerIcons.test.ts \
       src/pages/RepoVariablesPage.test.tsx src/shell/settingsNav.test.tsx \
-      src/components/RepoEnvBadge.test.tsx src/components/RepoCustomForm.test.tsx \
+      src/components/RepoEnvBadge.test.tsx src/components/RepoCustomForm.test.tsx src/lib/repoEnv.test.ts \
       src/components/blocks/ChatMarkdown.media.test.tsx src/components/ImageLightbox.test.tsx \
       src/components/ai-elements/message.test.tsx src/components/ai-elements/reasoning.test.tsx \
       src/lib/clipboard.test.ts \

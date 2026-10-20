@@ -10,6 +10,7 @@ USER root
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         podman podman-docker crun aardvark-dns catatonit docker-compose curl openssh-client \
+        dnsmasq-base \
         libfontconfig1 libfreetype6 libxrender1 libxtst6 libxi6 \
     && rm -rf /var/lib/apt/lists/* \
     && touch /etc/containers/nodocker \
@@ -49,6 +50,7 @@ COPY containers/podman-service-profile.sh /etc/profile.d/omnigent-podman-service
 COPY --chmod=0755 startup/startup-report.py /usr/local/bin/omnigent-startup-report
 COPY --chmod=0755 tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailscale
 COPY --chmod=0755 tailscale/tailscale-logout.sh /usr/local/bin/omnigent-tailscale-logout
+COPY --chmod=0755 tailscale/via-exit-node.sh /usr/local/bin/omnigent-via-exit-node
 COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
 COPY tailscale/ssh-tailnet.conf /etc/ssh/ssh_config.d/50-omnigent-tailnet.conf
 COPY mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh

@@ -755,6 +755,11 @@ def _started(status: object | None) -> bool:
     )
 
 
+# Runner Pods ask for a TUN device (kubernetes/platform/tun-device-plugin.yaml),
+# which only that plugin offers.
+_NO_TUN = re.compile(r"insufficient omnigent\.dev/tun", re.I)
+
+
 def plain_unschedulable(message: str | None) -> str:
     """
     Say why Kubernetes can't place the Pod, from its scheduler message.
@@ -762,6 +767,8 @@ def plain_unschedulable(message: str | None) -> str:
     :param message: e.g. ``"0/1 nodes are available: 1 Insufficient memory."``
     """
     text = message or ""
+    if _NO_TUN.search(text):
+        return "Waiting for the VM's TUN device plugin, omnigent-tun-device-plugin in kube-system"
     if re.search(r"insufficient memory", text, re.I):
         return "Waiting for memory: the VM doesn't have enough free memory for this sandbox"
     if re.search(r"insufficient cpu", text, re.I):
@@ -1039,12 +1046,19 @@ def explain(error: str) -> dict[str, str]:
         result = {"step": "clone", **explain_clone(log_text)}
     elif re.search(r"Unschedulable", text):
         message = re.search(r"Unschedulable: ([^)]*)", text)
-        result = {
-            "step": "schedule",
-            "title": "No room on the VM",
-            "body": plain_unschedulable(message.group(1) if message else None)
-            + ". Stop a sandbox you aren't using, then try again.",
-        }
+        reason = message.group(1) if message else None
+        if _NO_TUN.search(reason or ""):
+            result = {
+                "step": "schedule",
+                "title": "No TUN device",
+                "body": plain_unschedulable(reason) + ". `mise run status` shows why it isn't running.",
+            }
+        else:
+            result = {
+                "step": "schedule",
+                "title": "No room on the VM",
+                "body": plain_unschedulable(reason) + ". Stop a sandbox you aren't using, then try again.",
+            }
     elif re.search(r"ErrImagePull|ImagePullBackOff|InvalidImageName", text):
         reason = re.search(r"(ErrImagePull|ImagePullBackOff|InvalidImageName)[: ]*([^;)]*)", text)
         result = {

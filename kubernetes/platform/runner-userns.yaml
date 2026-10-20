@@ -58,6 +58,25 @@ spec:
               }
             }
           ]
+    # Also not about user namespaces: /dev/net/tun from the TUN device plugin
+    # (tun-device-plugin.yaml), so Tailscale routes the Pod's connections.
+    # The Omnigent server always sets requests and limits; an extended
+    # resource needs both, with the same value.
+    - patchType: JSONPatch
+      jsonPatch:
+        expression: >-
+          [
+            JSONPatch{
+              op: "add",
+              path: "/spec/containers/" + string(object.spec.containers.map(c, c.name).indexOf("host")) + "/resources/requests/" + jsonpatch.escapeKey("omnigent.dev/tun"),
+              value: "1"
+            },
+            JSONPatch{
+              op: "add",
+              path: "/spec/containers/" + string(object.spec.containers.map(c, c.name).indexOf("host")) + "/resources/limits/" + jsonpatch.escapeKey("omnigent.dev/tun"),
+              value: "1"
+            }
+          ]
     # Not about user namespaces, but this is where runner Pods get rewritten:
     # a stopping Pod logs its tailnet node out, so Tailscale removes it
     # straight away (images/runner/tailscale/tailscale-logout.sh).
