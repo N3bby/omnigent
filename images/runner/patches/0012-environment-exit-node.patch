@@ -12,12 +12,13 @@ exit node is online: state connected, offline, off (the Pod doesn't use it,
 such as after the agent switched it off), failed, conflict, or unknown when
 tailscaled doesn't answer. Without the file, exit_node is null and the menu
 has no row. Over the socket rather than `tailscale status`, so a report never
-starts a process.
+starts a process. Reading it never costs the report, whose answer carries
+Keep running: a file it can't make sense of reads as no exit node.
 Pairs with the server patch 0021-environment-exit-node.patch.
 Applies after 0011-environment-menu.patch. Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/omnigent/runner/environment_report.py b/omnigent/runner/environment_report.py
-index fb5e125..dfd27bc 100644
+index fb5e125..e19f71f 100644
 --- a/omnigent/runner/environment_report.py
 +++ b/omnigent/runner/environment_report.py
 @@ -12,6 +12,11 @@ Pushed rather than fetched through the runner tunnel on purpose: every request
@@ -40,7 +41,7 @@ index fb5e125..dfd27bc 100644
  import logging
  import os
  import time
-@@ -53,6 +59,15 @@ Long enough to ride out a server restart."""
+@@ -53,6 +59,16 @@ Long enough to ride out a server restart."""
  
  CGROUP_ROOT = Path("/sys/fs/cgroup")
  
@@ -52,11 +53,12 @@ index fb5e125..dfd27bc 100644
 +TAILSCALED_SOCKET = Path("/run/tailscale/tailscaled.sock")
 +
 +_EXIT_NODE_ERROR_MAX = 500
++_EXIT_NODE_NAME_MAX = 253
 +
  
  def reporting_enabled() -> bool:
      """
-@@ -99,6 +114,67 @@ def read_memory_working_set(root: Path = CGROUP_ROOT) -> int | None:
+@@ -99,6 +115,72 @@ def read_memory_working_set(root: Path = CGROUP_ROOT) -> int | None:
      return max(0, current - inactive)
  
  
@@ -74,11 +76,16 @@ index fb5e125..dfd27bc 100644
 +        return None
 +    if not isinstance(data, dict):
 +        return None
-+    names = [name for name in data.get("names") or [] if isinstance(name, str) and name]
++    listed = data.get("names")
++    names = [
++        name
++        for name in (listed if isinstance(listed, list) else [])
++        if isinstance(name, str) and 0 < len(name) <= _EXIT_NODE_NAME_MAX
++    ]
 +    if len(names) > 1:
 +        return {"state": "conflict", "names": names[:16]}
 +    name = data.get("name")
-+    if not isinstance(name, str) or not name:
++    if not isinstance(name, str) or not 0 < len(name) <= _EXIT_NODE_NAME_MAX:
 +        return None
 +    error = data.get("error")
 +    if isinstance(error, str) and error:
@@ -124,7 +131,7 @@ index fb5e125..dfd27bc 100644
  @dataclass
  class _CpuSample:
      usage_usec: int
-@@ -118,6 +194,9 @@ class EnvironmentReporter:
+@@ -118,6 +200,9 @@ class EnvironmentReporter:
          event loop's clock, as the idle monitor reads it.
      :param has_active_work: Whether the agent is working on something.
      :param cgroup_root: Where cgroup v2 is mounted.
@@ -134,7 +141,7 @@ index fb5e125..dfd27bc 100644
      """
  
      def __init__(
-@@ -129,6 +208,8 @@ class EnvironmentReporter:
+@@ -129,6 +214,8 @@ class EnvironmentReporter:
          last_activity: Callable[[], float],
          has_active_work: Callable[[], bool],
          cgroup_root: Path = CGROUP_ROOT,
@@ -143,7 +150,7 @@ index fb5e125..dfd27bc 100644
      ) -> None:
          self._client = client
          self._session_id = session_id
-@@ -136,6 +217,8 @@ class EnvironmentReporter:
+@@ -136,6 +223,8 @@ class EnvironmentReporter:
          self._last_activity = last_activity
          self._has_active_work = has_active_work
          self._cgroup_root = cgroup_root
@@ -152,21 +159,24 @@ index fb5e125..dfd27bc 100644
          self._cpu: _CpuSample | None = None
          # "Keep running" from the server: until when (Unix seconds), or for good.
          self._keep_running_until: float | None = None
-@@ -190,6 +273,13 @@ class EnvironmentReporter:
+@@ -190,6 +279,16 @@ class EnvironmentReporter:
              "agent_exits_at": exits_at,
          }
  
 +    async def report(self) -> dict[str, object]:
 +        """The :meth:`snapshot`, with the session's exit node."""
-+        return {
-+            **self.snapshot(),
-+            "exit_node": await read_exit_node(self._exit_node_file, tailscaled=self._tailscaled),
-+        }
++        snapshot = self.snapshot()
++        try:
++            exit_node = await read_exit_node(self._exit_node_file, tailscaled=self._tailscaled)
++        except Exception:  # the exit node must never cost the report
++            _logger.debug("reading the exit node failed", exc_info=True)
++            exit_node = None
++        return {**snapshot, "exit_node": exit_node}
 +
      def _keep_running_from(self, response: httpx.Response) -> None:
          """Take the "Keep running" choice from the server's answer to a report."""
          try:
-@@ -213,7 +303,7 @@ class EnvironmentReporter:
+@@ -213,7 +312,7 @@ class EnvironmentReporter:
          try:
              response = await self._client.post(
                  f"/v1/sessions/{self._session_id}/environment/report",
@@ -177,10 +187,10 @@ index fb5e125..dfd27bc 100644
              if 400 <= response.status_code < 500:
 diff --git a/tests/runner/test_environment_report_exit_node.py b/tests/runner/test_environment_report_exit_node.py
 new file mode 100644
-index 0000000..69620a7
+index 0000000..0006f87
 --- /dev/null
 +++ b/tests/runner/test_environment_report_exit_node.py
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,160 @@
 +"""The runner's environment reports: the exit node the session's repositories name."""
 +
 +from __future__ import annotations
@@ -271,7 +281,20 @@ index 0000000..69620a7
 +    assert node["error"] == "x" * 500
 +
 +
-+@pytest.mark.parametrize("content", [None, "", "not json", "[]", '{"name": ""}', '{"names": []}'])
++@pytest.mark.parametrize(
++    "content",
++    [
++        None,
++        "",
++        "not json",
++        "[]",
++        '{"name": ""}',
++        '{"names": []}',
++        '{"names": 7}',
++        '{"name": ["cronos-vpn"]}',
++        json.dumps({"name": "x" * 254}),
++    ],
++)
 +async def test_without_an_exit_node_there_is_none(tmp_path: Path, content: str | None) -> None:
 +    path = tmp_path / "exit-node.json"
 +    if content is not None:
@@ -304,3 +327,27 @@ index 0000000..69620a7
 +        await client.aclose()
 +    assert posted[0]["exit_node"] == {"state": "connected", "name": "cronos-vpn"}
 +    assert posted[0]["agent_active"] is False
++
++
++async def test_a_failing_exit_node_never_costs_the_report(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    # The report's answer carries "Keep running", so it must go out regardless.
++    from omnigent.runner import environment_report
++
++    async def _broken(*_args: object, **_kwargs: object) -> None:
++        raise RuntimeError("unexpected")
++
++    monkeypatch.setattr(environment_report, "read_exit_node", _broken)
++    since = asyncio.get_running_loop().time()
++    reporter = EnvironmentReporter(
++        client=httpx.AsyncClient(base_url="http://server"),
++        session_id="conv_1",
++        idle_timeout_s=1800.0,
++        last_activity=lambda: since,
++        has_active_work=lambda: False,
++        cgroup_root=tmp_path,
++    )
++    report = await reporter.report()
++    assert report["exit_node"] is None
++    assert report["agent_active"] is False
