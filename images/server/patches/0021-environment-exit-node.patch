@@ -7,9 +7,11 @@ failed, conflict or unknown), its name, the names when the repositories name
 different ones, and Tailscale's error when it refused it. GET
 /v1/sessions/{id}/environment returns it with the rest of the report, and
 leaves it out when there's none, as with a runner from before exit nodes.
+A malformed exit_node is dropped rather than refusing the report, whose
+answer carries Keep running.
 Base: omnigent v0.18.0 (a8676d23e88d), after 0020-stop-message-waiting-for-sandbox.patch.
 diff --git a/omnigent/server/routes/sessions/routes_environment.py b/omnigent/server/routes/sessions/routes_environment.py
-index dda2b35..a34a4d0 100644
+index dda2b35..57b9d05 100644
 --- a/omnigent/server/routes/sessions/routes_environment.py
 +++ b/omnigent/server/routes/sessions/routes_environment.py
 @@ -5,8 +5,8 @@ liveness the web UI already has: when the Pod started (or stopped) and when it
@@ -23,15 +25,20 @@ index dda2b35..a34a4d0 100644
  
  Reports are kept in memory, per replica: they're replaced every 5 seconds, and
  a stale one is dropped rather than shown.
-@@ -23,6 +23,7 @@ from __future__ import annotations
+@@ -23,9 +23,11 @@ from __future__ import annotations
  import asyncio
  import os
  import time
++from collections.abc import Callable
 +from typing import Annotated, Literal
  
  from fastapi import APIRouter, Request
- from pydantic import BaseModel, Field, model_validator
-@@ -89,6 +90,22 @@ def clear_keep_running(conversation_store: ConversationStore, session_id: str) -
+-from pydantic import BaseModel, Field, model_validator
++from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+ 
+ from omnigent.errors import ErrorCode, OmnigentError
+ from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
+@@ -89,6 +91,22 @@ def clear_keep_running(conversation_store: ConversationStore, session_id: str) -
          conversation_store.delete_label(session_id, KEEP_RUNNING_LABEL_KEY)
  
  
@@ -54,16 +61,27 @@ index dda2b35..a34a4d0 100644
  class EnvironmentReport(BaseModel):
      """What the runner reports every 5 seconds and when the agent starts or stops working."""
  
-@@ -97,6 +114,8 @@ class EnvironmentReport(BaseModel):
+@@ -97,6 +115,19 @@ class EnvironmentReport(BaseModel):
      agent_active: bool = False
      agent_idle_since: float | None = None
      agent_exits_at: float | None = None
 +    exit_node: ExitNode | None = None
 +    """``None`` when no repository of the session names an exit node."""
++
++    @field_validator("exit_node", mode="wrap")
++    @classmethod
++    def _drop_bad_exit_node(
++        cls, value: object, handler: Callable[[object], ExitNode | None]
++    ) -> ExitNode | None:
++        """A malformed exit node loses its row, not the report "Keep running" answers."""
++        try:
++            return handler(value)
++        except ValidationError:
++            return None
  
  
  class SessionEnvironment(BaseModel):
-@@ -117,6 +136,7 @@ class SessionEnvironment(BaseModel):
+@@ -117,6 +148,7 @@ class SessionEnvironment(BaseModel):
      agent_active: bool | None = None
      agent_idle_since: float | None = None
      agent_exits_at: float | None = None
@@ -71,7 +89,7 @@ index dda2b35..a34a4d0 100644
      reported_at: float | None = None
      keep_running_until: float | None = None
      keep_running_hours: float | None = None
-@@ -258,5 +278,6 @@ def register_environment_routes(
+@@ -258,5 +290,6 @@ def register_environment_routes(
              result.agent_active = body.agent_active
              result.agent_idle_since = body.agent_idle_since
              result.agent_exits_at = body.agent_exits_at
@@ -80,10 +98,10 @@ index dda2b35..a34a4d0 100644
          return result
 diff --git a/tests/server/integration/test_session_environment_exit_node.py b/tests/server/integration/test_session_environment_exit_node.py
 new file mode 100644
-index 0000000..7f2ac7a
+index 0000000..e95f642
 --- /dev/null
 +++ b/tests/server/integration/test_session_environment_exit_node.py
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,89 @@
 +"""The environment menu's exit node: the runner reports it, the menu reads it back.
 +
 +The runner reports the tailnet exit node the session's repositories name with
@@ -159,7 +177,17 @@ index 0000000..7f2ac7a
 +    assert "exit_node" not in env
 +
 +
-+async def test_an_unknown_state_is_refused(client: httpx.AsyncClient, db_uri: str) -> None:
++@pytest.mark.parametrize(
++    "exit_node", [{"state": "maybe"}, {"state": "connected", "name": "x" * 300}, "cronos-vpn"]
++)
++async def test_a_malformed_exit_node_drops_only_the_row(
++    client: httpx.AsyncClient, db_uri: str, exit_node: object
++) -> None:
++    # Refusing the whole report would also drop "Keep running", which rides on its answer.
 +    session_id = await _session(client, db_uri)
-+    resp = await _report(client, session_id, {**REPORT, "exit_node": {"state": "maybe"}})
-+    assert resp.status_code == 422, resp.text
++    resp = await _report(client, session_id, {**REPORT, "exit_node": exit_node})
++    assert resp.status_code == 200, resp.text
++    assert resp.json()["keep_running_forever"] is False
++    env = (await client.get(f"/v1/sessions/{session_id}/environment")).json()
++    assert env["cpu_cores"] == 0.5
++    assert "exit_node" not in env
