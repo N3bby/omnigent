@@ -4,9 +4,9 @@
 # menu's backend and frontend suites, the startup card's, the New session
 # screen's, the MCP servers page's and repository badge's, a first message
 # waiting for its sandbox, the repository picker's Custom tab, the chat
-# stream's reconnect after a network drop, and inline media with the image
-# lightbox and its Copy image menu, against a fresh, fully patched upstream
-# checkout. Keep logs and JUnit reports.
+# stream's reconnect after a network drop, inline media with the image
+# lightbox and its Copy image menu, and the composers without a mic, against a
+# fresh, fully patched upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -120,6 +120,7 @@ PY
       src/components/blocks/ChatMarkdown.media.test.tsx src/components/ImageLightbox.test.tsx \
       src/components/ai-elements/message.test.tsx src/components/ai-elements/reasoning.test.tsx \
       src/lib/clipboard.test.ts \
+      src/pages/ChatPage.composer.test.tsx src/components/chat/SideChatPane.test.tsx \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

@@ -74,6 +74,7 @@ Changes to how the web UI looks and behaves.
 | [Swipe for a session's menu](session-swipe-menu.md) | On a phone, swipe a session left for its menu; holding it down only moves it | No |
 | [No Share button](no-share-button.md) | Sessions can't be shared from the web UI | No |
 | [No pin or archive buttons in the sidebar](no-sidebar-quick-actions.md) | Hovering a session no longer shows buttons you can hit by accident; Pin and Archive are in its ⋯ menu | No |
+| [No microphone in the composer](no-voice-dictation.md) | The composer has no voice dictation button; a phone keyboard's own voice input still works | No |
 
 ## Words used on these pages
 

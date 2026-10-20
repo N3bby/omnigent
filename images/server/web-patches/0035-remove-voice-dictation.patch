@@ -1,0 +1,347 @@
+Remove the microphone (voice dictation) from the composers.
+
+The mic button sat next to the send button in a session's composer, on the
+New session screen and in the side chat, and ⌘⌥V toggled it. Dictation is
+unreliable here, and phones have their own voice input in the keyboard, so
+all three mics are gone, with the ⌘⌥V shortcut and its row in Keyboard
+shortcuts. ComposerMicButton, the dictation hooks and the server's
+dictation endpoint are unchanged, only unused. Upstream's composer tests
+that measured the mic check that it's gone.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0034.
+diff --git a/web/src/components/KeyboardShortcutsDialog.tsx b/web/src/components/KeyboardShortcutsDialog.tsx
+index 744464f..0d816b3 100644
+--- a/web/src/components/KeyboardShortcutsDialog.tsx
++++ b/web/src/components/KeyboardShortcutsDialog.tsx
+@@ -90,7 +90,6 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
+       { label: "Accept approval prompt", keys: [MOD_KEY, ENTER_KEY] },
+       { label: "Open model picker", keys: [CTRL_KEY, SHIFT_KEY, "M"] },
+       { label: "Focus chat input", keys: [CTRL_KEY, SHIFT_KEY, "L"] },
+-      { label: "Toggle voice dictation", keys: [MOD_KEY, ALT_KEY, "V"] },
+       { label: "Stop response", keys: ["Esc"] },
+     ],
+   },
+diff --git a/web/src/components/chat/SideChatPane.test.tsx b/web/src/components/chat/SideChatPane.test.tsx
+index c093538..14058c4 100644
+--- a/web/src/components/chat/SideChatPane.test.tsx
++++ b/web/src/components/chat/SideChatPane.test.tsx
+@@ -17,7 +17,6 @@ vi.mock("@/store/chatStore", async (importOriginal) => ({
+ }));
+ 
+ vi.mock("@/components/composer/ComposerAddMenu", () => ({ ComposerAddMenu: () => null }));
+-vi.mock("@/components/ComposerMicButton", () => ({ ComposerMicButton: () => null }));
+ const sessionLabels = vi.hoisted(() => ({ current: {} as Record<string, string> }));
+ vi.mock("@/hooks/useSession", () => ({
+   useSession: () => ({ session: { labels: sessionLabels.current }, isLoading: false, error: null }),
+diff --git a/web/src/components/chat/SideChatPane.tsx b/web/src/components/chat/SideChatPane.tsx
+index b0fdd34..2f1a457 100644
+--- a/web/src/components/chat/SideChatPane.tsx
++++ b/web/src/components/chat/SideChatPane.tsx
+@@ -25,7 +25,6 @@ import {
+ } from "@/components/chat/chatBubbleParts";
+ import { ChatComposer, ComposerSendButton } from "@/components/composer/ChatComposer";
+ import { ComposerAddMenu } from "@/components/composer/ComposerAddMenu";
+-import { ComposerMicButton } from "@/components/ComposerMicButton";
+ import { isSlashCommandText } from "@/components/SlashCommandMenu";
+ import { ComposerAttachments } from "@/components/ComposerAttachments";
+ import { ReplyDraftBlocks } from "@/components/composer/ReplyDraftBlocks";
+@@ -37,7 +36,6 @@ import {
+ } from "@/store/chatStore";
+ import { useConversationEntryState } from "@/hooks/useConversationEntryState";
+ import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
+-import { useDictationInsert } from "@/hooks/useDictationInsert";
+ import { useSession } from "@/hooks/useSession";
+ import { usesNativeSideChatFork } from "@/lib/sideChat";
+ import { serializeReplyDraft } from "@/lib/replyDraft";
+@@ -344,7 +342,7 @@ export function SideChatPane({
+ /**
+  * The side chat's composer. On a live tab it sends to the child via
+  * `pinnedConversationId` (so turns land on the side thread, not the main one)
+- * with the main composer's affordances (attach, dictation). On a pending tab it
++ * with the main composer's affordances (attach). On a pending tab it
+  * has just text + send: the first message creates the fork via `onStart`, and
+  * the text is kept if creation fails so it isn't lost.
+  */
+@@ -390,8 +388,6 @@ function SideChatComposer({
+   const [interrupting, setInterrupting] = useState(false);
+   const fileInputRef = useRef<HTMLInputElement>(null);
+   const textareaRef = useRef<HTMLTextAreaElement>(null);
+-  const voiceSnapshotRef = useRef("");
+-  const dictation = useDictationInsert(text, setText, textareaRef);
+   useAutoGrowTextarea(textareaRef, text);
+ 
+   // This tab's seeded text: on a pending tab the "Ask in side chat" selection
+@@ -538,29 +534,17 @@ function SideChatComposer({
+             />
+           ),
+           trailing: (
+-            <>
+-              <ComposerMicButton
+-                className="size-8 md:size-7"
+-                disabled={!ready}
+-                onVoiceStart={() => {
+-                  voiceSnapshotRef.current = text;
+-                }}
+-                onVoiceDiscard={() => setText(voiceSnapshotRef.current)}
+-                onTranscript={(spoken) => dictation.appendFinal(spoken)}
+-                onInterim={(spoken) => dictation.replaceInterim(spoken)}
+-              />
+-              <ComposerSendButton
+-                type="button"
+-                label={showInterrupt ? "Interrupt side chat" : "Send side question"}
+-                interrupt={showInterrupt}
+-                busy={interrupting}
+-                disabled={
+-                  showInterrupt ? interrupting || !interruptReady : !canSend || !ready || busy
+-                }
+-                onClick={showInterrupt ? interruptSideChat : submit}
+-                data-testid={showInterrupt ? "side-chat-interrupt" : "side-chat-send"}
+-              />
+-            </>
++            <ComposerSendButton
++              type="button"
++              label={showInterrupt ? "Interrupt side chat" : "Send side question"}
++              interrupt={showInterrupt}
++              busy={interrupting}
++              disabled={
++                showInterrupt ? interrupting || !interruptReady : !canSend || !ready || busy
++              }
++              onClick={showInterrupt ? interruptSideChat : submit}
++              data-testid={showInterrupt ? "side-chat-interrupt" : "side-chat-send"}
++            />
+           ),
+         }}
+       />
+diff --git a/web/src/pages/ChatPage.composer.test.tsx b/web/src/pages/ChatPage.composer.test.tsx
+index dad5a93..330ed66 100644
+--- a/web/src/pages/ChatPage.composer.test.tsx
++++ b/web/src/pages/ChatPage.composer.test.tsx
+@@ -538,6 +538,33 @@ describe("Composer growth layout", () => {
+   });
+ });
+ 
++describe("Composer without voice dictation", () => {
++  afterEach(() => {
++    cleanup();
++    vi.unstubAllGlobals();
++  });
++
++  it("has no mic, even where the browser has speech input", () => {
++    // This deployment removes the mic from every composer.
++    vi.stubGlobal(
++      "SpeechRecognition",
++      class {
++        continuous = false;
++        interimResults = false;
++        lang = "";
++        start = vi.fn();
++        stop = vi.fn();
++        addEventListener = vi.fn();
++        removeEventListener = vi.fn();
++      },
++    );
++    render(<Composer {...composerProps()} />);
++
++    expect(textarea()).toBeInTheDocument();
++    expect(screen.queryByRole("button", { name: "Voice dictation" })).toBeNull();
++  });
++});
++
+ describe("Composer send shortcut", () => {
+   it("preserves list indentation when sending auto-formatted bullets", () => {
+     const props = composerProps();
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index 13b0a14..cd94129 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -78,7 +78,6 @@ import { useSessionModelLabel } from "@/hooks/useSessionModelLabel";
+ import { useModelPickerHotkey } from "@/hooks/useModelPickerHotkey";
+ import { useFocusComposerHotkey } from "@/hooks/useFocusComposerHotkey";
+ import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
+-import { useDictationInsert } from "@/hooks/useDictationInsert";
+ import {
+   derivePermissionLevel,
+   isOwnerLevel,
+@@ -219,7 +218,6 @@ import {
+ } from "@/hooks/useWorkspaceChangedFiles";
+ import { buildFuzzyPathIndex, fuzzyMatchPaths, fuzzyMentionScope } from "@/lib/fuzzyPathMatch";
+ import type { MentionMenuEntry } from "@/components/FileMentionMenu";
+-import { ComposerMicButton } from "@/components/ComposerMicButton";
+ import { ComposerAttachments } from "@/components/ComposerAttachments";
+ import { isCostRoutingSession, isSubagentRoutingSession } from "@/components/CostRoutingControl";
+ import {
+@@ -2351,9 +2349,6 @@ function ComposerImpl(
+     tailTextareaRef.current = element;
+     if (element && !textareaRef.current?.isConnected) textareaRef.current = element;
+   }, []);
+-  // Declared after textareaRef so dictation can place the caret after the
+-  // text it inserts (and insert at the caret rather than the draft's end).
+-  const dictation = useDictationInsert(value, setValue, textareaRef);
+   // Highlight overlay mirroring the textarea; scroll-synced so the tinted
+   // `/skill` token stays aligned once the draft grows past the visible rows.
+   const isStreaming = status === "streaming";
+@@ -2542,8 +2537,6 @@ function ComposerImpl(
+   // the input, which would delete the draft. Only save when the user
+   // has actually changed the value since the last restore.
+   const dirtyRef = useRef(false);
+-  // Composer text captured when voice dictation starts, so Esc can revert to it.
+-  const voiceSnapshotRef = useRef("");
+   // On mobile, programmatic focus immediately summons the software keyboard.
+   // Keep desktop's fast-type affordance, but let mobile users explicitly tap
+   // the composer when switching back from Terminal or changing sessions.
+@@ -3592,7 +3585,6 @@ function ComposerImpl(
+   const handleTextFocus = (id: string | null, element: HTMLTextAreaElement) => {
+     textareaRef.current = element;
+     focusText(id);
+-    dictation.noteFocus();
+   };
+ 
+   return (
+@@ -4015,30 +4007,6 @@ function ComposerImpl(
+                   openNonce={pickerOpenNonce}
+                 />
+               </div>
+-              <ComposerMicButton
+-                className="size-8 md:size-7"
+-                enableHotkey
+-                disabled={disabled || isReadOnly || hasPendingElicitation || composerLockedByBtw}
+-                onVoiceStart={() => {
+-                  voiceSnapshotRef.current = value;
+-                }}
+-                onVoiceDiscard={() => {
+-                  setValue(voiceSnapshotRef.current);
+-                }}
+-                onTranscript={(text) => {
+-                  dictation.appendFinal(text);
+-                  dirtyRef.current = true;
+-                  // Dictation is a user-driven edit — exit prompt-recall mode
+-                  // so ArrowUp/ArrowDown don't clobber the dictated text.
+-                  resetCursor();
+-                  if (commandError !== null) setCommandError(null);
+-                }}
+-                onInterim={(text) => {
+-                  dictation.replaceInterim(text);
+-                  dirtyRef.current = true;
+-                  resetCursor();
+-                }}
+-              />
+               <TooltipProvider>
+                 <Tooltip>
+                   <TooltipTrigger asChild>
+diff --git a/web/src/shell/NewChatDialog.test.tsx b/web/src/shell/NewChatDialog.test.tsx
+index a699408..a84158a 100644
+--- a/web/src/shell/NewChatDialog.test.tsx
++++ b/web/src/shell/NewChatDialog.test.tsx
+@@ -3451,8 +3451,9 @@ describe("NewChatLandingScreen", () => {
+     const permission = screen.getByTestId("new-chat-landing-permission-chip");
+     const worktree = screen.getByTestId("new-chat-landing-branch-chip");
+     const harness = screen.getByTestId("new-chat-landing-agent-select");
+-    const voice = screen.getByRole("button", { name: "Voice dictation" });
+     const submit = screen.getByTestId("new-chat-landing-submit");
++    // This deployment removes the mic, even where the browser has speech input.
++    expect(screen.queryByRole("button", { name: "Voice dictation" })).toBeNull();
+     expect(attach).toHaveClass("size-8", "md:size-7");
+     // The host picker leads the workspace bar, styled like the chips beside it.
+     expect(workspaceControls.firstElementChild).toBe(hostChip);
+@@ -3517,7 +3518,6 @@ describe("NewChatLandingScreen", () => {
+       "md:min-h-7",
+     );
+     expect(harness).not.toHaveClass("pr-0");
+-    expect(voice).toHaveClass("size-8", "md:size-7");
+     expect(submit).toHaveClass("size-8", "md:size-7");
+     const leftControls = screen.getByTestId("new-chat-landing-left-controls");
+     const rightControls = screen.getByTestId("new-chat-landing-right-controls");
+@@ -3539,7 +3539,7 @@ describe("NewChatLandingScreen", () => {
+     for (const control of [hostChip, workspace, worktree]) {
+       expect(workspaceControls).toContainElement(control);
+     }
+-    for (const control of [harness, voice, submit]) {
++    for (const control of [harness, submit]) {
+       expect(rightControls).toContainElement(control);
+     }
+     const orderedControls = [
+@@ -3549,7 +3549,6 @@ describe("NewChatLandingScreen", () => {
+       attach,
+       permission,
+       harness,
+-      voice,
+       submit,
+     ];
+     for (const [index, control] of orderedControls.entries()) {
+@@ -4570,15 +4569,14 @@ describe("NewChatLandingScreen", () => {
+ 
+     const picker = screen.getByTestId("new-chat-landing-agent-select");
+     const model = screen.getByTestId("new-chat-landing-agent-model-value");
+-    const voice = screen.getByRole("button", { name: "Voice dictation" });
+     const submit = screen.getByTestId("new-chat-landing-submit");
++    expect(screen.queryByRole("button", { name: "Voice dictation" })).toBeNull();
+     expect(picker).toHaveClass("w-auto", "max-w-full", "px-2", "py-0");
+     expect(picker).not.toHaveClass("max-w-[7.25rem]", "md:max-w-40");
+     expect(picker).not.toHaveClass("sm:max-w-[14rem]", "md:max-w-[17rem]", "pr-0");
+     expect(model).toHaveClass("min-w-0", "truncate");
+     expect(model).toHaveAttribute("title", "Extraordinarily Long Claude Model Name");
+     expect(model).toHaveTextContent("Extraordinarily Long Claude Model Name");
+-    expect(voice).toHaveClass("shrink-0", "size-8", "md:size-7");
+     expect(submit.parentElement).toHaveClass("shrink-0");
+   });
+ 
+diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
+index d1a806c..937d858 100644
+--- a/web/src/shell/NewChatDialog.tsx
++++ b/web/src/shell/NewChatDialog.tsx
+@@ -286,7 +286,6 @@ import {
+ import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
+ import { useComposerAttachments } from "@/hooks/useComposerAttachments";
+ import { useFileDropTarget } from "@/hooks/useFileDropTarget";
+-import { useDictationInsert } from "@/hooks/useDictationInsert";
+ import { useRecentHarnesses } from "@/hooks/useRecentHarnesses";
+ import { useRecentWorkspaces } from "@/hooks/useRecentWorkspaces";
+ import { useDirectorySessions } from "@/hooks/useDirectorySessions";
+@@ -330,7 +329,6 @@ import {
+ import { BrandLogo } from "@/components/BrandLogo";
+ import { PoweredByOmnigent } from "@/components/PoweredByOmnigent";
+ import { SkillPills } from "@/components/SkillPills";
+-import { ComposerMicButton } from "@/components/ComposerMicButton";
+ import type { CostControlMode } from "@/components/CostRoutingControl";
+ import {
+   composerSendShortcutKeys,
+@@ -2504,12 +2502,7 @@ export function NewChatLandingScreen() {
+         };
+ 
+   const [message, setMessage] = useState<string>(() => restoredDraft?.message ?? "");
+-  // Composer text captured when voice dictation starts, so Esc can revert to it.
+-  const voiceSnapshotRef = useRef("");
+   const textareaRef = useRef<HTMLTextAreaElement>(null);
+-  // Declared after textareaRef so dictation can place the caret after the
+-  // text it inserts (and insert at the caret rather than the draft's end).
+-  const dictation = useDictationInsert(message, setMessage, textareaRef);
+   // The CSS max-height keeps the reference's 180px scrolling cap while the
+   // shared hook continues to grow from the one-row minimum.
+   useAutoGrowTextarea(textareaRef, message, 9);
+@@ -6998,9 +6991,6 @@ export function NewChatLandingScreen() {
+                 },
+                 onFocus: () => {
+                   setInputFocused(true);
+-                  // From here the textarea's caret is one the user placed, so
+-                  // dictation inserts there instead of at the end of the draft.
+-                  dictation.noteFocus();
+                 },
+                 onBlur: () => {
+                   // Menu rows preventDefault on mousedown so selecting one keeps focus.
+@@ -7253,17 +7243,6 @@ export function NewChatLandingScreen() {
+                         triggerClassName="text-[13px] leading-5"
+                       />
+                     </div>
+-                    <ComposerMicButton
+-                      className="size-8 md:size-7"
+-                      enableHotkey
+-                      disabled={creating}
+-                      onVoiceStart={() => {
+-                        voiceSnapshotRef.current = message;
+-                      }}
+-                      onVoiceDiscard={() => setMessage(voiceSnapshotRef.current)}
+-                      onTranscript={dictation.appendFinal}
+-                      onInterim={dictation.replaceInterim}
+-                    />
+                     <TooltipProvider>
+                       <Tooltip>
+                         <TooltipTrigger asChild>
