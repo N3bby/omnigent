@@ -203,7 +203,18 @@ EOF
 fi
 
 # A repository can name an exit node (omnigent_repo_env.EXIT_NODE_KEY), which
-# then carries the session's internet traffic.
+# then carries the session's internet traffic. What became of it goes to a
+# file for the environment menu (runner patch 0012-environment-exit-node.patch):
+# `note_exit_node names A B`, `note_exit_node one A`, or
+# `note_exit_node one A "<Tailscale's error>"`.
+exit_node_file=/run/omnigent-tailscale.exit-node.json
+rm -f "$exit_node_file"
+note_exit_node() {
+    python3 -c 'import json, sys
+kind, *args = sys.argv[1:]
+print(json.dumps({"names": args} if kind == "names" else dict(zip(("name", "error"), args))))' "$@" \
+        >"$exit_node_file.new" && mv -f "$exit_node_file.new" "$exit_node_file"
+}
 exit_nodes=$(
     for file in /run/omnigent/repo-env/*/tailscale-exit-node; do
         [ -s "$file" ] && tr -d '[:space:]' <"$file" && echo
@@ -217,17 +228,21 @@ case $exit_nodes in
         list=$(printf '%s' "$exit_nodes" | paste -sd, - | sed 's/,/, /g')
         echo "omnigent-tailscale: the repositories name different exit nodes ($list); using none" >&2
         report failed "Joined as $dns, without an exit node: the repositories name different ones ($list)"
+        # shellcheck disable=SC2086 # one name per line, and names have no spaces
+        note_exit_node names $exit_nodes
         exit_nodes=""
         failed=1
         ;;
     *)
         if error=$(ts set --exit-node="$exit_nodes" --exit-node-allow-lan-access 2>&1); then
             via=", through exit node $exit_nodes"
+            note_exit_node one "$exit_nodes"
             echo "omnigent-tailscale: using exit node $exit_nodes"
         else
             error=$(printf '%s' "$error" | tr '\n' ' ')
             echo "omnigent-tailscale: could not use exit node $exit_nodes: $error" >&2
             report failed "Joined as $dns, but couldn't use exit node $exit_nodes: $error"
+            note_exit_node one "$exit_nodes" "$error"
             failed=1
         fi
         ;;

@@ -48,6 +48,13 @@ Its MagicDNS name or Tailscale IP works too. Then **Save**.
 - **On the startup card**, the clone's log says
   `cloning through exit node cronos-vpn`, and the Tailscale line ends with
   `through exit node cronos-vpn`.
+- **In the composer's [environment menu](environment-menu.md)**, the
+  **Exit node** row says whether it's online: `cronos-vpn · connected`, or in
+  red `cronos-vpn · offline`, when the session has no internet. When the
+  session's repositories name different ones, it says so in amber.
+
+  ![The environment menu with the Exit node row: cronos-vpn · connected](../images/environment-menu-exit-node.webp)
+
 - **In the session**, `tailscale status` marks `cronos-vpn` as the exit node,
   and `curl https://ifconfig.me` shows the exit node's address.
 
@@ -58,7 +65,7 @@ Its MagicDNS name or Tailscale IP works too. Then **Save**.
   Only the cluster's own addresses don't, such as the Omnigent server and
   the cluster's DNS.
 - **If the exit node is offline, the session has no internet,** so the agent
-  can't reach Claude or OpenAI either. A new session on the repository fails
+  can't reach Claude or OpenAI either. The environment menu shows it in red. A new session on the repository fails
   at its clone, and says the exit node is offline.
 - **Names still resolve through the cluster's DNS.** A Git server whose name
   only resolves inside the VPN can be cloned, but the session can't resolve
@@ -118,4 +125,15 @@ Edit the repository in Settings → Repository variables and switch off
   for the cluster's ranges keep the Omnigent server and the cluster's DNS off
   the exit node; see [how Tailscale works in a session](tailscale.md#how-it-works).
   It reports the exit node, or why it couldn't use it, on the startup card's
-  Tailscale line.
+  Tailscale line, and writes the same to
+  `/run/omnigent-tailscale.exit-node.json` for the environment menu.
+- **The environment menu:** the runner's report every 5 seconds carries the
+  exit node (`images/runner/patches/0012-environment-exit-node.patch`). It
+  reads that file, and asks tailscaled's LocalAPI over its socket whether the
+  exit node is online, without starting a process. The server keeps it with
+  the rest of the report (`images/server/patches/0021-environment-exit-node.patch`),
+  and the menu shows the **Exit node** row
+  (`images/server/web-patches/0037-environment-exit-node.patch`): connected,
+  offline, refused by Tailscale, not in use (such as after the agent switched
+  it off), or different ones named. A session whose repositories name none has
+  no row.

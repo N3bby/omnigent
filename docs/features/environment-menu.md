@@ -20,6 +20,7 @@ While the sandbox is up, the menu shows:
 | --- | --- | --- |
 | **Agent** | `Idle 12m · exits in 18m` | Whether the agent is working, how long it has been idle, and when it exits if nothing happens. |
 | **Pod** | `Up 1h 03m · 2 CPU, 8 GB` | How long the Pod has run, and the CPUs and memory it's using now, not its limits. A stopped Pod shows when it stopped. |
+| **Exit node** | `cronos-vpn · connected` | Only when the session's repositories name a [tailnet exit node](repo-exit-node.md): whether it's online. In red while it's offline, when the session has no internet, or when Tailscale refused it; in amber when the repositories name different ones and the session uses none. |
 | **VM disk** | `59 of 193 GB` | The VM's whole disk, which every session's files and Pods share. The bar turns amber at 80% and red at 90%, when Kubernetes starts stopping Pods to free space. |
 | **Idle stop** | `Pod stops in 48m · at 15:12` | When the Pod stops if nothing happens: 30 minutes after the agent exits. Never while the agent is working, and not while you keep it running (`Kept running · until 23:00`). |
 
@@ -99,7 +100,9 @@ until its idle deadline, 30 minutes later in production, and the next message
 started the agent again in the same Pod. So Stop was really "restart the
 agent", which is what **Restart agent** now is.
 
-It's one patch per image: the server, the runner and the web UI.
+It's one patch per image: the server, the runner and the web UI. The
+**Exit node** row is a second set, described in
+[a repository's exit node](repo-exit-node.md#how-it-works).
 
 - `images/server/patches/0015-environment-menu.patch`:
   - **Stop sandbox.** `stop_session` takes `data.suspend_sandbox`. With it,

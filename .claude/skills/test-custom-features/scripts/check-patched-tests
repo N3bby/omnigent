@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Run the fast-mode and fuzzy "@" file search backend regressions and related
 # frontend suites, the project repositories frontend suites, the environment
-# menu's backend and frontend suites, the startup card's, the New session
-# screen's, the MCP servers page's and repository badge's, a repository's exit
-# node on the repository variables page, a first message
-# waiting for its sandbox, the repository picker's Custom tab, the chat
-# stream's reconnect after a network drop, inline media with the image
-# lightbox and its Copy image menu, and the composers without a mic, against a
-# fresh, fully patched upstream checkout. Keep logs and JUnit reports.
+# menu's backend and frontend suites with its exit node row, the startup
+# card's, the New session screen's, the MCP servers page's and repository
+# badge's, a repository's exit node on the repository variables page, a first
+# message waiting for its sandbox, the repository picker's Custom tab, the chat
+# stream's reconnect after a network drop, inline media with the image lightbox
+# and its Copy image menu, and the composers without a mic, against a fresh,
+# fully patched upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -95,7 +95,8 @@ PY
       tests/server/test_cancel_start.py tests/server/integration/test_session_environment.py \
       tests/onboarding/sandboxes/test_agent_sandbox_suspend.py \
       tests/onboarding/sandboxes/test_agent_sandbox_environment.py \
-      tests/runner/test_environment_report.py \
+      tests/runner/test_environment_report.py tests/runner/test_environment_report_exit_node.py \
+      tests/server/integration/test_session_environment_exit_node.py \
       tests/onboarding/sandboxes/test_startup_progress_k8s.py tests/server/test_startup_progress.py \
       tests/server/routes/test_codex_bypass_default.py \
       tests/server/routes/test_session_resources.py \

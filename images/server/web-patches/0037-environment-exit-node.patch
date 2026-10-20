@@ -1,0 +1,191 @@
+Show a session's exit node in the composer's environment menu.
+
+When the session's repositories name a tailnet exit node, the menu has an
+"Exit node" row under Pod, from the runner's report (server patch
+0021-environment-exit-node.patch): "cronos-vpn · connected"; in red
+"cronos-vpn · offline" with "The session has no internet until it's back.";
+in amber "None · the repositories name different ones (a, b)"; in red
+"couldn't use it" with Tailscale's error; "not in use" when the Pod doesn't
+use it; or just the name when tailscaled didn't answer. Without an exit node
+there's no row.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0035.
+diff --git a/web/src/components/composer/EnvironmentMenu.test.tsx b/web/src/components/composer/EnvironmentMenu.test.tsx
+index 0374a73..6391187 100644
+--- a/web/src/components/composer/EnvironmentMenu.test.tsx
++++ b/web/src/components/composer/EnvironmentMenu.test.tsx
+@@ -353,6 +353,73 @@ describe("EnvironmentMenu status rows", () => {
+   });
+ });
+ 
++describe("EnvironmentMenu exit node row", () => {
++  const STATUS = { pod_started_at: Date.now() / 1000 - 600, cpu_cores: 0.2 };
++  const row = () => screen.getByTestId("environment-exit-node");
++
++  it("has no row when the repositories name no exit node", () => {
++    renderMenu({ state: "idle", status: STATUS });
++    expect(screen.queryByText("Exit node")).toBeNull();
++    expect(screen.queryByTestId("environment-exit-node")).toBeNull();
++  });
++
++  it("shows a connected exit node", () => {
++    renderMenu({
++      state: "idle",
++      status: { ...STATUS, exit_node: { state: "connected", name: "cronos-vpn" } },
++    });
++    expect(screen.getByText("Exit node")).toBeInTheDocument();
++    expect(row()).toHaveTextContent("cronos-vpn · connected");
++    expect(screen.getByText("cronos-vpn")).toHaveClass("font-mono");
++  });
++
++  it("says the session has no internet while it's offline", () => {
++    renderMenu({
++      state: "running",
++      status: { ...STATUS, exit_node: { state: "offline", name: "cronos-vpn" } },
++    });
++    expect(row()).toHaveTextContent(
++      "cronos-vpn · offlineThe session has no internet until it's back.",
++    );
++    expect(screen.getByText(/· offline/)).toHaveClass("text-destructive");
++  });
++
++  it("warns when the repositories name different exit nodes", () => {
++    renderMenu({
++      state: "idle",
++      status: { ...STATUS, exit_node: { state: "conflict", names: ["cronos-vpn", "office-exit"] } },
++    });
++    expect(row()).toHaveTextContent(
++      "None · the repositories name different ones (cronos-vpn, office-exit)",
++    );
++    expect(row()).toHaveClass("text-warning");
++  });
++
++  it("says why Tailscale refused it", () => {
++    renderMenu({
++      state: "idle",
++      status: {
++        ...STATUS,
++        exit_node: { state: "failed", name: "no-such-node", error: "no node found in netmap" },
++      },
++    });
++    expect(row()).toHaveTextContent("no-such-node · couldn't use itno node found in netmap");
++  });
++
++  it("says when the session doesn't use it, and names it when tailscaled didn't answer", () => {
++    const { rerender } = renderMenu({
++      state: "idle",
++      status: { ...STATUS, exit_node: { state: "off", name: "cronos-vpn" } },
++    });
++    expect(row()).toHaveTextContent("cronos-vpn · not in use");
++    rerenderMenu(rerender, {
++      state: "idle",
++      status: { ...STATUS, exit_node: { state: "unknown", name: "cronos-vpn" } },
++    });
++    expect(row()).toHaveTextContent(/^cronos-vpn$/);
++  });
++});
++
+ describe("EnvironmentMenu: Start now and Keep running", () => {
+   it("starts a stopped sandbox without a message", async () => {
+     renderMenu({ state: "stopped" });
+diff --git a/web/src/components/composer/EnvironmentMenu.tsx b/web/src/components/composer/EnvironmentMenu.tsx
+index 8b9ddad..81f9776 100644
+--- a/web/src/components/composer/EnvironmentMenu.tsx
++++ b/web/src/components/composer/EnvironmentMenu.tsx
+@@ -404,6 +404,63 @@ function PodRow({ view, now }: { view: EnvironmentView; now: number }) {
+   );
+ }
+ 
++/**
++ * The tailnet exit node the session's repositories name, and whether it's
++ * up: while it's offline the session has no internet. No row without one.
++ */
++function ExitNodeRow({ status }: { status: SessionEnvironment }) {
++  const node = status.exit_node;
++  if (!node) return null;
++  if (node.state === "conflict") {
++    return (
++      <Row label="Exit node">
++        <span data-testid="environment-exit-node" data-state={node.state} className="text-warning">
++          None · the repositories name different ones ({(node.names ?? []).join(", ")})
++        </span>
++      </Row>
++    );
++  }
++  const name = <span className="font-mono">{node.name}</span>;
++  const content = {
++    connected: (
++      <>
++        {name} <Muted>· connected</Muted>
++      </>
++    ),
++    offline: (
++      <>
++        <span className="text-destructive">{name} · offline</span>
++        <span className="block text-muted-foreground">
++          The session has no internet until it's back.
++        </span>
++      </>
++    ),
++    failed: (
++      <>
++        <span className="text-destructive">{name} · couldn't use it</span>
++        {node.error && (
++          <span className="block break-words text-[11px] leading-4 text-muted-foreground">
++            {node.error}
++          </span>
++        )}
++      </>
++    ),
++    off: (
++      <>
++        {name} <Muted>· not in use</Muted>
++      </>
++    ),
++    unknown: name,
++  }[node.state];
++  return (
++    <Row label="Exit node">
++      <span data-testid="environment-exit-node" data-state={node.state}>
++        {content}
++      </span>
++    </Row>
++  );
++}
++
+ /** "Keep running" in force: `"forever"`, the time it ends, or `null`. */
+ function keptRunning(status: SessionEnvironment | null | undefined, now: number) {
+   if (status?.keep_running_forever) return "forever" as const;
+@@ -457,6 +514,7 @@ function Body({ view }: { view: EnvironmentView }) {
+         <>
+           <AgentRow view={view} now={now} />
+           <PodRow view={view} now={now} />
++          {status && <ExitNodeRow status={status} />}
+           {status && <DiskRow status={status} />}
+           <IdleStopRow view={view} now={now} />
+         </>
+diff --git a/web/src/hooks/useSessionEnvironment.ts b/web/src/hooks/useSessionEnvironment.ts
+index 8247c9c..7787b1e 100644
+--- a/web/src/hooks/useSessionEnvironment.ts
++++ b/web/src/hooks/useSessionEnvironment.ts
+@@ -31,6 +31,21 @@ export interface SessionEnvironment {
+   keep_running_hours?: number;
+   /** "Keep running": until the user stops it. */
+   keep_running_forever?: boolean;
++  /** The tailnet exit node the session's repositories name; absent without one. */
++  exit_node?: SessionExitNode;
++}
++
++/**
++ * A session's exit node, as its runner reports it: `connected` or `offline`;
++ * `off` when the Pod doesn't use it; `failed` when Tailscale refused it
++ * (`error` says why); `conflict` when the repositories name different ones
++ * (`names`), so the Pod uses none; `unknown` when tailscaled didn't answer.
++ */
++export interface SessionExitNode {
++  state: "connected" | "offline" | "off" | "failed" | "conflict" | "unknown";
++  name?: string;
++  names?: string[];
++  error?: string;
+ }
+ 
+ /** The "Keep running" choice: for some hours, for good, or the usual idle timeout (`{}`). */
