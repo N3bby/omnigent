@@ -1,0 +1,306 @@
+The environment menu's exit node, runner side: report it with the Pod's use.
+
+A session whose repositories name a tailnet exit node sends all its internet
+traffic through it, so while it's offline the session has no internet, and
+the agent can't reach its model either. Each report now carries exit_node:
+the Pod's Tailscale service (images/runner/tailscale/tailscale-service.sh)
+writes what it did with it to /run/omnigent-tailscale.exit-node.json,
+{"name": ...}, with "error" when Tailscale refused it, or {"names": [...]}
+when the repositories name different ones. read_exit_node reads that file and
+asks tailscaled's LocalAPI over its socket (status, peers=false) whether the
+exit node is online: state connected, offline, off (the Pod doesn't use it,
+such as after the agent switched it off), failed, conflict, or unknown when
+tailscaled doesn't answer. Without the file, exit_node is null and the menu
+has no row. Over the socket rather than `tailscale status`, so a report never
+starts a process.
+Pairs with the server patch 0021-environment-exit-node.patch.
+Applies after 0011-environment-menu.patch. Base: omnigent v0.18.0 (a8676d23e88d).
+
+diff --git a/omnigent/runner/environment_report.py b/omnigent/runner/environment_report.py
+index fb5e125..dfd27bc 100644
+--- a/omnigent/runner/environment_report.py
++++ b/omnigent/runner/environment_report.py
+@@ -12,6 +12,11 @@ Pushed rather than fetched through the runner tunnel on purpose: every request
+ the tunnel delivers counts as activity, so polling the runner would keep an
+ idle agent from ever exiting.
+ 
++A session whose repositories name a tailnet exit node also reports it, with
++whether it's online, so the menu can say when it's down: the session then has
++no internet. The Pod's Tailscale service writes what it did with it to
++:data:`EXIT_NODE_FILE`, and tailscaled's LocalAPI says whether it's online.
++
+ Usage comes from cgroup v2, which in a Pod is the runner container's own:
+ ``cpu.stat`` ``usage_usec`` deltas for CPU, and ``memory.current`` minus
+ ``inactive_file`` for memory, the working set the kubelet reports.
+@@ -27,6 +32,7 @@ idle deadline still reaches the runner in time.
+ from __future__ import annotations
+ 
+ import asyncio
++import json
+ import logging
+ import os
+ import time
+@@ -53,6 +59,15 @@ Long enough to ride out a server restart."""
+ 
+ CGROUP_ROOT = Path("/sys/fs/cgroup")
+ 
++EXIT_NODE_FILE = Path("/run/omnigent-tailscale.exit-node.json")
++"""What the Pod's Tailscale service did with the exit node the session's
++repositories name: ``{"name": ...}``, with ``"error"`` when Tailscale refused
++it, or ``{"names": [...]}`` when they name different ones. Missing without one."""
++
++TAILSCALED_SOCKET = Path("/run/tailscale/tailscaled.sock")
++
++_EXIT_NODE_ERROR_MAX = 500
++
+ 
+ def reporting_enabled() -> bool:
+     """
+@@ -99,6 +114,67 @@ def read_memory_working_set(root: Path = CGROUP_ROOT) -> int | None:
+     return max(0, current - inactive)
+ 
+ 
++def read_exit_node_file(path: Path = EXIT_NODE_FILE) -> dict[str, object] | None:
++    """
++    The exit node the Pod's Tailscale service was asked to use, from its file.
++
++    :returns: ``state`` ``conflict`` with the ``names``, ``failed`` with the
++        ``name`` and Tailscale's ``error``, or ``unknown`` with the ``name``
++        until tailscaled says whether it's online; ``None`` without one.
++    """
++    try:
++        data = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, ValueError):
++        return None
++    if not isinstance(data, dict):
++        return None
++    names = [name for name in data.get("names") or [] if isinstance(name, str) and name]
++    if len(names) > 1:
++        return {"state": "conflict", "names": names[:16]}
++    name = data.get("name")
++    if not isinstance(name, str) or not name:
++        return None
++    error = data.get("error")
++    if isinstance(error, str) and error:
++        return {"state": "failed", "name": name, "error": error[:_EXIT_NODE_ERROR_MAX]}
++    return {"state": "unknown", "name": name}
++
++
++async def read_exit_node(
++    path: Path = EXIT_NODE_FILE, *, tailscaled: httpx.AsyncBaseTransport | None = None
++) -> dict[str, object] | None:
++    """
++    The session's exit node, and whether it's online.
++
++    Asks tailscaled's LocalAPI for the Pod's status: ``connected`` or
++    ``offline`` from its ``ExitNodeStatus``, or ``off`` without one, such as
++    after the agent switched it off. ``unknown`` when tailscaled doesn't answer.
++
++    :param tailscaled: The transport to tailscaled; its socket by default.
++    """
++    node = read_exit_node_file(path)
++    if node is None or node["state"] != "unknown":
++        return node
++    transport = tailscaled or httpx.AsyncHTTPTransport(uds=str(TAILSCALED_SOCKET))
++    try:
++        async with httpx.AsyncClient(
++            transport=transport, base_url="http://local-tailscaled.sock", timeout=2.0
++        ) as client:
++            response = await client.get(
++                "/localapi/v0/status",
++                params={"peers": "false"},
++                headers={"Sec-Tailscale": "localapi"},
++            )
++            response.raise_for_status()
++            status = response.json()
++    except (httpx.HTTPError, OSError, ValueError):
++        return node
++    exit_status = status.get("ExitNodeStatus") if isinstance(status, dict) else None
++    if not isinstance(exit_status, dict):
++        return {**node, "state": "off"}
++    return {**node, "state": "connected" if exit_status.get("Online") is True else "offline"}
++
++
+ @dataclass
+ class _CpuSample:
+     usage_usec: int
+@@ -118,6 +194,9 @@ class EnvironmentReporter:
+         event loop's clock, as the idle monitor reads it.
+     :param has_active_work: Whether the agent is working on something.
+     :param cgroup_root: Where cgroup v2 is mounted.
++    :param exit_node_file: Where the Pod's Tailscale service says what it did
++        with the session's exit node.
++    :param tailscaled: The transport to tailscaled's LocalAPI; its socket by default.
+     """
+ 
+     def __init__(
+@@ -129,6 +208,8 @@ class EnvironmentReporter:
+         last_activity: Callable[[], float],
+         has_active_work: Callable[[], bool],
+         cgroup_root: Path = CGROUP_ROOT,
++        exit_node_file: Path = EXIT_NODE_FILE,
++        tailscaled: httpx.AsyncBaseTransport | None = None,
+     ) -> None:
+         self._client = client
+         self._session_id = session_id
+@@ -136,6 +217,8 @@ class EnvironmentReporter:
+         self._last_activity = last_activity
+         self._has_active_work = has_active_work
+         self._cgroup_root = cgroup_root
++        self._exit_node_file = exit_node_file
++        self._tailscaled = tailscaled
+         self._cpu: _CpuSample | None = None
+         # "Keep running" from the server: until when (Unix seconds), or for good.
+         self._keep_running_until: float | None = None
+@@ -190,6 +273,13 @@ class EnvironmentReporter:
+             "agent_exits_at": exits_at,
+         }
+ 
++    async def report(self) -> dict[str, object]:
++        """The :meth:`snapshot`, with the session's exit node."""
++        return {
++            **self.snapshot(),
++            "exit_node": await read_exit_node(self._exit_node_file, tailscaled=self._tailscaled),
++        }
++
+     def _keep_running_from(self, response: httpx.Response) -> None:
+         """Take the "Keep running" choice from the server's answer to a report."""
+         try:
+@@ -213,7 +303,7 @@ class EnvironmentReporter:
+         try:
+             response = await self._client.post(
+                 f"/v1/sessions/{self._session_id}/environment/report",
+-                json=self.snapshot(),
++                json=await self.report(),
+                 timeout=5.0,
+             )
+             if 400 <= response.status_code < 500:
+diff --git a/tests/runner/test_environment_report_exit_node.py b/tests/runner/test_environment_report_exit_node.py
+new file mode 100644
+index 0000000..69620a7
+--- /dev/null
++++ b/tests/runner/test_environment_report_exit_node.py
+@@ -0,0 +1,123 @@
++"""The runner's environment reports: the exit node the session's repositories name."""
++
++from __future__ import annotations
++
++import asyncio
++import json
++from pathlib import Path
++
++import httpx
++import pytest
++
++from omnigent.runner.environment_report import (
++    EnvironmentReporter,
++    read_exit_node,
++    read_exit_node_file,
++)
++
++pytestmark = pytest.mark.asyncio
++
++
++def _tailscaled(status: object, *, code: int = 200) -> httpx.MockTransport:
++    """tailscaled's LocalAPI, answering its status with ``status``."""
++
++    def _handler(request: httpx.Request) -> httpx.Response:
++        assert request.url.path == "/localapi/v0/status"
++        assert request.url.params["peers"] == "false"
++        assert request.headers["Sec-Tailscale"] == "localapi"
++        return httpx.Response(code, json=status)
++
++    return httpx.MockTransport(_handler)
++
++
++def _written(tmp_path: Path, data: object) -> Path:
++    path = tmp_path / "exit-node.json"
++    path.write_text(json.dumps(data))
++    return path
++
++
++ONLINE = {"ExitNodeStatus": {"ID": "n1", "Online": True, "TailscaleIPs": ["100.1.2.3/32"]}}
++
++
++@pytest.mark.parametrize(
++    ("status", "state"),
++    [
++        (ONLINE, "connected"),
++        ({"ExitNodeStatus": {"ID": "n1", "Online": False}}, "offline"),
++        # The agent switched it off with `tailscale set --exit-node=`.
++        ({"BackendState": "Running"}, "off"),
++    ],
++)
++async def test_says_whether_the_exit_node_is_online(
++    tmp_path: Path, status: object, state: str
++) -> None:
++    path = _written(tmp_path, {"name": "cronos-vpn"})
++    assert await read_exit_node(path, tailscaled=_tailscaled(status)) == {
++        "state": state,
++        "name": "cronos-vpn",
++    }
++
++
++async def test_without_tailscaled_the_state_is_unknown(tmp_path: Path) -> None:
++    def _gone(request: httpx.Request) -> httpx.Response:
++        raise httpx.ConnectError("no socket", request=request)
++
++    path = _written(tmp_path, {"name": "cronos-vpn"})
++    for transport in (_tailscaled({}, code=503), httpx.MockTransport(_gone)):
++        assert await read_exit_node(path, tailscaled=transport) == {
++            "state": "unknown",
++            "name": "cronos-vpn",
++        }
++
++
++async def test_repositories_naming_different_ones_is_a_conflict(tmp_path: Path) -> None:
++    path = _written(tmp_path, {"names": ["cronos-vpn", "office-exit"]})
++    # tailscaled isn't asked: the Pod uses none.
++    assert await read_exit_node(path, tailscaled=_tailscaled({}, code=500)) == {
++        "state": "conflict",
++        "names": ["cronos-vpn", "office-exit"],
++    }
++
++
++async def test_one_tailscale_refused_says_why(tmp_path: Path) -> None:
++    path = _written(tmp_path, {"name": "no-such-node", "error": "x" * 2000})
++    node = read_exit_node_file(path)
++    assert node is not None
++    assert node["state"] == "failed" and node["name"] == "no-such-node"
++    # Short enough for the server to take the report.
++    assert node["error"] == "x" * 500
++
++
++@pytest.mark.parametrize("content", [None, "", "not json", "[]", '{"name": ""}', '{"names": []}'])
++async def test_without_an_exit_node_there_is_none(tmp_path: Path, content: str | None) -> None:
++    path = tmp_path / "exit-node.json"
++    if content is not None:
++        path.write_text(content)
++    assert await read_exit_node(path, tailscaled=_tailscaled(ONLINE)) is None
++
++
++async def test_the_report_carries_the_exit_node(tmp_path: Path) -> None:
++    posted: list[dict[str, object]] = []
++
++    def _server(request: httpx.Request) -> httpx.Response:
++        posted.append(json.loads(request.content))
++        return httpx.Response(204)
++
++    client = httpx.AsyncClient(base_url="http://server", transport=httpx.MockTransport(_server))
++    since = asyncio.get_running_loop().time()
++    reporter = EnvironmentReporter(
++        client=client,
++        session_id="conv_1",
++        idle_timeout_s=1800.0,
++        last_activity=lambda: since,
++        has_active_work=lambda: False,
++        cgroup_root=tmp_path,
++        exit_node_file=_written(tmp_path, {"name": "cronos-vpn"}),
++        tailscaled=_tailscaled(ONLINE),
++    )
++    try:
++        await reporter.send()
++    finally:
++        await client.aclose()
++    assert posted[0]["exit_node"] == {"state": "connected", "name": "cronos-vpn"}
++    assert posted[0]["agent_active"] is False

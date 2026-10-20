@@ -74,6 +74,7 @@ PASS  images/runner/patches/0008-subscription-readiness.patch
 PASS  images/runner/patches/0009-stop-codex-process.patch
 PASS  images/runner/patches/0010-subscription-in-use.patch
 PASS  images/runner/patches/0011-environment-menu.patch
+PASS  images/runner/patches/0012-environment-exit-node.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -95,6 +96,7 @@ PASS  images/server/patches/0017-codex-bypass-default.patch
 PASS  images/server/patches/0018-binary-preview-gzip.patch
 PASS  images/server/patches/0019-mcp-servers.patch
 PASS  images/server/patches/0020-stop-message-waiting-for-sandbox.patch
+PASS  images/server/patches/0021-environment-exit-node.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -132,6 +134,7 @@ PASS  images/server/web-patches/0033-inline-media.patch
 PASS  images/server/web-patches/0034-copy-image.patch
 PASS  images/server/web-patches/0035-remove-voice-dictation.patch
 PASS  images/server/web-patches/0036-repo-exit-node.patch
+PASS  images/server/web-patches/0037-environment-exit-node.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -204,7 +207,7 @@ patch sets, and runs the following suites against that source:
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
 | Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx` | 2415 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py` | 352 passed, 1 skipped |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py` | 352 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
@@ -233,7 +236,11 @@ and plain http doesn't. Copying an image (`0034-copy-image.patch`) adds
 three lightbox cases and `clipboard.test.ts` (6 cases, 2 of them new). A
 repository's exit node (`0036-repo-exit-node.patch`) adds 4 cases to
 `RepoVariablesPage.test.tsx`, 1 to `RepoEnvBadge.test.tsx`, and
-`repoEnv.test.ts`'s exit node check. These are
+`repoEnv.test.ts`'s exit node check. The environment menu's exit node row
+(`0037-environment-exit-node.patch`) adds 6 cases to
+`EnvironmentMenu.test.tsx`, and its runner and server patches add
+`test_environment_report_exit_node.py` and
+`test_session_environment_exit_node.py`. These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -812,7 +819,9 @@ after the next message it names `feature-check`. Switch back, then remove
     in its startup log, and its Tailscale line ends with
     `through exit node <name>`. In the session, `curl https://ifconfig.me`
     prints the exit node's address, and step 4's `check-runner` passes
-    `uses this session's repository's exit node`. Switch it off again.
+    `uses this session's repository's exit node`. The composer's environment
+    menu has an **Exit node** row, `<name> · connected`; a session on a
+    repository without one has no row. Switch it off again.
 
 ## 7. Clean up
 
