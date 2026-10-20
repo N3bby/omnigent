@@ -1,0 +1,666 @@
+Give a repository a Tailscale exit node in Settings -> Repository variables,
+and show it on the repository's card and in the new-session form.
+
+The editor gets an "Exit node" switch after the setup script, with a
+single-line field for the exit node's machine name, MagicDNS name or
+Tailscale IP. Unlike a value or the SSH key it isn't secret, so it comes back
+to be edited, like the instructions. Saving sends exit_node to
+PUT /v1/repo-env (images/server/omnigent_repo_env_api.py): the name while
+it's on, null to remove a stored one switched off, and nothing otherwise, so
+the server keeps what it has. exitNodeError (lib/repoEnv.ts) checks the name
+as the server does: 1-253 letters, digits, dots, dashes and colons. An exit
+node alone is enough to save a repository.
+
+The card lists "exit node" in its summary and shows "Exit node <name>"
+under the instructions and script; the remove question names it too.
+RepoEnvBadge shows a route icon for it, and its popover says internet
+traffic and the clone go through it. GET /v1/repo-env and
+GET /v1/repo-env/names return exit_node; an older server leaves it out,
+which reads as none.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0034.
+diff --git a/web/src/components/RepoEnvBadge.test.tsx b/web/src/components/RepoEnvBadge.test.tsx
+index 125f857..a381953 100644
+--- a/web/src/components/RepoEnvBadge.test.tsx
++++ b/web/src/components/RepoEnvBadge.test.tsx
+@@ -12,6 +12,7 @@ function renderBadge(
+   instructions = false,
+   setupScript = false,
+   mcpServers?: { name: string; agents: string[]; host: string | null }[],
++  exitNode?: string,
+ ) {
+   vi.mocked(identity.authenticatedFetch).mockResolvedValue(
+     new Response(
+@@ -22,6 +23,8 @@ function renderBadge(
+         setup_script: setupScript,
+         // Left out, as a server from before MCP servers sends it.
+         ...(mcpServers && { mcp_servers: mcpServers }),
++        // Likewise for a server from before exit nodes.
++        ...(exitNode && { exit_node: exitNode }),
+       }),
+     ),
+   );
+@@ -68,6 +71,29 @@ describe("RepoEnvBadge", () => {
+     expect(screen.queryByText("The agent gets these in its environment:")).not.toBeInTheDocument();
+   });
+ 
++  it("names the repository's exit node, even without variables", async () => {
++    renderBadge("https://gitlab.cronos.example/acme/api.git", [], false, false, [], "cronos-exit");
++    fireEvent.click(
++      await screen.findByRole("button", { name: "an exit node for this repository" }),
++    );
++    expect(await screen.findByText("Exit node")).toBeInTheDocument();
++    expect(screen.getByText("cronos-exit")).toHaveClass("font-mono");
++    cleanup();
++    renderBadge(
++      "https://gitlab.cronos.example/acme/api.git",
++      ["TOKEN"],
++      true,
++      false,
++      [],
++      "cronos-exit",
++    );
++    expect(
++      await screen.findByRole("button", {
++        name: "1 variable, agent instructions and an exit node for this repository",
++      }),
++    ).toBeInTheDocument();
++  });
++
+   it("lists the repository's MCP servers with their icons", async () => {
+     renderBadge("https://github.com/kunlabora/roadpass.git", [], false, false, [
+       { name: "figma", agents: ["claude", "codex"], host: null },
+diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
+index 2524d4d..5d9c660 100644
+--- a/web/src/components/RepoEnvBadge.tsx
++++ b/web/src/components/RepoEnvBadge.tsx
+@@ -1,14 +1,21 @@
+ /**
+  * "2 variables" next to a repository in the new-session form, when the
+  * repository has variables (added by this deployment), with an icon each for
+- * its agent instructions, setup script and MCP servers. Clicking it lists the
+- * variables' names, what the instructions and script do, and the MCP servers;
+- * values, text and the servers' keys never reach the browser. Renders nothing
++ * its agent instructions, setup script, exit node and MCP servers. Clicking it
++ * lists the variables' names, what the instructions and script do, the exit
++ * node and the MCP servers; values, text and the servers' keys never reach the
++ * browser. Renders nothing
+  * for a repository without any, or while they load.
+  */
+ 
+ import type { ReactNode } from "react";
+-import { FolderKeyIcon, PlugIcon, ScrollTextIcon, SquareTerminalIcon } from "lucide-react";
++import {
++  FolderKeyIcon,
++  PlugIcon,
++  RouteIcon,
++  ScrollTextIcon,
++  SquareTerminalIcon,
++} from "lucide-react";
+ import { McpServerIcon } from "@/components/McpServerIcon";
+ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+ import { useRepoEnvNames } from "@/hooks/useRepoEnv";
+@@ -22,13 +29,20 @@ function joinAnd(parts: string[]): string {
+ export function RepoEnvBadge({ url }: { url: string }) {
+   const { data } = useRepoEnvNames(url);
+   if (!data) return null;
+-  const { names, instructions, setup_script: setupScript, mcp_servers: servers } = data;
+-  if (!names.length && !instructions && !setupScript && !servers.length) return null;
++  const {
++    names,
++    instructions,
++    setup_script: setupScript,
++    exit_node: exitNode,
++    mcp_servers: servers,
++  } = data;
++  if (!names.length && !instructions && !setupScript && !exitNode && !servers.length) return null;
+   const label = `${names.length} variable${names.length === 1 ? "" : "s"}`;
+   const parts = [
+     ...(names.length ? [label] : []),
+     ...(instructions ? ["agent instructions"] : []),
+     ...(setupScript ? ["a setup script"] : []),
++    ...(exitNode ? ["an exit node"] : []),
+     ...(servers.length ? [`${servers.length} MCP server${servers.length === 1 ? "" : "s"}`] : []),
+   ];
+   return (
+@@ -61,6 +75,11 @@ export function RepoEnvBadge({ url }: { url: string }) {
+               <SquareTerminalIcon className="size-3.5" />
+             </span>
+           )}
++          {exitNode && (
++            <span className="cap-icon">
++              <RouteIcon className="size-3.5" />
++            </span>
++          )}
+           {servers.length > 0 && (
+             <span className="cap-icon">
+               <PlugIcon className="size-3.5" />
+@@ -97,6 +116,12 @@ export function RepoEnvBadge({ url }: { url: string }) {
+             Runs in the checkout once, before the agent starts.
+           </BadgeItem>
+         )}
++        {exitNode && (
++          <BadgeItem icon={<RouteIcon className="ui-icon" />} title="Exit node">
++            Internet traffic and the clone go through{" "}
++            <span className="font-mono text-foreground">{exitNode}</span> on your tailnet.
++          </BadgeItem>
++        )}
+         {servers.length > 0 && (
+           <BadgeItem icon={<PlugIcon className="ui-icon" />} title="MCP servers">
+             The agent connects to these when it starts, along with the ones for every session.
+diff --git a/web/src/hooks/useRepoEnv.ts b/web/src/hooks/useRepoEnv.ts
+index 34ead4c..4e9ed63 100644
+--- a/web/src/hooks/useRepoEnv.ts
++++ b/web/src/hooks/useRepoEnv.ts
+@@ -60,7 +60,8 @@ function useInvalidate() {
+ 
+ /**
+  * Store a repository's variables, null keeping a variable's current value,
+- * and its agent instructions and setup script, null removing them.
++ * and its agent instructions and setup script, null removing them, and its
++ * SSH key and exit node.
+  */
+ export function useSaveRepoEnv() {
+   const invalidate = useInvalidate();
+@@ -72,11 +73,14 @@ export function useSaveRepoEnv() {
+       setup_script: string | null;
+       /** A new SSH key, null to remove it, or left out to keep it. */
+       ssh_key?: string | null;
++      /** The exit node's name or IP, null to remove it, or left out to keep it. */
++      exit_node?: string | null;
+     }) =>
+       saveRepoEnv(args.repository, args.variables, {
+         instructions: args.instructions,
+         setup_script: args.setup_script,
+         ssh_key: args.ssh_key,
++        exit_node: args.exit_node,
+       }),
+     onSuccess: invalidate,
+   });
+diff --git a/web/src/lib/repoEnv.test.ts b/web/src/lib/repoEnv.test.ts
+index a4d3347..ceca6e3 100644
+--- a/web/src/lib/repoEnv.test.ts
++++ b/web/src/lib/repoEnv.test.ts
+@@ -1,8 +1,8 @@
+-// repoKey and variableNameError mirror omnigent_repo_env.py; these cases are
++// repoKey, variableNameError and exitNodeError mirror omnigent_repo_env.py; these cases are
+ // the ones its tests use, so the page's preview matches what the server stores.
+ 
+ import { describe, expect, it } from "vitest";
+-import { parseEnv, repoKey, variableNameError } from "./repoEnv";
++import { exitNodeError, parseEnv, repoKey, variableNameError } from "./repoEnv";
+ 
+ describe("repoKey", () => {
+   it("gives every way of writing a repository one key", () => {
+@@ -45,6 +45,25 @@ describe("variableNameError", () => {
+   });
+ });
+ 
++describe("exitNodeError", () => {
++  it("allows a machine name, MagicDNS name or IP, and rejects anything else", () => {
++    for (const ok of [
++      "cronos-exit",
++      " cronos-exit.taild5bc1b.ts.net ",
++      "100.101.102.103",
++      "fd7a:115c:a1e0::1",
++    ]) {
++      expect(exitNodeError(ok)).toBeNull();
++    }
++    expect(exitNodeError("  ")).toBe("Name the exit node, or switch it off.");
++    for (const bad of ["cronos exit", "exit;rm", "a".repeat(254), "node/1"]) {
++      expect(exitNodeError(bad)).toBe(
++        "Use the exit node's machine name, MagicDNS name or Tailscale IP.",
++      );
++    }
++  });
++});
++
+ describe("parseEnv", () => {
+   it("parses a .env file without expanding", () => {
+     expect(
+diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
+index a3c6401..6f9b9d5 100644
+--- a/web/src/lib/repoEnv.ts
++++ b/web/src/lib/repoEnv.ts
+@@ -5,7 +5,8 @@
+  *
+  * Values only go to the server. Listing returns names, and saving a name
+  * with ``null`` keeps its current value. The same goes for a repository's
+- * SSH key, which clones its SSH URLs. ``repoKey`` and ``checkVariableName``
++ * SSH key, which clones its SSH URLs. Its exit node isn't secret: it comes
++ * back like the instructions. ``repoKey`` and ``checkVariableName``
+  * mirror ``omnigent_repo_env.py`` so the page can preview the key a URL
+  * matches and flag names before saving; the server checks again.
+  */
+@@ -33,6 +34,11 @@ export interface RepoEnvEntry {
+    * servers before SSH keys.
+    */
+   ssh_key?: boolean;
++  /**
++   * The Tailscale exit node its sessions send their internet traffic
++   * through, by name or IP, or null. Missing from servers before exit nodes.
++   */
++  exit_node?: string | null;
+   /** ISO-8601 time of the last change, or null. */
+   updated_at: string | null;
+   /** Who last saved them from this page, or null (e.g. the CLI). */
+@@ -112,6 +118,21 @@ export function variableNameError(name: string): string | null {
+   return null;
+ }
+ 
++const EXIT_NODE = /^[A-Za-z0-9.:-]{1,253}$/;
++
++/**
++ * Why an exit node can't be used, or null when it can: a Tailscale machine
++ * name, MagicDNS name or IP, as the server checks it.
++ */
++export function exitNodeError(exitNode: string): string | null {
++  const text = exitNode.trim();
++  if (!text) return "Name the exit node, or switch it off.";
++  if (!EXIT_NODE.test(text)) {
++    return "Use the exit node's machine name, MagicDNS name or Tailscale IP.";
++  }
++  return null;
++}
++
+ /**
+  * Parse ``NAME=value`` lines, as in a ``.env`` file, like the CLI does.
+  * Blank lines and ``#`` comments are skipped, ``export`` is allowed and one
+@@ -168,6 +189,8 @@ export interface RepoEnvSummary {
+   mcp_servers: RepoMcpServer[];
+   /** Whether it has an SSH key; false from older servers. */
+   ssh_key: boolean;
++  /** Its sessions' Tailscale exit node, or null; null from older servers. */
++  exit_node: string | null;
+ }
+ 
+ /** A repository's MCP server as anyone signed in sees it: never its keys. */
+@@ -195,6 +218,7 @@ export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSumm
+     setup_script: body.setup_script ?? false,
+     mcp_servers: body.mcp_servers ?? [],
+     ssh_key: body.ssh_key ?? false,
++    exit_node: body.exit_node ?? null,
+   };
+ }
+ 
+@@ -204,13 +228,18 @@ export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSumm
+  * @param variables Each name's new value, or null to keep the current one.
+  *   Names left out are removed.
+  * @param texts The agent instructions and setup script, each the whole text
+- *   or null to remove it, and the SSH key: a new key, null to remove it, or
+- *   left out to keep it.
++ *   or null to remove it, and the SSH key and the exit node: a new one, null
++ *   to remove it, or left out to keep it.
+  */
+ export async function saveRepoEnv(
+   repository: string,
+   variables: Record<string, string | null>,
+-  texts: { instructions: string | null; setup_script: string | null; ssh_key?: string | null },
++  texts: {
++    instructions: string | null;
++    setup_script: string | null;
++    ssh_key?: string | null;
++    exit_node?: string | null;
++  },
+ ): Promise<RepoEnvEntry> {
+   const res = await authenticatedFetch("/v1/repo-env", {
+     method: "PUT",
+diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
+index efb4719..a1974e5 100644
+--- a/web/src/pages/RepoVariablesPage.test.tsx
++++ b/web/src/pages/RepoVariablesPage.test.tsx
+@@ -29,6 +29,8 @@ let requests: { method: string; url: string; body?: unknown }[];
+ let mcpServers: Record<string, string[]>;
+ // Each repository's SSH key, which the page never gets back.
+ let sshKeys: Record<string, string>;
++// Each repository's exit node, which comes back like the instructions.
++let exitNodes: Record<string, string>;
+ 
+ function json(status: number, body: unknown): Response {
+   return new Response(JSON.stringify(body), {
+@@ -45,6 +47,7 @@ function entry(repository: string) {
+     setup_script: texts[repository]?.setup_script ?? null,
+     mcp_servers: mcpServers[repository] ?? [],
+     ssh_key: repository in sshKeys,
++    exit_node: exitNodes[repository] ?? null,
+     updated_at: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+     updated_by: "levi",
+   };
+@@ -74,11 +77,14 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
+     }
+     const sshKey: string | null | undefined =
+       "ssh_key" in body ? body.ssh_key : sshKeys[body.repository];
++    const exitNode: string | null | undefined =
++      "exit_node" in body ? body.exit_node?.trim() || null : exitNodes[body.repository];
+     if (
+       !Object.keys(next).length &&
+       !nextTexts.instructions &&
+       !nextTexts.setup_script &&
+-      !sshKey
++      !sshKey &&
++      !exitNode
+     ) {
+       return json(400, { error: { message: "give at least one variable" } });
+     }
+@@ -88,6 +94,11 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
+     }
+     if (sshKey) keys[body.repository] = sshKey;
+     sshKeys = keys;
++    const nodes = Object.fromEntries(
++      Object.entries(exitNodes).filter(([repository]) => repository !== body.repository),
++    );
++    if (exitNode) nodes[body.repository] = exitNode;
++    exitNodes = nodes;
+     stored[body.repository] = next;
+     texts[body.repository] = nextTexts;
+     return json(200, entry(body.repository));
+@@ -116,6 +127,7 @@ beforeEach(() => {
+   texts = {};
+   mcpServers = {};
+   sshKeys = {};
++  exitNodes = {};
+   requests = [];
+   vi.mocked(identity.resolveIdentity).mockResolvedValue("levi");
+   vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(true);
+@@ -393,6 +405,95 @@ describe("RepoVariablesPage", () => {
+     expect(stored["gitlab.com/acme/api"]).toEqual({});
+   });
+ 
++  it("shows a repository's exit node on its card and in the remove question", async () => {
++    exitNodes[ROADPASS] = "cronos-exit";
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    expect(within(card).getByText(/2 variables · exit node · updated 3d ago/)).toBeInTheDocument();
++    expect(within(card).getByTestId("repo-env-card-exit-node")).toHaveTextContent(
++      "Exit nodecronos-exit",
++    );
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Remove variables for kunlabora/roadpass" }),
++    );
++    expect(within(card).getByText(/Remove 2 variables and the exit node for/)).toBeInTheDocument();
++  });
++
++  it("keeps, changes and removes a repository's exit node", async () => {
++    exitNodes[ROADPASS] = "cronos-exit";
++    renderPage();
++    let card = await screen.findByRole("article", { name: ROADPASS });
++    const edit = async () => {
++      card = await screen.findByRole("article", { name: ROADPASS });
++      const button = await within(card).findByRole("button", {
++        name: "Edit variables for kunlabora/roadpass",
++      });
++      fireEvent.click(button);
++      return within(card).getByTestId("repo-env-editor");
++    };
++    let editor = await edit();
++    expect(within(editor).getByRole("switch", { name: "Exit node" })).toBeChecked();
++    const field = within(editor).getByRole("textbox", { name: "Exit node" });
++    expect(field).toHaveValue("cronos-exit");
++    fireEvent.change(field, { target: { value: " cronos-exit-2.taild5bc1b.ts.net " } });
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(exitNodes[ROADPASS]).toBe("cronos-exit-2.taild5bc1b.ts.net"));
++    expect(requests.find((r) => r.method === "PUT")!.body).toMatchObject({
++      exit_node: "cronos-exit-2.taild5bc1b.ts.net",
++    });
++
++    editor = await edit();
++    fireEvent.click(within(editor).getByRole("switch", { name: "Exit node" }));
++    expect(within(editor).getByText("Saving removes the exit node.")).toBeInTheDocument();
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(exitNodes[ROADPASS]).toBeUndefined());
++    expect(requests.filter((r) => r.method === "PUT").at(-1)!.body).toMatchObject({
++      exit_node: null,
++    });
++  });
++
++  it("leaves the exit node out for a repository that has none", async () => {
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++    );
++    const editor = within(card).getByTestId("repo-env-editor");
++    expect(within(editor).getByRole("switch", { name: "Exit node" })).not.toBeChecked();
++    expect(within(editor).queryByRole("textbox", { name: "Exit node" })).toBeNull();
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true));
++    expect(requests.find((r) => r.method === "PUT")!.body).not.toHaveProperty("exit_node");
++  });
++
++  it("adds a repository with only an exit node, once it's a valid name", async () => {
++    renderPage();
++    await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(screen.getByRole("button", { name: "Add repository" }));
++    const editor = screen.getByTestId("repo-env-editor");
++    const save = within(editor).getByRole("button", { name: "Save" });
++    fireEvent.change(within(editor).getByLabelText("Repository"), {
++      target: { value: "https://gitlab.cronos.example/acme/api.git" },
++    });
++    fireEvent.click(within(editor).getByRole("switch", { name: "Exit node" }));
++    expect(within(editor).getByText("Name the exit node, or switch it off.")).toBeInTheDocument();
++    expect(save).toBeDisabled();
++    const field = within(editor).getByRole("textbox", { name: "Exit node" });
++    fireEvent.change(field, { target: { value: "cronos exit" } });
++    expect(
++      within(editor).getByText("Use the exit node's machine name, MagicDNS name or Tailscale IP."),
++    ).toBeInTheDocument();
++    expect(field).toHaveAttribute("aria-invalid", "true");
++    expect(save).toBeDisabled();
++    fireEvent.change(field, { target: { value: "100.101.102.103" } });
++    expect(save).toBeEnabled();
++    fireEvent.click(save);
++    await waitFor(() =>
++      expect(exitNodes["gitlab.cronos.example/acme/api"]).toBe("100.101.102.103"),
++    );
++    expect(stored["gitlab.cronos.example/acme/api"]).toEqual({});
++  });
++
+   it("shows a repository's instructions and setup script on its card", async () => {
+     texts[ROADPASS] = {
+       instructions: "Use pnpm, never npm.\n\nAsk before touching infra/.\n",
+diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
+index bbb69e0..f743e37 100644
+--- a/web/src/pages/RepoVariablesPage.tsx
++++ b/web/src/pages/RepoVariablesPage.tsx
+@@ -15,6 +15,9 @@
+  * appends to its own, and a setup script, which runs in the checkout before
+  * the agent starts. Unlike values, their text comes back to be edited.
+  *
++ * And it can name a Tailscale exit node: its sessions send their internet
++ * traffic through it, and clone through it. Not secret, so it's shown.
++ *
+  * Gated on the client by an admin check AND on the server by the routes.
+  */
+ 
+@@ -26,6 +29,7 @@ import {
+   KeyRoundIcon,
+   PencilIcon,
+   PlusIcon,
++  RouteIcon,
+   ScrollTextIcon,
+   SearchIcon,
+   SquareTerminalIcon,
+@@ -49,7 +53,14 @@ import { isSingleUserMode } from "@/lib/capabilities";
+ import { fetchGithubRepos } from "@/lib/githubIntegration";
+ import { getCurrentIsAdmin, resolveIdentity } from "@/lib/identity";
+ import { absoluteTime, relativeTime } from "@/lib/relativeTime";
+-import { GIT_TOKEN, type RepoEnvEntry, parseEnv, repoKey, variableNameError } from "@/lib/repoEnv";
++import {
++  GIT_TOKEN,
++  type RepoEnvEntry,
++  exitNodeError,
++  parseEnv,
++  repoKey,
++  variableNameError,
++} from "@/lib/repoEnv";
+ import { cn } from "@/lib/utils";
+ 
+ /** ``github.com/kunlabora/roadpass`` → ``["github.com", "kunlabora/roadpass"]``. */
+@@ -72,7 +83,12 @@ function mcpServerCount(entry: RepoEnvEntry): number {
+   return entry.mcp_servers?.length ?? 0;
+ }
+ 
+-/** ``"2 variables · Git token · SSH key · instructions · setup script · 1 MCP server"``, for a repository's card. */
++/** Its exit node, or null; missing from servers before exit nodes. */
++function exitNode(entry: RepoEnvEntry): string | null {
++  return entry.exit_node ?? null;
++}
++
++/** ``"2 variables · Git token · SSH key · instructions · setup script · exit node · 1 MCP server"``, for a repository's card. */
+ function summary(entry: RepoEnvEntry): string {
+   const { variables, token } = splitToken(entry.names);
+   const others =
+@@ -80,12 +96,14 @@ function summary(entry: RepoEnvEntry): string {
+     entry.ssh_key ||
+     entry.instructions !== null ||
+     entry.setup_script !== null ||
++    exitNode(entry) !== null ||
+     mcpServerCount(entry) > 0;
+   const parts = variables.length || !others ? [plural(variables.length, "variable")] : [];
+   if (token) parts.push("Git token");
+   if (entry.ssh_key) parts.push("SSH key");
+   if (entry.instructions !== null) parts.push("instructions");
+   if (entry.setup_script !== null) parts.push("setup script");
++  if (exitNode(entry) !== null) parts.push("exit node");
+   if (mcpServerCount(entry)) parts.push(plural(mcpServerCount(entry), "MCP server"));
+   return parts.join(" · ");
+ }
+@@ -104,6 +122,7 @@ function describe(entry: RepoEnvEntry): string {
+     ...(variables.length ? [plural(variables.length, "variable")] : []),
+     ...(entry.instructions !== null ? ["the agent instructions"] : []),
+     ...(entry.setup_script !== null ? ["the setup script"] : []),
++    ...(exitNode(entry) !== null ? ["the exit node"] : []),
+     ...(mcpServerCount(entry) ? [`its ${plural(mcpServerCount(entry), "MCP server")}`] : []),
+   ];
+   return parts.length ? joinAnd(parts) : plural(0, "variable");
+@@ -116,6 +135,7 @@ function onlyVariables(entry: RepoEnvEntry): boolean {
+     !entry.ssh_key &&
+     entry.instructions === null &&
+     entry.setup_script === null &&
++    exitNode(entry) === null &&
+     mcpServerCount(entry) === 0
+   );
+ }
+@@ -480,6 +500,20 @@ function RepositoryCard({
+                 mono
+               />
+             )}
++            {exitNode(entry) !== null && (
++              <p
++                className="flex min-w-0 items-center gap-1.5 text-sm"
++                data-testid="repo-env-card-exit-node"
++              >
++                <span className="cap-icon">
++                  <RouteIcon className="ui-icon shrink-0 text-muted-foreground" />
++                </span>
++                Exit node
++                <span className="min-w-0 truncate font-mono text-muted-foreground">
++                  {exitNode(entry)}
++                </span>
++              </p>
++            )}
+           </div>
+         )}
+       </div>
+@@ -584,6 +618,10 @@ function VariablesEditor({
+   const [instructions, setInstructions] = useState(entry?.instructions ?? "");
+   const [scriptOn, setScriptOn] = useState(entry ? entry.setup_script !== null : false);
+   const [script, setScript] = useState(entry?.setup_script ?? "");
++  // The exit node comes back too. Switched off, saving removes it.
++  const exitNodeStored = entry ? exitNode(entry) : null;
++  const [exitNodeOn, setExitNodeOn] = useState(exitNodeStored !== null);
++  const [exitNodeName, setExitNodeName] = useState(exitNodeStored ?? "");
+   const [pasting, setPasting] = useState(false);
+   const [pasteText, setPasteText] = useState("");
+   const [pasteError, setPasteError] = useState<string | null>(null);
+@@ -598,6 +636,7 @@ function VariablesEditor({
+   const missingSshKey = sshKeyOn && !sshKeyStored && !sshKey.trim();
+   const instructionsError = textError(instructionsOn, instructions, "instructions");
+   const scriptError = textError(scriptOn, script, "script");
++  const exitNodeProblem = exitNodeOn ? exitNodeError(exitNodeName) : null;
+   // Under its field once there's text; until then, why Save waits.
+   const blank = [instructionsOn && !instructions.trim(), scriptOn && !script.trim()];
+   const hint = missingValue
+@@ -610,19 +649,22 @@ function VariablesEditor({
+           ? instructionsError
+           : blank[1]
+             ? scriptError
+-            : pasting
+-              ? "Add the pasted lines first."
+-              : null;
++            : exitNodeOn && !exitNodeName.trim()
++              ? exitNodeProblem
++              : pasting
++                ? "Add the pasted lines first."
++                : null;
+   const canSave =
+     key !== null &&
+     !alreadyThere &&
+-    (named.length > 0 || tokenOn || sshKeyOn || instructionsOn || scriptOn) &&
++    (named.length > 0 || tokenOn || sshKeyOn || instructionsOn || scriptOn || exitNodeOn) &&
+     errors.every((e) => e === null) &&
+     !missingValue &&
+     !missingToken &&
+     !missingSshKey &&
+     instructionsError === null &&
+     scriptError === null &&
++    exitNodeProblem === null &&
+     !pasting &&
+     !save.isPending;
+ 
+@@ -682,6 +724,8 @@ function VariablesEditor({
+         setup_script: scriptOn ? script : null,
+         // Left out, the stored key stays.
+         ssh_key: sshKeyOn ? (sshKey.trim() ? sshKey : undefined) : sshKeyStored ? null : undefined,
++        // Left out, the stored exit node stays (and a page that never had one sends nothing).
++        exit_node: exitNodeOn ? exitNodeName.trim() : exitNodeStored !== null ? null : undefined,
+       },
+       {
+         onSuccess: (saved) => {
+@@ -936,6 +980,47 @@ function VariablesEditor({
+         with bash. The agent is told how it went.
+       </TextSetting>
+ 
++      <div className={SECTION} data-testid="repo-env-exit-node">
++        <div className="flex items-center gap-2">
++          <Switch
++            id="repo-env-exit-node"
++            checked={exitNodeOn}
++            onCheckedChange={setExitNodeOn}
++            componentId="settings.repo_env.exit_node"
++          />
++          <label htmlFor="repo-env-exit-node" className="text-sm font-medium text-muted-foreground">
++            Exit node
++          </label>
++        </div>
++        <p className="text-sm text-muted-foreground">
++          Sessions on this repository send their internet traffic through this Tailscale exit node,
++          and clone the repository through it, such as for a server that only accepts a VPN's
++          addresses. Your tailnet policy has to let sessions use it.
++        </p>
++        {exitNodeOn ? (
++          <>
++            <Input
++              value={exitNodeName}
++              onChange={(e) => setExitNodeName(e.target.value)}
++              placeholder="cronos-exit"
++              aria-label="Exit node"
++              aria-invalid={exitNodeName.trim() && exitNodeProblem ? true : undefined}
++              autoComplete="off"
++              autoCapitalize="off"
++              spellCheck={false}
++              className={cn("font-mono", TOUCH_HEIGHT)}
++            />
++            {exitNodeName.trim() && exitNodeProblem && (
++              <p className="text-sm text-destructive">{exitNodeProblem}</p>
++            )}
++          </>
++        ) : (
++          exitNodeStored !== null && (
++            <p className="text-sm text-muted-foreground">Saving removes the exit node.</p>
++          )
++        )}
++      </div>
++
+       <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
+         {hint && <span className="mr-auto text-sm text-muted-foreground">{hint}</span>}
+         <Button

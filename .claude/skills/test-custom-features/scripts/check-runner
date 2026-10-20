@@ -208,6 +208,36 @@ else
   sleep 1
   check "SOCKS5 proxy reaches $short" sh -c "curl -fsS -m 10 --proxy socks5h://localhost:1055 http://$short:$port/ | grep -qx ok"
   check "HTTP proxy reaches $dns" sh -c "curl -fsS -m 10 --proxy http://localhost:1055 http://$dns:$port/ | grep -qx ok"
+  # With the TUN device, the Pod routes tailnet traffic and resolves MagicDNS
+  # names itself (images/runner/tailscale/tailscale-service.sh).
+  if [[ -c /dev/net/tun ]]; then
+    check "TUN device: tailscale0 is up" ip link show tailscale0
+    check "the cluster's ranges skip the tailnet" sh -c "ip rule | grep -q 'to 10.43.0.0/16 lookup main'"
+    check "tailnet connections reach localhost-only servers" sh -c "nft list table ip omnigent-tailscale | grep -q 'dnat to 127.0.0.1'"
+    check "resolv.conf uses the MagicDNS forwarder" grep -qx 'nameserver 169.254.20.10' /etc/resolv.conf
+    check "$short resolves by MagicDNS" sh -c "getent hosts $short | grep -q '^100\\.'"
+    check "cluster names still resolve" getent hosts omnigent.omnigent.svc.cluster.local
+    rcode="$(python3 - "$(field "$status" 'd.get("MagicDNSSuffix") or ""')" 2>/dev/null <<'PY'
+import socket, struct, sys
+name = "omnigent-no-such-machine." + sys.argv[1]
+query = struct.pack(">HHHHHH", 1, 0x100, 1, 0, 0, 0) + b"".join(
+    bytes([len(p)]) + p.encode() for p in name.split(".")) + b"\0" + struct.pack(">HH", 1, 1)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(5)
+s.sendto(query, ("169.254.20.10", 53))
+print(s.recv(512)[3] & 15)
+PY
+)"
+    check "a name that's no tailnet machine is NXDOMAIN" test "$rcode" = 3
+  else
+    fail "TUN device /dev/net/tun" "the Pod uses the proxy; run mise run bootstrap"
+  fi
+  exit_node="$(cat /run/omnigent/repo-env/*/tailscale-exit-node 2>/dev/null | head -n1)"
+  if [[ -n "$exit_node" ]]; then
+    check "uses this session's repository's exit node $exit_node" test "$(field "$status" '(d.get("ExitNodeStatus") or {}).get("Online")')" = True
+  else
+    skip "exit node" "this session's repositories name none"
+  fi
 fi
 
 echo "== Runtimes from mise"

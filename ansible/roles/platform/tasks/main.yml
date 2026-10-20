@@ -40,6 +40,7 @@
       - --prune-allowlist=core/v1/Namespace
       - --prune-allowlist=core/v1/ResourceQuota
       - --prune-allowlist=core/v1/ServiceAccount
+      - --prune-allowlist=apps/v1/DaemonSet
       - --prune-allowlist=rbac.authorization.k8s.io/v1/ClusterRole
       - --prune-allowlist=rbac.authorization.k8s.io/v1/ClusterRoleBinding
       - --prune-allowlist=rbac.authorization.k8s.io/v1/Role

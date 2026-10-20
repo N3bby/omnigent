@@ -94,12 +94,12 @@ class RouteTests(unittest.TestCase):
                           params={"repository": "https://github.com/kunlabora/roadpass.git"})
         self.assertEqual(names.json(), {
             "repository": ROADPASS, "names": ["TOKEN"], "instructions": False, "setup_script": False,
-            "mcp_servers": [], "ssh_key": False,
+            "mcp_servers": [], "ssh_key": False, "exit_node": None,
         })
         self.assertEqual(self.call("GET", "/v1/repo-env/names", user=None, params={"repository": ROADPASS}).status_code, 401)
         bad = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": "nope"})
         self.assertEqual(bad.json(), {"repository": None, "names": [], "instructions": False, "setup_script": False,
-                                      "mcp_servers": [], "ssh_key": False})
+                                      "mcp_servers": [], "ssh_key": False, "exit_node": None})
 
     def test_instructions_and_script_come_back_to_admins_only(self) -> None:
         saved = self.call("PUT", "/v1/repo-env", json={
@@ -112,7 +112,7 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((listed["names"], listed["instructions"]), ([], "Use pnpm."))
         names = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": ROADPASS})
         self.assertEqual(names.json(), {"repository": ROADPASS, "names": [], "instructions": True, "setup_script": True,
-                                        "mcp_servers": [], "ssh_key": False})
+                                        "mcp_servers": [], "ssh_key": False, "exit_node": None})
         self.assertNotIn("pnpm", names.text)
         # A page that doesn't send them keeps them; null removes one.
         self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"A": "1"}})
@@ -123,6 +123,25 @@ class RouteTests(unittest.TestCase):
             "repository": ROADPASS, "variables": {}, "instructions": "", "setup_script": None,
         })
         self.assertEqual(empty.status_code, 400)
+
+    def test_an_exit_node_comes_back_and_a_page_without_it_keeps_it(self) -> None:
+        saved = self.call("PUT", "/v1/repo-env", json={
+            "repository": "https://gitlab.example.org/acme/api.git", "variables": {}, "exit_node": "cronos-exit",
+        })
+        self.assertEqual((saved.status_code, saved.json()["exit_node"]), (200, "cronos-exit"))
+        names = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": "gitlab.example.org/acme/api"})
+        self.assertEqual(names.json()["exit_node"], "cronos-exit")
+        self.call("PUT", "/v1/repo-env", json={"repository": "gitlab.example.org/acme/api", "variables": {"A": "1"}})
+        self.assertEqual(decoded(self.core, "gitlab.example.org/acme/api"), {"A": "1", "tailscale-exit-node": "cronos-exit"})
+        bad = self.call("PUT", "/v1/repo-env", json={
+            "repository": "gitlab.example.org/acme/api", "variables": {"A": None}, "exit_node": "$(id)",
+        })
+        self.assertEqual(bad.status_code, 400)
+        self.assertIn("Tailscale machine's name or IP address", bad.text)
+        self.call("PUT", "/v1/repo-env", json={
+            "repository": "gitlab.example.org/acme/api", "variables": {"A": None}, "exit_node": None,
+        })
+        self.assertEqual(decoded(self.core, "gitlab.example.org/acme/api"), {"A": "1"})
 
     def test_the_new_session_form_gives_a_repository_its_credentials(self) -> None:
         self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"NPM": "n"}})

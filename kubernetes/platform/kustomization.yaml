@@ -7,6 +7,7 @@ resources:
   - namespaces.yaml
   - priority-class.yaml
   - runner-userns.yaml
+  - tun-device-plugin.yaml
   - resource-policy.yaml
   - runner-rbac.yaml
   - deployer-rbac.yaml

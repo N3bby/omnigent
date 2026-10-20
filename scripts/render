@@ -382,6 +382,9 @@ labels:
       app.kubernetes.io/part-of: omnigent
       app.kubernetes.io/managed-by: omnigent-platform
     includeSelectors: false
+images:
+  - name: ghcr.io/squat/generic-device-plugin
+    digest: {versions['tun_device_plugin_digest']}
 patches:
   - target:
       version: v1
@@ -432,6 +435,7 @@ data:
   k3s: {yaml_string(versions['k3s'])}
   cert-manager: {yaml_string(versions['cert_manager'])}
   agent-sandbox: {yaml_string(versions['agent_sandbox'])}
+  tun-device-plugin: {yaml_string(versions['tun_device_plugin'])}
 """)
     (generated / "platform-revision").write_text(revision + "\n")
     print(generated / "manifest.yaml")
