@@ -1,0 +1,353 @@
+Let a repository's exit node carry only its sessions' traffic to the Git
+server, in Settings -> Repository variables, and say so on the repository's
+card and in the new-session form.
+
+Under the exit node's field, an "Only for the Git server" checkbox names the
+host of the repository's URL. Saving sends exit_node_git_only to
+PUT /v1/repo-env (images/server/omnigent_repo_env_api.py) while the exit node
+is on, and nothing otherwise: the server keeps what it has, and drops it with
+the exit node. The runner then routes only the Git server's addresses through
+the exit node (images/runner/tailscale/exit-node-routes.sh).
+
+The card adds "· Git server only" after the exit node, and RepoEnvBadge's
+popover says traffic to the Git server and the clone go through it, and other
+internet traffic goes out directly. GET /v1/repo-env and
+GET /v1/repo-env/names return exit_node_git_only; an older server leaves it
+out, which reads as all traffic.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0037.
+diff --git a/web/src/components/RepoEnvBadge.test.tsx b/web/src/components/RepoEnvBadge.test.tsx
+index a381953..da0eb44 100644
+--- a/web/src/components/RepoEnvBadge.test.tsx
++++ b/web/src/components/RepoEnvBadge.test.tsx
+@@ -13,6 +13,7 @@ function renderBadge(
+   setupScript = false,
+   mcpServers?: { name: string; agents: string[]; host: string | null }[],
+   exitNode?: string,
++  exitNodeGitOnly?: boolean,
+ ) {
+   vi.mocked(identity.authenticatedFetch).mockResolvedValue(
+     new Response(
+@@ -25,6 +26,7 @@ function renderBadge(
+         ...(mcpServers && { mcp_servers: mcpServers }),
+         // Likewise for a server from before exit nodes.
+         ...(exitNode && { exit_node: exitNode }),
++        ...(exitNodeGitOnly && { exit_node_git_only: true }),
+       }),
+     ),
+   );
+@@ -94,6 +96,23 @@ describe("RepoEnvBadge", () => {
+     ).toBeInTheDocument();
+   });
+ 
++  it("says when only the Git server's traffic goes through the exit node", async () => {
++    renderBadge(
++      "git@gitlab.cronos.example:acme/api.git",
++      [],
++      false,
++      false,
++      [],
++      "cronos-exit",
++      true,
++    );
++    fireEvent.click(
++      await screen.findByRole("button", { name: "an exit node for this repository" }),
++    );
++    expect(await screen.findByText("gitlab.cronos.example")).toHaveClass("font-mono");
++    expect(screen.getByText(/Other internet traffic goes out directly/)).toBeInTheDocument();
++  });
++
+   it("lists the repository's MCP servers with their icons", async () => {
+     renderBadge("https://github.com/kunlabora/roadpass.git", [], false, false, [
+       { name: "figma", agents: ["claude", "codex"], host: null },
+diff --git a/web/src/components/RepoEnvBadge.tsx b/web/src/components/RepoEnvBadge.tsx
+index 5d9c660..eaf6ea8 100644
+--- a/web/src/components/RepoEnvBadge.tsx
++++ b/web/src/components/RepoEnvBadge.tsx
+@@ -3,7 +3,7 @@
+  * repository has variables (added by this deployment), with an icon each for
+  * its agent instructions, setup script, exit node and MCP servers. Clicking it
+  * lists the variables' names, what the instructions and script do, the exit
+- * node and the MCP servers; values, text and the servers' keys never reach the
++ * node, and whether only the Git server uses it, and the MCP servers; values, text and the servers' keys never reach the
+  * browser. Renders nothing
+  * for a repository without any, or while they load.
+  */
+@@ -20,6 +20,7 @@ import { McpServerIcon } from "@/components/McpServerIcon";
+ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+ import { useRepoEnvNames } from "@/hooks/useRepoEnv";
+ import { MCP_AGENTS, agentsLabel } from "@/lib/mcpServers";
++import { repoKey } from "@/lib/repoEnv";
+ 
+ /** ``["2 variables", "agent instructions"]`` → ``"2 variables and agent instructions"``. */
+ function joinAnd(parts: string[]): string {
+@@ -34,8 +35,11 @@ export function RepoEnvBadge({ url }: { url: string }) {
+     instructions,
+     setup_script: setupScript,
+     exit_node: exitNode,
++    exit_node_git_only: gitOnly,
+     mcp_servers: servers,
+   } = data;
++  // The Git server, the host of the repository's URL.
++  const gitServer = repoKey(url)?.split("/")[0] ?? null;
+   if (!names.length && !instructions && !setupScript && !exitNode && !servers.length) return null;
+   const label = `${names.length} variable${names.length === 1 ? "" : "s"}`;
+   const parts = [
+@@ -118,8 +122,18 @@ export function RepoEnvBadge({ url }: { url: string }) {
+         )}
+         {exitNode && (
+           <BadgeItem icon={<RouteIcon className="ui-icon" />} title="Exit node">
+-            Internet traffic and the clone go through{" "}
+-            <span className="font-mono text-foreground">{exitNode}</span> on your tailnet.
++            {gitOnly && gitServer ? (
++              <>
++                Traffic to <span className="font-mono text-foreground">{gitServer}</span> and the
++                clone go through <span className="font-mono text-foreground">{exitNode}</span> on
++                your tailnet. Other internet traffic goes out directly.
++              </>
++            ) : (
++              <>
++                Internet traffic and the clone go through{" "}
++                <span className="font-mono text-foreground">{exitNode}</span> on your tailnet.
++              </>
++            )}
+           </BadgeItem>
+         )}
+         {servers.length > 0 && (
+diff --git a/web/src/hooks/useRepoEnv.ts b/web/src/hooks/useRepoEnv.ts
+index 4e9ed63..926da9f 100644
+--- a/web/src/hooks/useRepoEnv.ts
++++ b/web/src/hooks/useRepoEnv.ts
+@@ -75,12 +75,15 @@ export function useSaveRepoEnv() {
+       ssh_key?: string | null;
+       /** The exit node's name or IP, null to remove it, or left out to keep it. */
+       exit_node?: string | null;
++      /** Whether only the Git server uses the exit node, or left out to keep it. */
++      exit_node_git_only?: boolean;
+     }) =>
+       saveRepoEnv(args.repository, args.variables, {
+         instructions: args.instructions,
+         setup_script: args.setup_script,
+         ssh_key: args.ssh_key,
+         exit_node: args.exit_node,
++        exit_node_git_only: args.exit_node_git_only,
+       }),
+     onSuccess: invalidate,
+   });
+diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
+index 6f9b9d5..f306973 100644
+--- a/web/src/lib/repoEnv.ts
++++ b/web/src/lib/repoEnv.ts
+@@ -39,6 +39,11 @@ export interface RepoEnvEntry {
+    * through, by name or IP, or null. Missing from servers before exit nodes.
+    */
+   exit_node?: string | null;
++  /**
++   * Whether only its sessions' traffic to the repository's Git server goes
++   * through the exit node. Missing from servers before it.
++   */
++  exit_node_git_only?: boolean;
+   /** ISO-8601 time of the last change, or null. */
+   updated_at: string | null;
+   /** Who last saved them from this page, or null (e.g. the CLI). */
+@@ -191,6 +196,8 @@ export interface RepoEnvSummary {
+   ssh_key: boolean;
+   /** Its sessions' Tailscale exit node, or null; null from older servers. */
+   exit_node: string | null;
++  /** Whether only traffic to its Git server uses the exit node; false from older servers. */
++  exit_node_git_only: boolean;
+ }
+ 
+ /** A repository's MCP server as anyone signed in sees it: never its keys. */
+@@ -219,6 +226,7 @@ export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSumm
+     mcp_servers: body.mcp_servers ?? [],
+     ssh_key: body.ssh_key ?? false,
+     exit_node: body.exit_node ?? null,
++    exit_node_git_only: body.exit_node_git_only ?? false,
+   };
+ }
+ 
+@@ -229,7 +237,8 @@ export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSumm
+  *   Names left out are removed.
+  * @param texts The agent instructions and setup script, each the whole text
+  *   or null to remove it, and the SSH key and the exit node: a new one, null
+- *   to remove it, or left out to keep it.
++ *   to remove it, or left out to keep it. Whether only the Git server uses the
++ *   exit node stays as it is when left out.
+  */
+ export async function saveRepoEnv(
+   repository: string,
+@@ -239,6 +248,7 @@ export async function saveRepoEnv(
+     setup_script: string | null;
+     ssh_key?: string | null;
+     exit_node?: string | null;
++    exit_node_git_only?: boolean;
+   },
+ ): Promise<RepoEnvEntry> {
+   const res = await authenticatedFetch("/v1/repo-env", {
+diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
+index a1974e5..7139941 100644
+--- a/web/src/pages/RepoVariablesPage.test.tsx
++++ b/web/src/pages/RepoVariablesPage.test.tsx
+@@ -31,6 +31,8 @@ let mcpServers: Record<string, string[]>;
+ let sshKeys: Record<string, string>;
+ // Each repository's exit node, which comes back like the instructions.
+ let exitNodes: Record<string, string>;
++// The repositories whose exit node only their Git server uses.
++let gitOnly: Set<string>;
+ 
+ function json(status: number, body: unknown): Response {
+   return new Response(JSON.stringify(body), {
+@@ -48,6 +50,7 @@ function entry(repository: string) {
+     mcp_servers: mcpServers[repository] ?? [],
+     ssh_key: repository in sshKeys,
+     exit_node: exitNodes[repository] ?? null,
++    exit_node_git_only: gitOnly.has(repository),
+     updated_at: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+     updated_by: "levi",
+   };
+@@ -99,6 +102,12 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
+     );
+     if (exitNode) nodes[body.repository] = exitNode;
+     exitNodes = nodes;
++    // Left out, it stays; it goes with the exit node.
++    if ("exit_node_git_only" in body) {
++      if (body.exit_node_git_only) gitOnly.add(body.repository);
++      else gitOnly.delete(body.repository);
++    }
++    if (!exitNode) gitOnly.delete(body.repository);
+     stored[body.repository] = next;
+     texts[body.repository] = nextTexts;
+     return json(200, entry(body.repository));
+@@ -128,6 +137,7 @@ beforeEach(() => {
+   mcpServers = {};
+   sshKeys = {};
+   exitNodes = {};
++  gitOnly = new Set();
+   requests = [];
+   vi.mocked(identity.resolveIdentity).mockResolvedValue("levi");
+   vi.mocked(identity.getCurrentIsAdmin).mockReturnValue(true);
+@@ -452,6 +462,50 @@ describe("RepoVariablesPage", () => {
+     });
+   });
+ 
++  it("sends only the Git server's traffic through the exit node when asked", async () => {
++    exitNodes["gitlab.cronos.example/acme/api"] = "cronos-exit";
++    stored["gitlab.cronos.example/acme/api"] = { A: "1" };
++    renderPage();
++    const name = "gitlab.cronos.example/acme/api";
++    let card = await screen.findByRole("article", { name });
++    expect(within(card).getByTestId("repo-env-card-exit-node")).not.toHaveTextContent(
++      "Git server only",
++    );
++    fireEvent.click(within(card).getByRole("button", { name: "Edit variables for acme/api" }));
++    let editor = within(card).getByTestId("repo-env-editor");
++    const only = within(editor).getByRole("checkbox", { name: "Only for the Git server" });
++    expect(only).not.toBeChecked();
++    expect(within(editor).getByText("gitlab.cronos.example")).toHaveClass("font-mono");
++    fireEvent.click(only);
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(gitOnly.has(name)).toBe(true));
++    expect(requests.find((r) => r.method === "PUT")!.body).toMatchObject({
++      exit_node: "cronos-exit",
++      exit_node_git_only: true,
++    });
++    card = await screen.findByRole("article", { name });
++    await waitFor(() =>
++      expect(within(card).getByTestId("repo-env-card-exit-node")).toHaveTextContent(
++        "Exit nodecronos-exit· Git server only",
++      ),
++    );
++
++    // It comes back checked, and switching the exit node off removes both.
++    fireEvent.click(
++      await within(card).findByRole("button", { name: "Edit variables for acme/api" }),
++    );
++    editor = within(card).getByTestId("repo-env-editor");
++    expect(within(editor).getByRole("checkbox", { name: "Only for the Git server" })).toBeChecked();
++    fireEvent.click(within(editor).getByRole("switch", { name: "Exit node" }));
++    expect(within(editor).queryByRole("checkbox", { name: "Only for the Git server" })).toBeNull();
++    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(exitNodes[name]).toBeUndefined());
++    const last = requests.filter((r) => r.method === "PUT").at(-1)!.body;
++    expect(last).toMatchObject({ exit_node: null });
++    expect(last).not.toHaveProperty("exit_node_git_only");
++    expect(gitOnly.has(name)).toBe(false);
++  });
++
+   it("leaves the exit node out for a repository that has none", async () => {
+     renderPage();
+     const card = await screen.findByRole("article", { name: ROADPASS });
+diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
+index f743e37..4484fda 100644
+--- a/web/src/pages/RepoVariablesPage.tsx
++++ b/web/src/pages/RepoVariablesPage.tsx
+@@ -16,7 +16,8 @@
+  * the agent starts. Unlike values, their text comes back to be edited.
+  *
+  * And it can name a Tailscale exit node: its sessions send their internet
+- * traffic through it, and clone through it. Not secret, so it's shown.
++ * traffic through it, or only their traffic to its Git server, and clone
++ * through it. Not secret, so it's shown.
+  *
+  * Gated on the client by an admin check AND on the server by the routes.
+  */
+@@ -43,6 +44,7 @@ import {
+   scriptLanguage,
+ } from "@/components/HighlightedTextarea";
+ import { Button } from "@/components/ui/button";
++import { Checkbox } from "@/components/ui/checkbox";
+ import { Input } from "@/components/ui/input";
+ import { Switch } from "@/components/ui/switch";
+ import { Textarea } from "@/components/ui/textarea";
+@@ -512,6 +514,9 @@ function RepositoryCard({
+                 <span className="min-w-0 truncate font-mono text-muted-foreground">
+                   {exitNode(entry)}
+                 </span>
++                {entry.exit_node_git_only && (
++                  <span className="shrink-0 text-muted-foreground">· Git server only</span>
++                )}
+               </p>
+             )}
+           </div>
+@@ -622,6 +627,7 @@ function VariablesEditor({
+   const exitNodeStored = entry ? exitNode(entry) : null;
+   const [exitNodeOn, setExitNodeOn] = useState(exitNodeStored !== null);
+   const [exitNodeName, setExitNodeName] = useState(exitNodeStored ?? "");
++  const [exitNodeGitOnly, setExitNodeGitOnly] = useState(entry?.exit_node_git_only ?? false);
+   const [pasting, setPasting] = useState(false);
+   const [pasteText, setPasteText] = useState("");
+   const [pasteError, setPasteError] = useState<string | null>(null);
+@@ -726,6 +732,7 @@ function VariablesEditor({
+         ssh_key: sshKeyOn ? (sshKey.trim() ? sshKey : undefined) : sshKeyStored ? null : undefined,
+         // Left out, the stored exit node stays (and a page that never had one sends nothing).
+         exit_node: exitNodeOn ? exitNodeName.trim() : exitNodeStored !== null ? null : undefined,
++        exit_node_git_only: exitNodeOn ? exitNodeGitOnly : undefined,
+       },
+       {
+         onSuccess: (saved) => {
+@@ -1013,6 +1020,25 @@ function VariablesEditor({
+             {exitNodeName.trim() && exitNodeProblem && (
+               <p className="text-sm text-destructive">{exitNodeProblem}</p>
+             )}
++            <div className="flex flex-col gap-1">
++              <div className="flex items-center gap-2">
++                <Checkbox
++                  id="repo-env-exit-node-git-only"
++                  checked={exitNodeGitOnly}
++                  onCheckedChange={(checked) => setExitNodeGitOnly(checked === true)}
++                  componentId="settings.repo_env.exit_node_git_only"
++                />
++                <label htmlFor="repo-env-exit-node-git-only" className="cursor-pointer text-sm">
++                  Only for the Git server
++                </label>
++              </div>
++              <p className="pl-6 text-sm text-muted-foreground">
++                Only traffic to{" "}
++                <span className="font-mono">{key?.split("/")[0] ?? "the repository's host"}</span>{" "}
++                goes through the exit node. Other internet traffic, such as package downloads, goes
++                out directly.
++              </p>
++            </div>
+           </>
+         ) : (
+           exitNodeStored !== null && (

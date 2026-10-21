@@ -3,11 +3,12 @@
 # frontend suites, the project repositories frontend suites, the environment
 # menu's backend and frontend suites with its exit node row, the startup
 # card's, the New session screen's, the MCP servers page's and repository
-# badge's, a repository's exit node on the repository variables page, a first
-# message waiting for its sandbox, the repository picker's Custom tab, the chat
-# stream's reconnect after a network drop, inline media with the image lightbox
-# and its Copy image menu, and the composers without a mic, against a fresh,
-# fully patched upstream checkout. Keep logs and JUnit reports.
+# badge's, a repository's exit node, also only for its Git server, on the
+# repository variables page, a first message waiting for its sandbox, the
+# repository picker's Custom tab, the chat stream's reconnect after a network
+# drop, inline media with the image lightbox and its Copy image menu, and the
+# composers without a mic, against a fresh, fully patched upstream checkout.
+# Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"

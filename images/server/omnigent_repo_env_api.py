@@ -54,7 +54,8 @@ class SaveRepositoryRequest(BaseModel):
     left out, they stay as they are. ``ssh_key`` is a new private key, or
     ``null`` to remove it; left out, it stays. ``exit_node`` is a Tailscale
     exit node's name or IP, or ``null`` or blank to remove it; left out, it
-    stays.
+    stays. ``exit_node_git_only`` sends only the traffic to the repository's
+    Git server through it; left out, it stays as it is.
     """
 
     repository: str
@@ -63,6 +64,7 @@ class SaveRepositoryRequest(BaseModel):
     setup_script: str | None = None
     ssh_key: str | None = None
     exit_node: str | None = None
+    exit_node_git_only: bool | None = None
 
 
 class SaveCredentialsRequest(BaseModel):
@@ -180,7 +182,8 @@ def create_repo_env_router(
             key = repo_env.repo_key(repository)
         except ValueError:
             return {"repository": None, "names": [], "instructions": False, "setup_script": False,
-                    "mcp_servers": [], "ssh_key": False, "exit_node": None}
+                    "mcp_servers": [], "ssh_key": False, "exit_node": None,
+                    "exit_node_git_only": False}
         summary = await _kubernetes(lambda: repo_env.repository_summary(core(), key))
         return {"repository": key, **summary}
 
@@ -206,6 +209,8 @@ def create_repo_env_router(
             field: getattr(body, field) if field in sent else repo_env.KEEP
             for field in ("instructions", "setup_script", "ssh_key", "exit_node")
         }
+        if "exit_node_git_only" in sent and body.exit_node_git_only is not None:
+            texts["exit_node_git_only"] = body.exit_node_git_only
         return await _kubernetes(
             lambda: repo_env.save_repository(
                 core(), key, body.variables, updated_by=user_id, **texts

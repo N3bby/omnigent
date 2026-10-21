@@ -94,12 +94,13 @@ class RouteTests(unittest.TestCase):
                           params={"repository": "https://github.com/kunlabora/roadpass.git"})
         self.assertEqual(names.json(), {
             "repository": ROADPASS, "names": ["TOKEN"], "instructions": False, "setup_script": False,
-            "mcp_servers": [], "ssh_key": False, "exit_node": None,
+            "mcp_servers": [], "ssh_key": False, "exit_node": None, "exit_node_git_only": False,
         })
         self.assertEqual(self.call("GET", "/v1/repo-env/names", user=None, params={"repository": ROADPASS}).status_code, 401)
         bad = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": "nope"})
         self.assertEqual(bad.json(), {"repository": None, "names": [], "instructions": False, "setup_script": False,
-                                      "mcp_servers": [], "ssh_key": False, "exit_node": None})
+                                      "mcp_servers": [], "ssh_key": False, "exit_node": None,
+                                      "exit_node_git_only": False})
 
     def test_instructions_and_script_come_back_to_admins_only(self) -> None:
         saved = self.call("PUT", "/v1/repo-env", json={
@@ -112,7 +113,8 @@ class RouteTests(unittest.TestCase):
         self.assertEqual((listed["names"], listed["instructions"]), ([], "Use pnpm."))
         names = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": ROADPASS})
         self.assertEqual(names.json(), {"repository": ROADPASS, "names": [], "instructions": True, "setup_script": True,
-                                        "mcp_servers": [], "ssh_key": False, "exit_node": None})
+                                        "mcp_servers": [], "ssh_key": False, "exit_node": None,
+                                        "exit_node_git_only": False})
         self.assertNotIn("pnpm", names.text)
         # A page that doesn't send them keeps them; null removes one.
         self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"A": "1"}})
@@ -142,6 +144,21 @@ class RouteTests(unittest.TestCase):
             "repository": "gitlab.example.org/acme/api", "variables": {"A": None}, "exit_node": None,
         })
         self.assertEqual(decoded(self.core, "gitlab.example.org/acme/api"), {"A": "1"})
+
+    def test_an_exit_node_only_for_the_git_server_stays_unless_a_page_changes_it(self) -> None:
+        repository = "gitlab.example.org/acme/api"
+        saved = self.call("PUT", "/v1/repo-env", json={
+            "repository": repository, "variables": {}, "exit_node": "cronos-exit", "exit_node_git_only": True,
+        })
+        self.assertEqual((saved.status_code, saved.json()["exit_node_git_only"]), (200, True))
+        names = self.call("GET", "/v1/repo-env/names", user="member", params={"repository": repository})
+        self.assertEqual((names.json()["exit_node"], names.json()["exit_node_git_only"]), ("cronos-exit", True))
+        # A page from before it, or that sends null, keeps it.
+        self.call("PUT", "/v1/repo-env", json={"repository": repository, "variables": {}, "exit_node": "cronos-exit"})
+        self.call("PUT", "/v1/repo-env", json={"repository": repository, "variables": {}, "exit_node_git_only": None})
+        self.assertEqual(decoded(self.core, repository)["tailscale-exit-node-git-only"], "true")
+        self.call("PUT", "/v1/repo-env", json={"repository": repository, "variables": {}, "exit_node_git_only": False})
+        self.assertEqual(decoded(self.core, repository), {"tailscale-exit-node": "cronos-exit"})
 
     def test_the_new_session_form_gives_a_repository_its_credentials(self) -> None:
         self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"NPM": "n"}})

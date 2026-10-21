@@ -52,7 +52,7 @@ Getting your repositories into a session, with what they need to build.
 | [A repository by its URL](custom-repository.md) | The repository picker's **Repositories** and **Custom** tabs: pick repositories configured in Settings on any host, such as GitLab, or add any repository by its URL, and as an admin give it a Git token or SSH key | A repository without a token or key clones as before |
 | [A repository's own agent instructions](repo-instructions.md) | Your own instructions for a repository's agents, kept out of its `CLAUDE.md` | Optional setup step |
 | [A repository's setup script](repo-setup-script.md) | A script that sets up each new session on a repository before the agent starts | Optional setup step |
-| [A repository's exit node](repo-exit-node.md) | A repository's sessions clone it, and reach the internet, through one of your tailnet's exit nodes, such as for a Git server that only accepts a VPN's addresses | A repository without one works as before |
+| [A repository's exit node](repo-exit-node.md) | A repository's sessions clone it, and reach the internet or only its Git server, through one of your tailnet's exit nodes, such as for a Git server that only accepts a VPN's addresses | A repository without one works as before |
 | [A project's repositories](project-repositories.md) | A new session in a project picks that project's repositories, not the last ones you used | A project without repositories keeps the old behaviour |
 
 ## Reaching a session from your devices

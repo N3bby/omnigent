@@ -203,23 +203,44 @@ EOF
 fi
 
 # A repository can name an exit node (omnigent_repo_env.EXIT_NODE_KEY), which
-# then carries the session's internet traffic. What became of it goes to a
-# file for the environment menu (runner patch 0012-environment-exit-node.patch):
+# then carries the session's internet traffic, or with
+# tailscale-exit-node-git-only only its traffic to the repository's Git
+# server (omnigent-exit-node-routes). What became of it goes to a file for the
+# environment menu (runner patch 0012-environment-exit-node.patch):
 # `note_exit_node names A B`, `note_exit_node one A`, or
 # `note_exit_node one A "<Tailscale's error>"`.
 exit_node_file=/run/omnigent-tailscale.exit-node.json
-rm -f "$exit_node_file"
+hosts_file=/run/omnigent-tailscale.exit-node-hosts
+rm -f "$exit_node_file" "$hosts_file"
 note_exit_node() {
     python3 -c 'import json, sys
 kind, *args = sys.argv[1:]
 print(json.dumps({"names": args} if kind == "names" else dict(zip(("name", "error"), args))))' "$@" \
         >"$exit_node_file.new" && mv -f "$exit_node_file.new" "$exit_node_file"
 }
-exit_nodes=$(
+# "<exit node> <Git server>" for each repository naming one, its Git server
+# being "all" unless only that uses the exit node. The server is the host of
+# the repository's key in OMNIGENT_REPO_CHECKOUTS, "<Secret>\t<key>\t<checkout>".
+repo_exit_nodes=$(
     for file in /run/omnigent/repo-env/*/tailscale-exit-node; do
-        [ -s "$file" ] && tr -d '[:space:]' <"$file" && echo
-    done | sed '/^$/d' | sort -u
+        [ -s "$file" ] || continue
+        dir=${file%/*}
+        server=all
+        if [ -s "$dir/tailscale-exit-node-git-only" ]; then
+            server=$(printf '%s\n' "${OMNIGENT_REPO_CHECKOUTS:-}" |
+                awk -F '\t' -v secret="${dir##*/}" '$1 == secret { sub("/.*", "", $2); print $2; exit }')
+            [ -n "$server" ] || server=all
+        fi
+        printf '%s %s\n' "$(tr -d '[:space:]' <"$file")" "$server"
+    done
 )
+exit_nodes=$(printf '%s\n' "$repo_exit_nodes" | awk 'NF { print $1 }' | sort -u)
+# Only the Git servers use it when every repository says so, and the Pod
+# routes its own traffic; with userspace networking, only the proxy uses it.
+git_servers=$(printf '%s\n' "$repo_exit_nodes" | awk 'NF { print $2 }' | sort -u)
+if [ "$mode" != tun ] || printf '%s\n' "$git_servers" | grep -qx all; then
+    git_servers=""
+fi
 via=""
 case $exit_nodes in
     "") ;;
@@ -234,10 +255,22 @@ case $exit_nodes in
         failed=1
         ;;
     *)
+        if [ -n "$git_servers" ]; then
+            # The rules come first, so the rest never goes through it.
+            printf '%s\n' "$git_servers" >"$hosts_file"
+            omnigent-exit-node-routes
+            servers=$(printf '%s' "$git_servers" | paste -sd, - | sed 's/,/, /g')
+        fi
         if error=$(ts set --exit-node="$exit_nodes" --exit-node-allow-lan-access 2>&1); then
             via=", through exit node $exit_nodes"
             note_exit_node one "$exit_nodes"
-            echo "omnigent-tailscale: using exit node $exit_nodes"
+            if [ -n "$git_servers" ]; then
+                via="$via for $servers"
+                echo "omnigent-tailscale: using exit node $exit_nodes for $servers only"
+                omnigent-exit-node-routes --keep &
+            else
+                echo "omnigent-tailscale: using exit node $exit_nodes"
+            fi
         else
             error=$(printf '%s' "$error" | tr '\n' ' ')
             echo "omnigent-tailscale: could not use exit node $exit_nodes: $error" >&2

@@ -224,7 +224,9 @@ a key.
 - **Routes:** rules at priority 5200, before Tailscale's, send k3s's Pod and
   Service ranges (`10.42.0.0/16`, `10.43.0.0/16`) to the main table. A
   subnet route or exit node never takes the Pod's way to the Omnigent server
-  or the cluster's DNS.
+  or the cluster's DNS. Rules at 5260 to 5263 send only a Git server's
+  addresses through an exit node
+  ([only for the Git server](repo-exit-node.md#how-it-works)).
 - **Connections in:** `tailscaled` in TUN mode only hands connections to
   ports listening on its tailnet address. nftables rules
   (`table ip omnigent-tailscale`) send TCP and UDP from `tailscale0` to

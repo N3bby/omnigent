@@ -51,6 +51,7 @@ COPY --chmod=0755 startup/startup-report.py /usr/local/bin/omnigent-startup-repo
 COPY --chmod=0755 tailscale/tailscale-service.sh /usr/local/bin/omnigent-tailscale
 COPY --chmod=0755 tailscale/tailscale-logout.sh /usr/local/bin/omnigent-tailscale-logout
 COPY --chmod=0755 tailscale/via-exit-node.sh /usr/local/bin/omnigent-via-exit-node
+COPY --chmod=0755 tailscale/exit-node-routes.sh /usr/local/bin/omnigent-exit-node-routes
 COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
 COPY tailscale/ssh-tailnet.conf /etc/ssh/ssh_config.d/50-omnigent-tailnet.conf
 COPY mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh

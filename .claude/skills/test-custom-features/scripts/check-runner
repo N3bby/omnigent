@@ -235,6 +235,10 @@ PY
   exit_node="$(cat /run/omnigent/repo-env/*/tailscale-exit-node 2>/dev/null | head -n1)"
   if [[ -n "$exit_node" ]]; then
     check "uses this session's repository's exit node $exit_node" test "$(field "$status" '(d.get("ExitNodeStatus") or {}).get("Online")')" = True
+    git_servers="$(paste -sd' ' /run/omnigent-tailscale.exit-node-hosts 2>/dev/null)"
+    if [[ -n "$git_servers" ]]; then
+      check "only $git_servers goes through the exit node" sh -c 'ip rule show priority 5261 | grep -q "lookup 52" && ip rule show priority 5262 | grep -q "lookup main"'
+    fi
   else
     skip "exit node" "this session's repositories name none"
   fi

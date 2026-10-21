@@ -131,6 +131,19 @@ node, for a server that only lets in certain addresses. `tailscale status`
 then names the exit node. If the internet is unreachable, the exit node may be
 offline: tell the user.
 
+A repository can also send only the traffic to its Git server through the
+exit node, when the VPN behind it is slow. Then
+`/run/omnigent-tailscale.exit-node-hosts` lists the Git server, and
+`ip rule` lists its addresses at priority 5261. Everything else, such as
+package downloads, goes out directly. If another host behind the same VPN,
+such as a registry or an API on another name, refuses or times out, add it
+to that file and run
+`omnigent-exit-node-routes`; it then goes through the exit node for this
+session. Tell the user, so they know which hosts need the VPN. If the Git
+server itself times out, the exit node may be offline: tell the user. Don't
+switch the exit node off or route everything through it to get around
+either.
+
 The tailnet policy decides which devices the Pod may reach, and by default
 that's none. If a connection times out, or SSH says the tailnet policy
 doesn't permit it, the user hasn't given sessions access to that device. Tell

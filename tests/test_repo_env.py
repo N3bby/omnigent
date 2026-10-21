@@ -456,6 +456,7 @@ class StoreTests(unittest.TestCase):
             "repository": ROADPASS, "names": ["TOKEN", "URL"],
             "instructions": None, "setup_script": None,
             "instructions": None, "mcp_servers": [], "ssh_key": False, "exit_node": None,
+            "exit_node_git_only": False,
             "updated_at": "2026-10-08T12:00:00+00:00", "updated_by": "levi",
         })
 
@@ -507,10 +508,10 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(repo_env.variable_names(self.core, ROADPASS), ["TOKEN"])
         self.assertEqual(repo_env.repository_summary(self.core, ROADPASS),
                          {"names": ["TOKEN"], "instructions": True, "setup_script": True, "mcp_servers": [],
-                          "ssh_key": False, "exit_node": None})
+                          "ssh_key": False, "exit_node": None, "exit_node_git_only": False})
         self.assertEqual(repo_env.repository_summary(self.core, "github.com/a/b"),
                          {"names": [], "instructions": False, "setup_script": False, "mcp_servers": [],
-                          "ssh_key": False, "exit_node": None})
+                          "ssh_key": False, "exit_node": None, "exit_node_git_only": False})
         # Left out, they stay; blank or None removes them.
         repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None})
         self.assertEqual(set(decoded(self.core)), {"TOKEN", "agent-instructions.md", "setup.sh"})
@@ -561,6 +562,28 @@ class StoreTests(unittest.TestCase):
         # A repository can have only an exit node.
         repo_env.save_repository(self.core, "gitlab.com/acme/api", {}, exit_node="100.101.102.103")
         self.assertEqual(decoded(self.core, "gitlab.com/acme/api"), {"tailscale-exit-node": "100.101.102.103"})
+
+    def test_an_exit_node_can_be_only_for_the_git_server(self) -> None:
+        entry = repo_env.save_repository(self.core, "gitlab.com/acme/api", {}, exit_node="cronos-exit",
+                                         exit_node_git_only=True)
+        self.assertEqual(decoded(self.core, "gitlab.com/acme/api"), {
+            "tailscale-exit-node": "cronos-exit", "tailscale-exit-node-git-only": "true",
+        })
+        self.assertEqual((entry["names"], entry["exit_node_git_only"]), ([], True))
+        self.assertTrue(repo_env.repository_summary(self.core, "gitlab.com/acme/api")["exit_node_git_only"])
+        # Left out, it stays, also when the exit node changes; False removes it.
+        repo_env.save_repository(self.core, "gitlab.com/acme/api", {"A": "1"}, exit_node="cronos-exit-2")
+        self.assertEqual(decoded(self.core, "gitlab.com/acme/api")["tailscale-exit-node-git-only"], "true")
+        repo_env.save_repository(self.core, "gitlab.com/acme/api", {"A": None}, exit_node_git_only=False)
+        self.assertEqual(decoded(self.core, "gitlab.com/acme/api"), {"A": "1", "tailscale-exit-node": "cronos-exit-2"})
+        # It goes with the exit node, and alone it's nothing to store.
+        repo_env.save_repository(self.core, "gitlab.com/acme/api", {"A": None}, exit_node_git_only=True)
+        repo_env.save_repository(self.core, "gitlab.com/acme/api", {"A": None}, exit_node=None)
+        self.assertEqual(decoded(self.core, "gitlab.com/acme/api"), {"A": "1"})
+        repo_env.save_repository(self.core, "gitlab.com/acme/api", {"A": None}, exit_node_git_only=True)
+        self.assertEqual(decoded(self.core, "gitlab.com/acme/api"), {"A": "1"})
+        with self.assertRaisesRegex(ValueError, "at least one variable"):
+            repo_env.save_repository(self.core, ROADPASS, {}, exit_node_git_only=True)
 
     def test_an_exit_node_is_a_machine_name_or_address(self) -> None:
         for text in ("cronos-exit", "cronos-exit.tail1234.ts.net", "100.101.102.103", "fd7a:115c:a1e0::1"):

@@ -27,6 +27,8 @@ URLs, and an SSH private key under ``git-ssh-key``, for SSH URLs.
 A repository can also name a Tailscale exit node, under
 ``tailscale-exit-node``. Its sessions send their internet traffic through it
 (``images/runner/tailscale/``), and :func:`clone_command` clones through it.
+With ``tailscale-exit-node-git-only``, sessions send only their traffic to the
+repository's Git server through it.
 """
 
 from __future__ import annotations
@@ -73,7 +75,11 @@ SSH_KEY_KEY = "git-ssh-key"
 # their internet traffic through, such as one that reaches a Git server that
 # only allows a VPN's addresses. Not a secret, so the page shows it.
 EXIT_NODE_KEY = "tailscale-exit-node"
-_NOT_VARIABLES = (*_TEXT_KEYS, MCP_SERVERS_KEY, SSH_KEY_KEY, EXIT_NODE_KEY)
+# "true" when sessions send only their traffic to the repository's Git server,
+# the host of its URL, through the exit node, and the rest of their internet
+# traffic out directly. Only kept with an exit node.
+EXIT_NODE_GIT_ONLY_KEY = "tailscale-exit-node-git-only"
+_NOT_VARIABLES = (*_TEXT_KEYS, MCP_SERVERS_KEY, SSH_KEY_KEY, EXIT_NODE_KEY, EXIT_NODE_GIT_ONLY_KEY)
 # Agents read the instructions at the start of every session.
 TEXT_LIMIT = 64 * 1024
 # An RSA key of 16384 bits is under 13 KB.
@@ -433,7 +439,8 @@ def clone_command(url: str, args: str, directory: str) -> str:
 
     A repository with an exit node clones through it, with
     ``omnigent-via-exit-node`` from the runner image. The checkout's fetches
-    and pushes don't need it: by then the whole Pod uses the exit node.
+    and pushes don't need it: by then the Pod sends its traffic to the Git
+    server, or all its internet traffic, through the exit node.
 
     :param url: The clone URL.
     :param args: What follows ``git clone``, quoted for the shell, e.g.
@@ -540,6 +547,7 @@ def _entry(secret: Any) -> dict[str, Any]:
         "mcp_servers": mcp_server_names(secret),
         "ssh_key": SSH_KEY_KEY in (secret.data or {}),
         "exit_node": _text(secret, EXIT_NODE_KEY),
+        "exit_node_git_only": EXIT_NODE_GIT_ONLY_KEY in (secret.data or {}),
         "updated_at": _updated_at(secret),
         "updated_by": annotations.get(UPDATED_BY_ANNOTATION),
     }
@@ -553,7 +561,8 @@ def list_repositories(core: Any) -> list[dict[str, Any]]:
     :returns: e.g. ``[{"repository": "github.com/kunlabora/roadpass",
         "names": ["GOVFLANDERS_NPM_TOKEN"], "instructions": "Use pnpm…",
         "setup_script": None, "mcp_servers": ["figma"], "ssh_key": False,
-        "exit_node": None, "updated_at": "2026-10-08T…", "updated_by": "levi"}]``,
+        "exit_node": None, "exit_node_git_only": False,
+        "updated_at": "2026-10-08T…", "updated_by": "levi"}]``,
         sorted by repository. Never a variable's value or the SSH key; the
         instructions, the script and the exit node come back to be edited.
     """
@@ -655,14 +664,14 @@ def repository_summary(core: Any, key: str) -> dict[str, Any]:
     :returns: e.g. ``{"names": ["GOVFLANDERS_NPM_TOKEN"], "instructions": True,
         "setup_script": False, "mcp_servers": [{"name": "figma",
         "agents": ["claude", "codex"], "host": "mcp.figma.com"}], "ssh_key": False,
-        "exit_node": "cronos-exit"}``.
+        "exit_node": "cronos-exit", "exit_node_git_only": False}``.
     """
     try:
         secret = core.read_namespaced_secret(secret_name(key), NAMESPACE)
     except Exception as exc:
         if _not_found(exc):
             return {"names": [], "instructions": False, "setup_script": False, "mcp_servers": [],
-                    "ssh_key": False, "exit_node": None}
+                    "ssh_key": False, "exit_node": None, "exit_node_git_only": False}
         raise
     data = secret.data or {}
     return {
@@ -672,6 +681,7 @@ def repository_summary(core: Any, key: str) -> dict[str, Any]:
         "mcp_servers": mcp_server_badges(secret),
         "ssh_key": SSH_KEY_KEY in data,
         "exit_node": _text(secret, EXIT_NODE_KEY),
+        "exit_node_git_only": EXIT_NODE_GIT_ONLY_KEY in data,
     }
 
 
@@ -695,6 +705,7 @@ def save_repository(
     setup_script: str | None = KEEP,
     ssh_key: str | None = KEEP,
     exit_node: str | None = KEEP,
+    exit_node_git_only: bool = KEEP,
 ) -> dict[str, Any]:
     """
     Store a repository's variables, replacing the ones it had.
@@ -714,6 +725,9 @@ def save_repository(
         :data:`KEEP` leaves it as it is.
     :param exit_node: The repository's exit node; ``None`` or blank removes
         it, and :data:`KEEP` leaves it as it is.
+    :param exit_node_git_only: Whether sessions send only their traffic to the
+        repository's Git server through the exit node; :data:`KEEP` leaves it
+        as it is. It goes with the exit node.
     :returns: The repository's entry, as in :func:`list_repositories`.
     :raises ValueError: When there'd be nothing left to store (the
         repository's MCP servers count), on a name
@@ -760,6 +774,10 @@ def save_repository(
                 data[text_key] = current_data[text_key]
         elif text is not None:
             data[text_key] = base64.b64encode(text.encode()).decode()
+    if exit_node_git_only is KEEP:
+        exit_node_git_only = EXIT_NODE_GIT_ONLY_KEY in current_data
+    if exit_node_git_only and EXIT_NODE_KEY in data:
+        data[EXIT_NODE_GIT_ONLY_KEY] = base64.b64encode(b"true").decode()
     if not data:
         raise ValueError(
             "give at least one variable, agent instructions, a setup script or an "
