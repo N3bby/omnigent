@@ -22,7 +22,8 @@ It changes more than the colours:
 - **Your messages in a soft grey bubble**, with the agent's replies as plain
   text.
 - **"Worked" is followed by a thin line** that marks where the agent's work
-  for a turn ends.
+  for a turn ends. It runs across the whole reply, however short the text
+  around it.
 - **Flat code blocks** with a small language label, no line numbers, and
   their wrap, copy and download buttons in one row, clear of the label even
   when the code is only a few characters wide.

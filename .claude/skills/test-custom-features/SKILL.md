@@ -634,7 +634,8 @@ Hand these to the user; they need their own devices or VM access:
    and `/fast` bypasses the message queue.
 10. **Codex theme:** in Settings → Appearance, pick **Codex** under Color
     theme. The sidebar turns flat grey without pink, and a session shows your
-    messages in a grey bubble, a line after **Worked**, a round send button and
+    messages in a grey bubble, a line after **Worked** that runs as far
+    right after a one-line reply as after a long one, a round send button and
     the working directory under the composer, a few pixels clear of its
     shadow. The labels in that bar, in one font and size,
     sit on one baseline, in Firefox as well as Chrome. A code block's wrap,

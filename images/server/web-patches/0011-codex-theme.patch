@@ -7,8 +7,9 @@ mode, which upstream wants at 4.5:1 on white) and themePalettes.generated.css is
 regenerated from them. codexTheme.css changes the layout under
 [data-theme="codex"]: the native system font, a flat grey sidebar with
 compact rows, user messages in a borderless grey bubble, "Worked" folds
-followed by a hairline, flat code blocks without line numbers, a rounder
-composer with a round send button and the workspace bar beneath it, also
+followed by a hairline across the reply, flat code blocks without line
+numbers, a rounder composer with a round send button and the workspace bar
+beneath it, also
 when messages are queued above it, its labels on one baseline whatever the
 fonts and browser, a terminal mark instead of the mascot on the
 new-session screen, and rounder menus. The other palettes are unchanged.
@@ -17,10 +18,10 @@ Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/web/src/codexTheme.css b/web/src/codexTheme.css
 new file mode 100644
-index 0000000..d99089c
+index 0000000..903613c
 --- /dev/null
 +++ b/web/src/codexTheme.css
-@@ -0,0 +1,382 @@
+@@ -0,0 +1,391 @@
 +/* Codex palette: the layout and type changes that go beyond colour.
 + *
 + * themePalette.ts sets the colour tokens for `data-theme="codex"`; this file
@@ -135,6 +136,15 @@ index 0000000..d99089c
 +  flex: 1;
 +  height: 1px;
 +  background: var(--border);
++}
++
++/* Upstream sizes a reply to its widest line and only widens one that holds
++ * nothing but the fold, so the hairline would stop wherever the reply's text
++ * does. Widen every reply with a fold, so the hairline always spans it. */
++[data-theme="codex"]
++  [data-testid="message-bubble"][data-role="assistant"]
++  > :has(> [data-testid="turn-worked-fold"]) {
++  width: 100%;
 +}
 +
 +[data-theme="codex"] [data-testid="turn-worked-fold"][data-state="open"] .turn-fold-row::after {
