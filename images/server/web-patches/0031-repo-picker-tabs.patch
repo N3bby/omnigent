@@ -13,6 +13,9 @@ connected. The Custom tab (components/RepoCustomForm.tsx) takes any HTTPS or
 git@ URL and a branch. Without the GitHub App and configured repositories
 there are no tabs, only the Custom form.
 
+The project settings dialog's repository picker lists the configured
+repositories too, in the same group, so a project can default to one.
+
 For admins, the Custom form also picks a credential: none, a Git token or an
 SSH key. Choosing one saves it on the repository with
 PUT /v1/repo-env/credentials (images/server/omnigent_repo_env_api.py) before
@@ -1636,3 +1639,148 @@ index 5749911..d1a806c 100644
                      <p className="text-sm text-muted-foreground">
                        {maxSandboxRepos > 1
                          ? "Cloned into the sandbox at startup. Several repos are cloned side by side and the agent starts in the parent that holds them; pick one and it starts directly inside it. Leave empty for a blank workspace."
+diff --git a/web/src/shell/ProjectSettingsDialog.test.tsx b/web/src/shell/ProjectSettingsDialog.test.tsx
+index a29da85..139e083 100644
+--- a/web/src/shell/ProjectSettingsDialog.test.tsx
++++ b/web/src/shell/ProjectSettingsDialog.test.tsx
+@@ -5,6 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+ import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
+ import { getProject, updateProjectConfig, createProject } from "@/lib/projectsApi";
+ import { TooltipProvider } from "@/components/ui/tooltip";
++import type * as RepoEnvHooks from "@/hooks/useRepoEnv";
++import type { ConfiguredRepo } from "@/lib/repoEnv";
+ 
+ vi.mock("@/lib/projectsApi", () => ({
+   getProject: vi.fn(),
+@@ -44,6 +46,15 @@ const { serverInfoMock } = vi.hoisted(() => ({ serverInfoMock: vi.fn() }));
+ vi.mock("@/lib/CapabilitiesContext", () => ({
+   useServerInfo: serverInfoMock,
+ }));
++// The repositories configured in Settings, a request of their own; none
++// unless a test says otherwise.
++const { configuredReposMock } = vi.hoisted(() => ({
++  configuredReposMock: vi.fn((): { data: ConfiguredRepo[] } => ({ data: [] })),
++}));
++vi.mock("@/hooks/useRepoEnv", async (importOriginal) => ({
++  ...(await importOriginal<typeof RepoEnvHooks>()),
++  useConfiguredRepos: configuredReposMock,
++}));
+ // The filesystem browser owns its own data-fetching; stub its explicit commit
+ // action so this suite can drive the shared dialog without filesystem plumbing.
+ vi.mock("./WorkspacePicker", () => ({
+@@ -87,6 +98,7 @@ beforeEach(() => {
+   hostModelOptionsMock.mockReturnValue({ data: [] });
+   updateMock.mockResolvedValue({ id: "p_1", name: "Work", config: {} });
+   serverInfoMock.mockReset();
++  configuredReposMock.mockReturnValue({ data: [] });
+   serverInfoMock.mockReturnValue({ managed_sandboxes_enabled: false, sandbox_provider: null });
+ });
+ 
+@@ -494,6 +506,49 @@ describe("ProjectSettingsDialog", () => {
+       );
+     });
+ 
++    it("offers the repositories configured in Settings, on any host", async () => {
++      configuredReposMock.mockReturnValue({
++        data: [
++          {
++            repository: "gitlab.com/acme/api",
++            clone_url: "git@gitlab.com:acme/api.git",
++            git_token: false,
++            ssh_key: true,
++          },
++          {
++            repository: "gitlab.com/acme/web",
++            clone_url: "https://gitlab.com/acme/web.git",
++            git_token: true,
++            ssh_key: false,
++          },
++        ],
++      });
++      getProjectMock.mockResolvedValue({
++        id: "p_1",
++        name: "Work",
++        config: { sandbox_repos: [{ url: "https://gitlab.com/acme/web", branch: "" }] },
++      });
++      renderDialog();
++      await waitForSave();
++
++      // Without GitHub connected, the picker lists them; a picked one isn't.
++      fireEvent.click(screen.getByTestId("new-chat-landing-repo-select"));
++      const options = await screen.findAllByTestId("new-chat-landing-repo-configured");
++      expect(options.map((o) => o.textContent)).toEqual(["gitlab.com/acme/api"]);
++      fireEvent.click(options[0]);
++      expect(screen.getAllByTestId("project-settings-repo-row")).toHaveLength(2);
++      fireEvent.click(screen.getByTestId("project-settings-save"));
++
++      await waitFor(() =>
++        expect(updateMock).toHaveBeenCalledWith("p_1", {
++          sandbox_repos: [
++            { url: "https://gitlab.com/acme/web", branch: "" },
++            { url: "git@gitlab.com:acme/api.git", branch: "" },
++          ],
++        }),
++      );
++    });
++
+     it("hides the repositories and drops them for a host that isn't the sandbox", async () => {
+       getProjectMock.mockResolvedValue({
+         id: "p_1",
+diff --git a/web/src/shell/ProjectSettingsDialog.tsx b/web/src/shell/ProjectSettingsDialog.tsx
+index a704492..0a9a854 100644
+--- a/web/src/shell/ProjectSettingsDialog.tsx
++++ b/web/src/shell/ProjectSettingsDialog.tsx
+@@ -13,7 +13,7 @@
+ // filesystem browser (inline, so it scrolls inside the modal).
+ // For sandbox sessions, the repositories they clone, picked in the composer
+ // instead of the last ones launched with; the repository and branch pickers
+-// are the composer's.
++// are the composer's, with the repositories configured in Settings.
+ // Fields are optional: an unset one stores no default (an absent key), and an
+ // all-default dialog stores an empty config.
+ 
+@@ -54,6 +54,8 @@ import {
+ import type { ProjectConfig } from "@/lib/projectsApi";
+ import { shouldGuardDialogDismiss } from "@/lib/dialogDismissGuard";
+ import { fetchGithubRepos, type GithubRepo } from "@/lib/githubIntegration";
++import { useConfiguredRepos } from "@/hooks/useRepoEnv";
++import { repoKey } from "@/lib/repoEnv";
+ import type { LastSandboxRepo } from "@/lib/repoPreferences";
+ import {
+   AgentHarnessPicker,
+@@ -102,7 +104,8 @@ function repoCloneUrl(r: GithubRepo): string {
+ /**
+  * The repositories a project's sandbox sessions clone: one row per repository
+  * with its branch, then a picker over the connected GitHub account's
+- * repositories and a field to paste any other URL. Mirrors the composer's
++ * repositories and those configured in Settings, on any host, and a field to
++ * paste any other URL. Mirrors the composer's
+  * repository popover; its popovers are modal so their lists scroll inside the
+  * dialog.
+  */
+@@ -131,7 +134,15 @@ function ProjectReposEditor({
+     staleTime: 5 * 60_000,
+   });
+   const githubRepos = githubData?.connected ? githubData.repos : [];
+-  const showPicker = githubEnabled && githubData?.connected === true;
++  const showGithub = githubEnabled && githubData?.connected === true;
++  // Configured repositories not picked yet, and not already in the GitHub
++  // list, whose entry lists its branches.
++  const { data: configuredRepos = [] } = useConfiguredRepos();
++  const githubKeys = new Set(githubRepos.map((r) => `github.com/${r.full_name.toLowerCase()}`));
++  const unpickedConfigured = configuredRepos.filter(
++    (c) => !githubKeys.has(c.repository) && !repos.some((s) => repoKey(s.url) === c.repository),
++  );
++  const showPicker = showGithub || unpickedConfigured.length > 0;
+   const repoForUrl = (url: string) => githubRepos.find((r) => repoCloneUrl(r) === url.trim());
+   const add = (url: string) => {
+     const u = url.trim();
+@@ -207,6 +218,8 @@ function ProjectReposEditor({
+               repos={githubRepos.filter((r) => !repos.some((s) => s.url === repoCloneUrl(r)))}
+               value=""
+               onSelect={(repo) => repo && add(repoCloneUrl(repo))}
++              configured={unpickedConfigured}
++              onSelectConfigured={(repo) => add(repo.clone_url)}
+               modal
+             />
+           )}

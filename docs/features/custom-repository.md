@@ -24,6 +24,9 @@ and with its HTTPS URL otherwise. Type its branch next to it, or leave it on
 the default branch. A github.com repository that's in your GitHub list is
 only listed there, with its branch menu.
 
+A [project's settings](project-repositories.md) list them the same way, so a
+project's sessions can start with one picked.
+
 ## Add a repository by its URL
 
 1. On the **New session** screen, open the repository chip and choose

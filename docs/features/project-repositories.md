@@ -31,9 +31,13 @@ new-session form: the repositories are picked, with their branches.
   own machines removes its repositories when you save; that host uses the
   working directory instead. With the sandbox there's no working directory,
   as in the new-session form.
-- **The list is the same as the new-session picker's**: the repositories the
-  [GitHub App](github-repo-picker.md) is installed on, and those with
-  [their own Git token](repo-git-token.md). A pasted URL works too.
+- **The list is the same as the new-session picker's Repositories tab**:
+  the repositories the [GitHub App](github-repo-picker.md) is installed on,
+  and, under **Configured in Settings**, every repository in Settings →
+  Repository variables, on any host, such as one you
+  [added with its own token or SSH key](custom-repository.md). A pasted URL
+  works too, but a token or key can only be given in the new-session form's
+  Custom tab or in Settings.
 - **They're yours.** Projects belong to the user who made them, so other users
   don't see them.
 
@@ -55,3 +59,6 @@ Remove the project's repositories in **Project settings** and save.
     the remembered last repositories with the project's, unless you already
     changed them. It only replaces them again when you switch projects or the
     project's settings change.
+- `images/server/web-patches/0031-repo-picker-tabs.patch` adds the
+  repositories configured in Settings to the dialog's picker, as in the
+  new-session form.
