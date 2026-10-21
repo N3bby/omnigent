@@ -876,7 +876,7 @@ index 7ab9b8e..efb4719 100644
      texts[ROADPASS] = {
        instructions: "Use pnpm, never npm.\n\nAsk before touching infra/.\n",
 diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
-index afc22e0..bbb69e0 100644
+index 1ff387f..e9bc0d6 100644
 --- a/web/src/pages/RepoVariablesPage.tsx
 +++ b/web/src/pages/RepoVariablesPage.tsx
 @@ -8,7 +8,8 @@
@@ -925,7 +925,7 @@ index afc22e0..bbb69e0 100644
      entry.instructions === null &&
      entry.setup_script === null &&
      mcpServerCount(entry) === 0
-@@ -422,12 +427,14 @@ function RepositoryCard({
+@@ -425,12 +430,14 @@ function RepositoryCard({
            </div>
          ) : (
            <div className="flex flex-col gap-2.5">
@@ -942,7 +942,7 @@ index afc22e0..bbb69e0 100644
                        Git token
                      </span>
                      <span className="text-muted-foreground" aria-label="hidden value">
-@@ -435,6 +442,19 @@ function RepositoryCard({
+@@ -438,6 +445,19 @@ function RepositoryCard({
                      </span>
                    </li>
                  )}
@@ -962,7 +962,7 @@ index afc22e0..bbb69e0 100644
                  {splitToken(entry.names).variables.map((name) => (
                    <li key={name} className="flex items-center gap-3 py-0.5 text-ui">
                      <span className="min-w-0 truncate font-mono text-sm">{name}</span>
-@@ -554,6 +574,10 @@ function VariablesEditor({
+@@ -557,6 +577,10 @@ function VariablesEditor({
    const tokenStored = entry ? splitToken(entry.names).token : false;
    const [tokenOn, setTokenOn] = useState(tokenStored);
    const [token, setToken] = useState("");
@@ -973,7 +973,7 @@ index afc22e0..bbb69e0 100644
    // Their text comes back to be edited. Switched off, saving removes them;
    // the text stays in case they're switched on again.
    const [instructionsOn, setInstructionsOn] = useState(entry ? entry.instructions !== null : false);
-@@ -571,6 +595,7 @@ function VariablesEditor({
+@@ -574,6 +598,7 @@ function VariablesEditor({
    const named = rows.filter((r) => r.name);
    const missingValue = named.some((r) => !r.existing && !r.value);
    const missingToken = tokenOn && !tokenStored && !token;
@@ -981,7 +981,7 @@ index afc22e0..bbb69e0 100644
    const instructionsError = textError(instructionsOn, instructions, "instructions");
    const scriptError = textError(scriptOn, script, "script");
    // Under its field once there's text; until then, why Save waits.
-@@ -579,20 +604,23 @@ function VariablesEditor({
+@@ -582,20 +607,23 @@ function VariablesEditor({
      ? "Give every new variable a value."
      : missingToken
        ? "Give the Git token a value."
@@ -1013,7 +1013,7 @@ index afc22e0..bbb69e0 100644
      instructionsError === null &&
      scriptError === null &&
      !pasting &&
-@@ -652,6 +680,8 @@ function VariablesEditor({
+@@ -655,6 +683,8 @@ function VariablesEditor({
          variables,
          instructions: instructionsOn ? instructions : null,
          setup_script: scriptOn ? script : null,
@@ -1022,7 +1022,7 @@ index afc22e0..bbb69e0 100644
        },
        {
          onSuccess: (saved) => {
-@@ -722,6 +752,45 @@ function VariablesEditor({
+@@ -725,6 +755,45 @@ function VariablesEditor({
          )}
        </div>
  

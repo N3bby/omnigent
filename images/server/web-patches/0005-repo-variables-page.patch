@@ -8,6 +8,8 @@ calls /v1/repo-env (images/server/omnigent_repo_env_api.py, mounted by
 "N variables", which lists the names on click.
 On a phone, a long repository wraps at its slashes, each name sits above its
 value, buttons are 40px for touch, and the badge shows only the count.
+On a wider screen, a repository's details follow it on its line, or go
+below it when the name leaves them no room.
 Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0004.
 diff --git a/web/src/components/RepoEnvBadge.test.tsx b/web/src/components/RepoEnvBadge.test.tsx
 new file mode 100644
@@ -638,10 +640,10 @@ index 0000000..a01644e
 +});
 diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
 new file mode 100644
-index 0000000..b3abf58
+index 0000000..90fa686
 --- /dev/null
 +++ b/web/src/pages/RepoVariablesPage.tsx
-@@ -0,0 +1,726 @@
+@@ -0,0 +1,729 @@
 +/**
 + * Admin page for repository variables (``/settings/repo-env``), added by this
 + * deployment. Rendered as a Settings sub-category, next to Members and
@@ -903,27 +905,30 @@ index 0000000..b3abf58
 +      aria-label={entry.repository}
 +    >
 +      {/* Narrow screens: the repository wraps at its slashes, the buttons sit
-+      top right and the details go below at full width. From sm, one line. */}
++      top right and the details go below at full width. From sm, the details
++      follow the repository on its line, or go below it when they don't fit. */}
 +      <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 px-3 py-2 sm:flex sm:items-center">
 +        <span className="flex h-[1lh] shrink-0 items-center text-ui">
 +          <FolderGit2Icon className="ui-icon shrink-0 text-muted-foreground" />
 +        </span>
-+        <span
-+          className="min-w-0 text-ui font-medium wrap-anywhere sm:truncate"
-+          title={entry.repository}
-+        >
-+          <span className="font-normal text-muted-foreground">{host}/</span>
-+          <wbr className="sm:hidden" />
-+          {breakAtSlashes(path)}
-+        </span>
-+        <span
-+          className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1"
-+          title={absoluteTime(updated)}
-+        >
-+          {plural(entry.names.length, "variable")}
-+          {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
-+          {entry.updated_by && ` by ${entry.updated_by}`}
-+        </span>
++        <div className="contents sm:flex sm:min-w-0 sm:flex-1 sm:flex-wrap sm:items-baseline sm:gap-x-3">
++          <span
++            className="min-w-0 text-ui font-medium wrap-anywhere sm:max-w-full sm:truncate"
++            title={entry.repository}
++          >
++            <span className="font-normal text-muted-foreground">{host}/</span>
++            <wbr className="sm:hidden" />
++            {breakAtSlashes(path)}
++          </span>
++          <span
++            className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
++            title={absoluteTime(updated)}
++          >
++            {plural(entry.names.length, "variable")}
++            {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
++            {entry.updated_by && ` by ${entry.updated_by}`}
++          </span>
++        </div>
 +        {!editing && (
 +          <div className="col-start-3 row-start-1 flex shrink-0 gap-1 max-md:pointer-coarse:-my-2 max-md:pointer-coarse:-mr-1.5 max-md:pointer-coarse:gap-0">
 +            <Button

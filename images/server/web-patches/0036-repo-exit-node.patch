@@ -458,7 +458,7 @@ index efb4719..a1974e5 100644
      texts[ROADPASS] = {
        instructions: "Use pnpm, never npm.\n\nAsk before touching infra/.\n",
 diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
-index bbb69e0..f743e37 100644
+index e9bc0d6..a1a9104 100644
 --- a/web/src/pages/RepoVariablesPage.tsx
 +++ b/web/src/pages/RepoVariablesPage.tsx
 @@ -15,6 +15,9 @@
@@ -540,7 +540,7 @@ index bbb69e0..f743e37 100644
      mcpServerCount(entry) === 0
    );
  }
-@@ -480,6 +500,20 @@ function RepositoryCard({
+@@ -483,6 +503,20 @@ function RepositoryCard({
                  mono
                />
              )}
@@ -561,7 +561,7 @@ index bbb69e0..f743e37 100644
            </div>
          )}
        </div>
-@@ -584,6 +618,10 @@ function VariablesEditor({
+@@ -587,6 +621,10 @@ function VariablesEditor({
    const [instructions, setInstructions] = useState(entry?.instructions ?? "");
    const [scriptOn, setScriptOn] = useState(entry ? entry.setup_script !== null : false);
    const [script, setScript] = useState(entry?.setup_script ?? "");
@@ -572,7 +572,7 @@ index bbb69e0..f743e37 100644
    const [pasting, setPasting] = useState(false);
    const [pasteText, setPasteText] = useState("");
    const [pasteError, setPasteError] = useState<string | null>(null);
-@@ -598,6 +636,7 @@ function VariablesEditor({
+@@ -601,6 +639,7 @@ function VariablesEditor({
    const missingSshKey = sshKeyOn && !sshKeyStored && !sshKey.trim();
    const instructionsError = textError(instructionsOn, instructions, "instructions");
    const scriptError = textError(scriptOn, script, "script");
@@ -580,7 +580,7 @@ index bbb69e0..f743e37 100644
    // Under its field once there's text; until then, why Save waits.
    const blank = [instructionsOn && !instructions.trim(), scriptOn && !script.trim()];
    const hint = missingValue
-@@ -610,19 +649,22 @@ function VariablesEditor({
+@@ -613,19 +652,22 @@ function VariablesEditor({
            ? instructionsError
            : blank[1]
              ? scriptError
@@ -607,7 +607,7 @@ index bbb69e0..f743e37 100644
      !pasting &&
      !save.isPending;
  
-@@ -682,6 +724,8 @@ function VariablesEditor({
+@@ -685,6 +727,8 @@ function VariablesEditor({
          setup_script: scriptOn ? script : null,
          // Left out, the stored key stays.
          ssh_key: sshKeyOn ? (sshKey.trim() ? sshKey : undefined) : sshKeyStored ? null : undefined,
@@ -616,7 +616,7 @@ index bbb69e0..f743e37 100644
        },
        {
          onSuccess: (saved) => {
-@@ -936,6 +980,47 @@ function VariablesEditor({
+@@ -939,6 +983,47 @@ function VariablesEditor({
          with bash. The agent is told how it went.
        </TextSetting>
  

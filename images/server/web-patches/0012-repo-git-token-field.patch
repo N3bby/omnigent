@@ -124,7 +124,7 @@ index a01644e..922787e 100644
      renderPage();
      const card = await screen.findByRole("article", { name: ROADPASS });
 diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
-index de0fb80..bff95f4 100644
+index 90fa686..38e8888 100644
 --- a/web/src/pages/RepoVariablesPage.tsx
 +++ b/web/src/pages/RepoVariablesPage.tsx
 @@ -7,7 +7,8 @@
@@ -191,16 +191,16 @@ index de0fb80..bff95f4 100644
  /**
   * ``kunlabora/roadpass`` with a line-break opportunity after each slash, on
   * narrow screens. Hidden from sm, where the name truncates instead: Chrome
-@@ -276,7 +301,7 @@ function RepositoryCard({
-           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1"
-           title={absoluteTime(updated)}
-         >
--          {plural(entry.names.length, "variable")}
-+          {summary(entry.names)}
-           {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
-           {entry.updated_by && ` by ${entry.updated_by}`}
-         </span>
-@@ -313,8 +338,12 @@ function RepositoryCard({
+@@ -278,7 +303,7 @@ function RepositoryCard({
+             className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
+             title={absoluteTime(updated)}
+           >
+-            {plural(entry.names.length, "variable")}
++            {summary(entry.names)}
+             {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
+             {entry.updated_by && ` by ${entry.updated_by}`}
+           </span>
+@@ -316,8 +341,12 @@ function RepositoryCard({
          ) : confirming ? (
            <div className="flex flex-wrap items-center justify-between gap-3">
              <p className="text-ui">
@@ -215,7 +215,7 @@ index de0fb80..bff95f4 100644
              </p>
              <div className="ml-auto flex gap-2">
                <Button
-@@ -337,7 +366,18 @@ function RepositoryCard({
+@@ -340,7 +369,18 @@ function RepositoryCard({
            </div>
          ) : (
            <ul className="flex flex-col">
@@ -235,7 +235,7 @@ index de0fb80..bff95f4 100644
                <li key={name} className="flex items-center gap-3 py-0.5 text-ui">
                  <span className="min-w-0 truncate font-mono text-sm">{name}</span>
                  <span className="text-muted-foreground" aria-label="hidden value">
-@@ -370,6 +410,7 @@ function newRow(name = "", value = "", existing = false): Row {
+@@ -373,6 +413,7 @@ function newRow(name = "", value = "", existing = false): Row {
  
  function rowError(row: Row, rows: Row[], index: number): string | null {
    if (!row.name) return row.value ? "Give this value a name." : null;
@@ -243,7 +243,7 @@ index de0fb80..bff95f4 100644
    const nameError = variableNameError(row.name);
    if (nameError) return nameError;
    if (rows.findIndex((r) => r.name === row.name) !== index) {
-@@ -396,8 +437,12 @@ function VariablesEditor({
+@@ -399,8 +440,12 @@ function VariablesEditor({
    const save = useSaveRepoEnv();
    const [query, setQuery] = useState("");
    const [rows, setRows] = useState<Row[]>(() =>
@@ -257,7 +257,7 @@ index de0fb80..bff95f4 100644
    const [pasting, setPasting] = useState(false);
    const [pasteText, setPasteText] = useState("");
    const [pasteError, setPasteError] = useState<string | null>(null);
-@@ -408,12 +453,14 @@ function VariablesEditor({
+@@ -411,12 +456,14 @@ function VariablesEditor({
    const errors = rows.map((row, i) => rowError(row, rows, i));
    const named = rows.filter((r) => r.name);
    const missingValue = named.some((r) => !r.existing && !r.value);
@@ -273,7 +273,7 @@ index de0fb80..bff95f4 100644
      !save.isPending;
  
    function update(id: number, patch: Partial<Row>) {
-@@ -440,12 +487,19 @@ function VariablesEditor({
+@@ -443,12 +490,19 @@ function VariablesEditor({
      setRows((current) => {
        const merged = current.filter((r) => r.name || r.value);
        for (const v of variables) {
@@ -293,7 +293,7 @@ index de0fb80..bff95f4 100644
      setPasting(false);
      setPasteText("");
      setPasteError(null);
-@@ -455,6 +509,7 @@ function VariablesEditor({
+@@ -458,6 +512,7 @@ function VariablesEditor({
      if (!canSave || key === null) return;
      const variables: Record<string, string | null> = {};
      for (const row of named) variables[row.name] = row.existing && !row.value ? null : row.value;
@@ -301,7 +301,7 @@ index de0fb80..bff95f4 100644
      setSaveError(null);
      save.mutate(
        { repository: key, variables },
-@@ -464,7 +519,7 @@ function VariablesEditor({
+@@ -467,7 +522,7 @@ function VariablesEditor({
            showToast(
              entry
                ? `Saved the variables for ${path}.`
@@ -310,7 +310,7 @@ index de0fb80..bff95f4 100644
            );
            onClose();
          },
-@@ -493,6 +548,40 @@ function VariablesEditor({
+@@ -496,6 +551,40 @@ function VariablesEditor({
          />
        )}
  
@@ -351,7 +351,7 @@ index de0fb80..bff95f4 100644
        <div className="flex flex-col gap-2">
          <span className="text-sm font-medium text-muted-foreground">Variables</span>
          {pasting ? (
-@@ -598,10 +687,14 @@ function VariablesEditor({
+@@ -601,10 +690,14 @@ function VariablesEditor({
              </Button>
            </div>
            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">

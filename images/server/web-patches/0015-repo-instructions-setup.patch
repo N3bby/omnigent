@@ -773,7 +773,7 @@ index 922787e..aa820ce 100644
      renderPage();
      const card = await screen.findByRole("article", { name: ROADPASS });
 diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
-index 4b2f150..04ad5e6 100644
+index 38e8888..5b3f9c1 100644
 --- a/web/src/pages/RepoVariablesPage.tsx
 +++ b/web/src/pages/RepoVariablesPage.tsx
 @@ -6,14 +6,18 @@
@@ -859,8 +859,8 @@ index 4b2f150..04ad5e6 100644
 +    ...(entry.setup_script !== null ? ["the setup script"] : []),
 +  ];
 +  return parts.length ? joinAnd(parts) : plural(0, "variable");
- }
- 
++}
++
 +/** Only variables, so "Remove all 2 variables" reads right. */
 +function onlyVariables(entry: RepoEnvEntry): boolean {
 +  return (
@@ -874,8 +874,8 @@ index 4b2f150..04ad5e6 100644
 +    .split("\n")
 +    .filter((line) => line.trim())
 +    .join("\n");
-+}
-+
+ }
+ 
 +function lineCount(text: string): number {
 +  return text.replace(/\n+$/, "").split("\n").length;
 +}
@@ -919,16 +919,16 @@ index 4b2f150..04ad5e6 100644
        </p>
      </PageScroll>
    );
-@@ -301,7 +347,7 @@ function RepositoryCard({
-           className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground sm:min-w-0 sm:flex-1"
-           title={absoluteTime(updated)}
-         >
--          {summary(entry.names)}
-+          {summary(entry)}
-           {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
-           {entry.updated_by && ` by ${entry.updated_by}`}
-         </span>
-@@ -338,12 +384,8 @@ function RepositoryCard({
+@@ -303,7 +349,7 @@ function RepositoryCard({
+             className="col-span-2 col-start-2 row-start-2 text-sm text-muted-foreground"
+             title={absoluteTime(updated)}
+           >
+-            {summary(entry.names)}
++            {summary(entry)}
+             {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
+             {entry.updated_by && ` by ${entry.updated_by}`}
+           </span>
+@@ -341,12 +387,8 @@ function RepositoryCard({
          ) : confirming ? (
            <div className="flex flex-wrap items-center justify-between gap-3">
              <p className="text-ui">
@@ -943,7 +943,7 @@ index 4b2f150..04ad5e6 100644
              </p>
              <div className="ml-auto flex gap-2">
                <Button
-@@ -365,33 +407,88 @@ function RepositoryCard({
+@@ -368,33 +410,88 @@ function RepositoryCard({
              </div>
            </div>
          ) : (
@@ -1052,7 +1052,7 @@ index 4b2f150..04ad5e6 100644
  const NO_REPOSITORIES: string[] = [];
  
  interface Row {
-@@ -443,6 +540,12 @@ function VariablesEditor({
+@@ -446,6 +543,12 @@ function VariablesEditor({
    const tokenStored = entry ? splitToken(entry.names).token : false;
    const [tokenOn, setTokenOn] = useState(tokenStored);
    const [token, setToken] = useState("");
@@ -1065,7 +1065,7 @@ index 4b2f150..04ad5e6 100644
    const [pasting, setPasting] = useState(false);
    const [pasteText, setPasteText] = useState("");
    const [pasteError, setPasteError] = useState<string | null>(null);
-@@ -454,13 +557,31 @@ function VariablesEditor({
+@@ -457,13 +560,31 @@ function VariablesEditor({
    const named = rows.filter((r) => r.name);
    const missingValue = named.some((r) => !r.existing && !r.value);
    const missingToken = tokenOn && !tokenStored && !token;
@@ -1098,7 +1098,7 @@ index 4b2f150..04ad5e6 100644
      !save.isPending;
  
    function update(id: number, patch: Partial<Row>) {
-@@ -512,14 +633,19 @@ function VariablesEditor({
+@@ -515,14 +636,19 @@ function VariablesEditor({
      if (tokenOn) variables[GIT_TOKEN] = tokenStored && !token ? null : token;
      setSaveError(null);
      save.mutate(
@@ -1121,7 +1121,7 @@ index 4b2f150..04ad5e6 100644
            );
            onClose();
          },
-@@ -530,7 +656,7 @@ function VariablesEditor({
+@@ -533,7 +659,7 @@ function VariablesEditor({
  
    return (
      <form
@@ -1130,7 +1130,7 @@ index 4b2f150..04ad5e6 100644
        onSubmit={(e) => {
          e.preventDefault();
          submit();
-@@ -548,7 +674,7 @@ function VariablesEditor({
+@@ -551,7 +677,7 @@ function VariablesEditor({
          />
        )}
  
@@ -1139,7 +1139,7 @@ index 4b2f150..04ad5e6 100644
          <div className="flex items-center gap-2">
            <Switch
              id="repo-env-git-token"
-@@ -582,7 +708,7 @@ function VariablesEditor({
+@@ -585,7 +711,7 @@ function VariablesEditor({
          )}
        </div>
  
@@ -1148,7 +1148,7 @@ index 4b2f150..04ad5e6 100644
          <span className="text-sm font-medium text-muted-foreground">Variables</span>
          {pasting ? (
            <>
-@@ -660,10 +786,7 @@ function VariablesEditor({
+@@ -663,10 +789,7 @@ function VariablesEditor({
              </div>
            ))
          )}
@@ -1160,7 +1160,7 @@ index 4b2f150..04ad5e6 100644
            <div className="flex gap-1">
              <Button
                type="button"
-@@ -686,36 +809,65 @@ function VariablesEditor({
+@@ -689,36 +812,65 @@ function VariablesEditor({
                Paste .env
              </Button>
            </div>
@@ -1256,7 +1256,7 @@ index 4b2f150..04ad5e6 100644
        {saveError && (
          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-ui text-destructive">
            {saveError}
-@@ -725,6 +877,107 @@ function VariablesEditor({
+@@ -728,6 +880,107 @@ function VariablesEditor({
    );
  }
  

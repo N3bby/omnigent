@@ -27,6 +27,10 @@ repository's variables.
 
 ![Editing a repository: a blank value keeps the current one, a typed value replaces it](../images/repo-env-edit.webp)
 
+A repository's details, such as its variable count and when it was last
+changed, follow its name, or go on the line below when a long name leaves
+them no room.
+
 The page works on a phone too. There, a long repository wraps instead of
 being cut off, and each variable's name sits above its value.
 
