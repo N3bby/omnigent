@@ -30,6 +30,12 @@ LINEAR = {"name": "linear", "transport": "http", "url": "https://mcp.example.com
 
 
 ROADPASS = "github.com/kunlabora/roadpass"
+OTHER = "github.com/kunlabora/other"
+
+
+def repository_servers(core, key):
+    data = core.secrets[repo_env.secret_name(key)]["data"]
+    return json.loads(base64.b64decode(data[repo_env.MCP_SERVERS_KEY]))["servers"]
 
 
 def decoded_keys(core, key=ROADPASS):
@@ -125,8 +131,8 @@ class StoreTests(unittest.TestCase):
 
     def test_a_repositorys_servers_live_with_its_variables(self):
         repo_env.save_repository(self.core, ROADPASS, {"NPM_TOKEN": "npm-secret"}, instructions="Use pnpm.")
-        figma = mcp_servers.save(self.core, {**FIGMA, "repository": "Kunlabora/RoadPass"}, updated_by="levi")
-        self.assertEqual(figma["repository"], ROADPASS)
+        figma = mcp_servers.save(self.core, {**FIGMA, "repositories": ["Kunlabora/RoadPass"]}, updated_by="levi")
+        self.assertEqual(figma["repositories"], [ROADPASS])
         self.assertNotIn(mcp_servers.SECRET, self.core.secrets)
         # Saving the variables on their own page keeps the servers, and the
         # servers are no variable.
@@ -138,12 +144,12 @@ class StoreTests(unittest.TestCase):
         data = self.core.secrets[repo_env.secret_name(ROADPASS)]["data"]
         self.assertEqual(json.loads(base64.b64decode(data[repo_env.MCP_SERVERS_KEY]))["servers"][0]["env"],
                          {"FIGMA_API_KEY": FIGMA_KEY})
-        mcp_servers.delete(self.core, figma["id"], ROADPASS)
+        mcp_servers.delete(self.core, figma["id"])
         self.assertEqual(decoded_keys(self.core), {"NPM_TOKEN", "agent-instructions.md"})
 
     def test_the_new_session_form_sees_a_repositorys_servers_without_their_keys(self):
-        mcp_servers.save(self.core, {**FIGMA, "repository": ROADPASS})
-        mcp_servers.save(self.core, {**LINEAR, "repository": ROADPASS,
+        mcp_servers.save(self.core, {**FIGMA, "repositories": [ROADPASS]})
+        mcp_servers.save(self.core, {**LINEAR, "repositories": [ROADPASS],
                                      "url": "https://user:pass@MCP.Linear.app/mcp?token=query-secret"})
         summary = repo_env.repository_summary(self.core, ROADPASS)
         self.assertEqual(summary["mcp_servers"], [
@@ -157,18 +163,72 @@ class StoreTests(unittest.TestCase):
     def test_global_and_repository_servers_list_together(self):
         mcp_servers.save(self.core, FIGMA)
         # The same name for a repository replaces the global one in its sessions.
-        roadpass = mcp_servers.save(self.core, {**FIGMA, "repository": ROADPASS, "agents": ["claude"]})
+        roadpass = mcp_servers.save(self.core, {**FIGMA, "repositories": [ROADPASS], "agents": ["claude"]})
         with self.assertRaisesRegex(ValueError, f"{ROADPASS} already has"):
-            mcp_servers.save(self.core, {**LINEAR, "name": "FIGMA", "repository": ROADPASS})
+            mcp_servers.save(self.core, {**LINEAR, "name": "FIGMA", "repositories": [ROADPASS]})
         listing = mcp_servers.summary(self.core)["data"]
-        self.assertEqual([(s["repository"], s["name"]) for s in listing], [(None, "figma"), (ROADPASS, "figma")])
+        self.assertEqual([(s["repositories"], s["name"]) for s in listing], [([], "figma"), ([ROADPASS], "figma")])
         self.assertNotIn(FIGMA_KEY, json.dumps(listing))
         # A repository left with nothing else loses its Secret, as on the variables page.
-        mcp_servers.delete(self.core, roadpass["id"], ROADPASS)
+        mcp_servers.delete(self.core, roadpass["id"])
         self.assertNotIn(repo_env.secret_name(ROADPASS), self.core.secrets)
-        for repository in ("not a repository", ["github.com/a/b"]):
-            with self.subTest(repository=repository), self.assertRaises(ValueError):
-                mcp_servers.save(self.core, {**FIGMA, "repository": repository})
+        for repositories in (["not a repository"], "github.com/a/b", [["github.com/a/b"]], ["a/b"] * 65):
+            with self.subTest(repositories=repositories), self.assertRaises(ValueError):
+                mcp_servers.save(self.core, {**FIGMA, "repositories": repositories})
+
+    def test_a_saved_server_gets_more_repositories_with_its_keys(self):
+        repo_env.save_repository(self.core, OTHER, {"NPM_TOKEN": "npm-secret"})
+        figma = mcp_servers.save(self.core, {**FIGMA, "repositories": [ROADPASS]})
+        # Adding a repository later copies the stored key without sending it again.
+        saved = mcp_servers.save(self.core, {**FIGMA, "id": figma["id"], "repositories": [ROADPASS, "kunlabora/other"],
+                                             "env": {"FIGMA_API_KEY": None}})
+        self.assertEqual(saved["repositories"], [ROADPASS, OTHER])
+        for key in (ROADPASS, OTHER):
+            with self.subTest(repository=key):
+                self.assertEqual(repository_servers(self.core, key)[0]["env"], {"FIGMA_API_KEY": FIGMA_KEY})
+                self.assertEqual(repository_servers(self.core, key)[0]["id"], figma["id"])
+        self.assertEqual(decoded_keys(self.core, OTHER), {"NPM_TOKEN", repo_env.MCP_SERVERS_KEY})
+        # The page lists it once, with both repositories, and edits both copies.
+        listing = mcp_servers.summary(self.core)["data"]
+        self.assertEqual([(s["name"], s["repositories"]) for s in listing], [("figma", [OTHER, ROADPASS])])
+        mcp_servers.save(self.core, {**FIGMA, "id": figma["id"], "repositories": [ROADPASS, OTHER],
+                                     "agents": ["claude"], "env": {"FIGMA_API_KEY": None}})
+        self.assertEqual([repository_servers(self.core, k)[0]["agents"] for k in (ROADPASS, OTHER)],
+                         [["claude"], ["claude"]])
+        # Leaving one out removes it there; its Secret keeps the variables.
+        mcp_servers.save(self.core, {**FIGMA, "id": figma["id"], "repositories": [OTHER],
+                                     "env": {"FIGMA_API_KEY": None}})
+        self.assertNotIn(repo_env.secret_name(ROADPASS), self.core.secrets)
+        self.assertEqual(decoded_keys(self.core, OTHER), {"NPM_TOKEN", repo_env.MCP_SERVERS_KEY})
+        # Removing it removes it everywhere.
+        mcp_servers.save(self.core, {**FIGMA, "id": figma["id"], "repositories": [OTHER, ROADPASS],
+                                     "env": {"FIGMA_API_KEY": None}})
+        mcp_servers.delete(self.core, figma["id"])
+        self.assertEqual(mcp_servers.summary(self.core)["data"], [])
+        self.assertEqual(decoded_keys(self.core, OTHER), {"NPM_TOKEN"})
+
+    def test_a_saved_server_moves_between_every_session_and_repositories(self):
+        figma = mcp_servers.save(self.core, FIGMA)
+        moved = mcp_servers.save(self.core, {**FIGMA, "id": figma["id"], "repositories": [ROADPASS],
+                                             "env": {"FIGMA_API_KEY": None}})
+        self.assertEqual((moved["id"], moved["repositories"]), (figma["id"], [ROADPASS]))
+        self.assertEqual(mcp_servers.read(self.core)[0]["servers"], [])
+        self.assertEqual(repository_servers(self.core, ROADPASS)[0]["env"], {"FIGMA_API_KEY": FIGMA_KEY})
+        back = mcp_servers.save(self.core, {**FIGMA, "id": figma["id"], "repositories": [],
+                                            "env": {"FIGMA_API_KEY": None}})
+        self.assertEqual(back["repositories"], [])
+        self.assertEqual(stored(self.core)["servers"][0]["env"], {"FIGMA_API_KEY": FIGMA_KEY})
+        self.assertNotIn(repo_env.secret_name(ROADPASS), self.core.secrets)
+
+    def test_a_repository_that_cant_take_the_server_stops_the_whole_save(self):
+        figma = mcp_servers.save(self.core, {**FIGMA, "repositories": [ROADPASS]})
+        mcp_servers.save(self.core, {**LINEAR, "name": "figma", "repositories": [OTHER]})
+        before = json.dumps(self.core.secrets, sort_keys=True)
+        with self.assertRaisesRegex(ValueError, f"{OTHER} already has an MCP server called figma"):
+            mcp_servers.save(self.core, {**FIGMA, "id": figma["id"], "repositories": [ROADPASS, OTHER],
+                                         "env": {"FIGMA_API_KEY": None}})
+        # Nothing was written, not even to the repository that could take it.
+        self.assertEqual(json.dumps(self.core.secrets, sort_keys=True), before)
 
     def test_every_runner_mounts_the_servers_read_only_and_optionally(self):
         volumes, mounts = mcp_servers.pod_volumes()

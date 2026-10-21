@@ -1,14 +1,16 @@
 Add Settings -> MCP servers, where admins keep the MCP servers sessions'
-Claude Code and Codex get: for every session, or for sessions on one
-repository.
+Claude Code and Codex get: for every session, or for sessions on some
+repositories.
 
-McpServersPage groups the servers under "Every session" and each repository,
-as cards (their URL or command line, header or variable names, and which
-agents get them), with edit and remove actions. The editor takes where the
-server goes, a name, the agents, and either a URL with headers or a command
-with one argument per line and variables. A repository's server may share a
-name with one for every session, which it replaces in its sessions; the page
-says so. Header and variable values are write-only, like repository
+McpServersPage groups the servers under "Every session" and each set of
+repositories, as cards (their URL or command line, header or variable names,
+and which agents get them), with edit and remove actions. The editor takes
+where the server goes, a name, the agents, and either a URL with headers or a
+command with one argument per line and variables. Editing a saved server can
+add or remove repositories, or move it to or from every session; the server
+copies its stored values there, and the editor says what saving moves. A
+repository's server may share a name with one for every session, which it
+replaces in its sessions; the page says so. Header and variable values are write-only, like repository
 variables: a blank field keeps the stored value. lib/mcpServers.ts calls the
 /v1/mcp-servers routes in images/server/omnigent_mcp_servers_api.py.
 
@@ -234,10 +236,10 @@ index 0ea9ee9..bbabb0b 100644
    );
 diff --git a/web/src/hooks/useMcpServers.ts b/web/src/hooks/useMcpServers.ts
 new file mode 100644
-index 0000000..7ceb7ed
+index 0000000..90baf2c
 --- /dev/null
 +++ b/web/src/hooks/useMcpServers.ts
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,41 @@
 +import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 +import {
 +  deleteMcpServer,
@@ -271,12 +273,11 @@ index 0000000..7ceb7ed
 +  });
 +}
 +
-+/** Remove a server, global or a repository's. */
++/** Remove a server, for every session or from all its repositories. */
 +export function useDeleteMcpServer() {
 +  const invalidate = useInvalidate();
 +  return useMutation({
-+    mutationFn: (server: { id: string; repository: string | null }) =>
-+      deleteMcpServer(server.id, server.repository),
++    mutationFn: (server: { id: string }) => deleteMcpServer(server.id),
 +    onSuccess: invalidate,
 +  });
 +}
@@ -673,14 +674,14 @@ index 0000000..4552262
 +}
 diff --git a/web/src/lib/mcpServers.ts b/web/src/lib/mcpServers.ts
 new file mode 100644
-index 0000000..6069783
+index 0000000..b4c98d5
 --- /dev/null
 +++ b/web/src/lib/mcpServers.ts
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,150 @@
 +/**
 + * MCP servers for sessions' Claude Code and Codex (``/v1/mcp-servers``, added
-+ * by this deployment): global ones for every session, and a repository's for
-+ * sessions on it, where they replace a global server of the same name.
++ * by this deployment): global ones for every session, and ones for sessions on
++ * some repositories, where they replace a global server of the same name.
 + *
 + * Header and variable values only go to the server. Listing returns their
 + * names, and saving a name with ``null`` keeps its current value. The checks
@@ -710,8 +711,8 @@ index 0000000..6069783
 +  id: string;
 +  /** What the agents call it, e.g. ``"figma"``; their tools carry it as a prefix. */
 +  name: string;
-+  /** ``host/owner/repo`` for a repository's server, or null for every session's. */
-+  repository: string | null;
++  /** The ``host/owner/repo`` of each repository whose sessions get it; empty for every session. */
++  repositories: string[];
 +  transport: McpTransport;
 +  /** The HTTP server's URL, or null for a command. */
 +  url: string | null;
@@ -730,11 +731,14 @@ index 0000000..6069783
 +  updated_by: string | null;
 +}
 +
-+/** Body for ``PUT /v1/mcp-servers``; without ``id`` it adds a server. */
++/**
++ * Body for ``PUT /v1/mcp-servers``; without ``id`` it adds a server. A saved
++ * server moves to the ``repositories`` sent, keeping its values.
++ */
 +export interface SaveMcpServer {
 +  id?: string;
-+  /** owner/repo or a clone URL for a repository's server; null for every session's. */
-+  repository: string | null;
++  /** owner/repo or clone URLs of the repositories it's for; empty for every session. */
++  repositories: string[];
 +  name: string;
 +  transport: McpTransport;
 +  agents: McpAgent[];
@@ -754,8 +758,8 @@ index 0000000..6069783
 +/**
 + * Why a server can't have this name, or null when it can.
 + *
-+ * @param taken The names already used where it goes: every session's, or the
-+ *   repository's. The same name in the other place is fine.
++ * @param taken The names already used where it goes: every session's, or its
++ *   repositories'. The same name in the other place is fine.
 + */
 +export function serverNameError(name: string, taken: string[]): string | null {
 +  if (!name) return null;
@@ -817,10 +821,9 @@ index 0000000..6069783
 +  return (await res.json()) as McpServer;
 +}
 +
-+/** Remove a server, global or a repository's (admin only). */
-+export async function deleteMcpServer(id: string, repository: string | null): Promise<void> {
-+  const query = repository ? `?repository=${encodeURIComponent(repository)}` : "";
-+  const res = await authenticatedFetch(`/v1/mcp-servers/${encodeURIComponent(id)}${query}`, {
++/** Remove a server, for every session or from all its repositories (admin only). */
++export async function deleteMcpServer(id: string): Promise<void> {
++  const res = await authenticatedFetch(`/v1/mcp-servers/${encodeURIComponent(id)}`, {
 +    method: "DELETE",
 +  });
 +  if (!res.ok) throw new Error(await errorMessage(res));
@@ -884,10 +887,10 @@ index 96cad72..57b2594 100644
  
 diff --git a/web/src/pages/McpServersPage.test.tsx b/web/src/pages/McpServersPage.test.tsx
 new file mode 100644
-index 0000000..0b2dece
+index 0000000..a6bf3eb
 --- /dev/null
 +++ b/web/src/pages/McpServersPage.test.tsx
-@@ -0,0 +1,377 @@
+@@ -0,0 +1,451 @@
 +// Tests for the admin MCP servers page. The identity module's
 +// authenticatedFetch is replaced by an in-memory /v1/mcp-servers, so the page,
 +// its react-query hooks and the fetch helpers run as they do in the browser.
@@ -911,7 +914,7 @@ index 0000000..0b2dece
 +
 +interface Stored {
 +  id: string;
-+  repository: string | null;
++  repositories: string[];
 +  name: string;
 +  transport: "http" | "stdio";
 +  agents: string[];
@@ -924,6 +927,7 @@ index 0000000..0b2dece
 +
 +// What the fake server holds, values included.
 +const ROADPASS = "github.com/kunlabora/roadpass";
++const OTHER = "github.com/kunlabora/other";
 +
 +let stored: Stored[];
 +let requests: { method: string; url: string; body?: Record<string, unknown> }[];
@@ -938,7 +942,7 @@ index 0000000..0b2dece
 +function entry(server: Stored) {
 +  return {
 +    id: server.id,
-+    repository: server.repository,
++    repositories: server.repositories,
 +    name: server.name,
 +    transport: server.transport,
 +    url: server.url ?? null,
@@ -975,7 +979,7 @@ index 0000000..0b2dece
 +    try {
 +      const server: Stored = {
 +        id: current?.id ?? `id-${stored.length + 1}`,
-+        repository: body.repository,
++        repositories: body.repositories,
 +        name: body.name,
 +        transport: body.transport,
 +        agents: body.agents,
@@ -1018,7 +1022,7 @@ index 0000000..0b2dece
 +  stored = [
 +    {
 +      id: "figma-id",
-+      repository: null,
++      repositories: [],
 +      name: "figma",
 +      transport: "stdio",
 +      agents: ["claude", "codex"],
@@ -1028,7 +1032,7 @@ index 0000000..0b2dece
 +    },
 +    {
 +      id: "linear-id",
-+      repository: null,
++      repositories: [],
 +      name: "linear",
 +      transport: "http",
 +      agents: ["codex"],
@@ -1062,7 +1066,7 @@ index 0000000..0b2dece
 +  it("shows each server's logo, or its initial", async () => {
 +    stored.push({
 +      id: "notes-id",
-+      repository: null,
++      repositories: [],
 +      name: "notes",
 +      transport: "http",
 +      agents: ["claude"],
@@ -1110,7 +1114,7 @@ index 0000000..0b2dece
 +    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
 +    await waitFor(() => expect(screen.queryByTestId("mcp-server-editor")).toBeNull());
 +    expect(lastPut()).toEqual({
-+      repository: null,
++      repositories: [],
 +      name: "github",
 +      transport: "stdio",
 +      agents: ["codex"],
@@ -1132,7 +1136,7 @@ index 0000000..0b2dece
 +    await waitFor(() => expect(lastPut()).toBeDefined());
 +    expect(lastPut()).toEqual({
 +      id: "linear-id",
-+      repository: null,
++      repositories: [],
 +      name: "linear",
 +      transport: "http",
 +      agents: ["claude", "codex"],
@@ -1175,10 +1179,10 @@ index 0000000..0b2dece
 +    expect(within(editor).getByRole("button", { name: "Save" })).toBeDisabled();
 +  });
 +
-+  it("groups a repository's servers under it, and says which one they replace", async () => {
++  function addRoadpassFigma() {
 +    stored.push({
 +      id: "roadpass-figma",
-+      repository: ROADPASS,
++      repositories: [ROADPASS],
 +      name: "figma",
 +      transport: "stdio",
 +      agents: ["claude"],
@@ -1186,6 +1190,10 @@ index 0000000..0b2dece
 +      args: ["-y", "figma-developer-mcp", "--stdio"],
 +      env: { FIGMA_API_KEY: "figd_roadpass_secret" },
 +    });
++  }
++
++  it("groups a repository's servers under it, and says which one they replace", async () => {
++    addRoadpassFigma();
 +    renderPage();
 +    const every = await screen.findByRole("region", { name: "Every session" });
 +    expect(
@@ -1200,24 +1208,92 @@ index 0000000..0b2dece
 +      within(card).getByText(/Claude Code only · replaces the one for every session/),
 +    ).toBeInTheDocument();
 +    expect(document.body.textContent).not.toContain("secret");
-+    // Removing it says which repository it's for.
 +    fireEvent.click(within(card).getByRole("button", { name: "Remove figma" }));
 +    fireEvent.click(within(card).getByRole("button", { name: "Remove" }));
 +    await waitFor(() =>
 +      expect(requests.at(-2)).toMatchObject({
 +        method: "DELETE",
-+        url: `/v1/mcp-servers/roadpass-figma?repository=${encodeURIComponent(ROADPASS)}`,
++        url: "/v1/mcp-servers/roadpass-figma",
 +      }),
 +    );
++  });
++
++  it("adds a repository to a saved server, keeping its keys", async () => {
++    addRoadpassFigma();
++    renderPage();
++    const roadpass = await screen.findByRole("region", { name: `Sessions on ${ROADPASS}` });
++    const card = within(roadpass).getByRole("article", { name: "figma" });
++    fireEvent.click(within(card).getByRole("button", { name: "Edit figma" }));
++    expect(within(card).getByLabelText("Sessions on some repositories")).toBeChecked();
++    const field = within(card).getByLabelText("Repository");
++    fireEvent.change(field, { target: { value: "Kunlabora/Other" } });
++    // Enter adds it to the list rather than saving.
++    fireEvent.keyDown(field, { key: "Enter" });
++    expect(field).toHaveValue("");
++    expect(within(card).getByRole("list", { name: "Repositories" })).toHaveTextContent(OTHER);
++    expect(
++      within(card).getByText("Saving adds it, with its keys, to kunlabora/other."),
++    ).toBeInTheDocument();
++    expect(requests.filter((r) => r.method === "PUT")).toEqual([]);
++    fireEvent.click(within(card).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(lastPut()).toBeDefined());
++    expect(lastPut()).toEqual({
++      id: "roadpass-figma",
++      repositories: [ROADPASS, OTHER],
++      name: "figma",
++      transport: "stdio",
++      agents: ["claude"],
++      command: "npx",
++      args: ["-y", "figma-developer-mcp", "--stdio"],
++      env: { FIGMA_API_KEY: null },
++    });
++    // One card, under both repositories.
++    const both = await screen.findByRole("region", { name: `Sessions on ${ROADPASS}, ${OTHER}` });
++    expect(both).toHaveTextContent("Sessions on kunlabora/roadpass and kunlabora/other");
++    expect(screen.queryByRole("region", { name: `Sessions on ${ROADPASS}` })).toBeNull();
++    expect(stored.at(-1)?.env).toEqual({ FIGMA_API_KEY: "figd_roadpass_secret" });
++  });
++
++  it("says what moves when a saved server's repositories change", async () => {
++    addRoadpassFigma();
++    stored.push({
++      id: "other-figma",
++      repositories: [OTHER],
++      name: "figma",
++      transport: "http",
++      agents: ["codex"],
++      url: "https://mcp.figma.com/mcp",
++    });
++    renderPage();
++    const roadpass = await screen.findByRole("region", { name: `Sessions on ${ROADPASS}` });
++    const card = within(roadpass).getByRole("article", { name: "figma" });
++    fireEvent.click(within(card).getByRole("button", { name: "Edit figma" }));
++    // other already has a figma of its own.
++    fireEvent.change(within(card).getByLabelText("Repository"), { target: { value: OTHER } });
++    expect(
++      within(card).getByText("There's already an MCP server called figma here."),
++    ).toBeInTheDocument();
++    expect(within(card).getByRole("button", { name: "Save" })).toBeDisabled();
++    fireEvent.change(within(card).getByLabelText("Repository"), { target: { value: "" } });
++    fireEvent.click(within(card).getByRole("button", { name: `Remove ${ROADPASS}` }));
++    expect(within(card).getByText("Choose a repository.")).toBeInTheDocument();
++    fireEvent.click(within(card).getByLabelText("Every session"));
++    expect(
++      within(card).getByText("Saving moves it, with its keys, to every session."),
++    ).toBeInTheDocument();
++    // Every session already has a figma too.
++    expect(
++      within(card).getByText("There's already an MCP server called figma here."),
++    ).toBeInTheDocument();
 +  });
 +
 +  it("adds a server for one repository", async () => {
 +    renderPage();
 +    fireEvent.click(await screen.findByRole("button", { name: "Add server" }));
 +    const editor = screen.getByTestId("mcp-server-editor");
-+    fireEvent.click(within(editor).getByLabelText("Sessions on one repository"));
++    fireEvent.click(within(editor).getByLabelText("Sessions on some repositories"));
 +    fireEvent.change(within(editor).getByLabelText("Name"), { target: { value: "figma" } });
-+    expect(within(editor).getByText("Choose the repository.")).toBeInTheDocument();
++    expect(within(editor).getByText("Choose a repository.")).toBeInTheDocument();
 +    fireEvent.change(within(editor).getByLabelText("Repository"), {
 +      target: { value: "git@github.com:Kunlabora/RoadPass.git" },
 +    });
@@ -1233,7 +1309,8 @@ index 0000000..0b2dece
 +    });
 +    fireEvent.click(within(editor).getByRole("button", { name: "Save" }));
 +    await waitFor(() => expect(lastPut()).toBeDefined());
-+    expect(lastPut()).toMatchObject({ repository: ROADPASS, name: "figma", transport: "http" });
++    // A repository typed but not added goes too.
++    expect(lastPut()).toMatchObject({ repositories: [ROADPASS], name: "figma", transport: "http" });
 +    expect(
 +      await screen.findByRole("region", { name: `Sessions on ${ROADPASS}` }),
 +    ).toBeInTheDocument();
@@ -1267,10 +1344,10 @@ index 0000000..0b2dece
 +});
 diff --git a/web/src/pages/McpServersPage.tsx b/web/src/pages/McpServersPage.tsx
 new file mode 100644
-index 0000000..7446f58
+index 0000000..72a4c38
 --- /dev/null
 +++ b/web/src/pages/McpServersPage.tsx
-@@ -0,0 +1,973 @@
+@@ -0,0 +1,1080 @@
 +/**
 + * Admin page for MCP servers (``/settings/mcp-servers``), added by this
 + * deployment. Rendered as a Settings sub-category, next to Subscriptions and
@@ -1279,8 +1356,9 @@ index 0000000..7446f58
 + * Sessions' Claude Code and Codex get the servers listed here, each for the
 + * agents it's switched on for: an HTTP server by its URL and headers, or a
 + * command (stdio) with its arguments and variables. A server is for every
-+ * session, or for sessions on one repository, where it replaces a server of
-+ * the same name for every session. Header and variable
++ * session, or for sessions on some repositories, where it replaces a server of
++ * the same name for every session; editing it can add or remove repositories.
++ * Header and variable
 + * values are write-only: the server lists names, and editing keeps a value
 + * whose field is left blank. The server stores every session's servers in a
 + * Kubernetes Secret that every runner Pod mounts, and a repository's in its
@@ -1401,14 +1479,14 @@ index 0000000..7446f58
 +  const [confirming, setConfirming] = useState<string | null>(null);
 +
 +  const list = servers ?? [];
-+  const repositories = [
-+    ...new Set(list.flatMap((s) => (s.repository ? [s.repository] : []))),
-+  ].sort();
-+  const groups: { repository: string | null; servers: McpServer[] }[] = [
-+    { repository: null, servers: list.filter((s) => s.repository === null) },
-+    ...repositories.map((repository) => ({
-+      repository,
-+      servers: list.filter((s) => s.repository === repository),
++  // Servers for the same repositories share a group: every session's first,
++  // then each set of repositories.
++  const where = (server: McpServer) => server.repositories.join("\n");
++  const groups: { repositories: string[]; servers: McpServer[] }[] = [
++    { repositories: [], servers: list.filter((s) => s.repositories.length === 0) },
++    ...[...new Set(list.filter((s) => s.repositories.length).map(where))].sort().map((key) => ({
++      repositories: key.split("\n"),
++      servers: list.filter((s) => where(s) === key),
 +    })),
 +  ];
 +
@@ -1429,8 +1507,8 @@ index 0000000..7446f58
 +          <h1 className="text-2xl font-semibold">MCP servers</h1>
 +          <p className="mt-1 text-ui text-muted-foreground">
 +            Tools sessions' Claude Code and Codex get, such as Figma or Linear: a server's URL, or
-+            the command that starts it. Add one for every session, or for sessions on one
-+            repository. Once saved, a header's or variable's value can be replaced but not shown
++            the command that starts it. Add one for every session, or for sessions on some
++            repositories. Once saved, a header's or variable's value can be replaced but not shown
 +            again.
 +          </p>
 +        </div>
@@ -1466,11 +1544,15 @@ index 0000000..7446f58
 +        <div className="flex flex-col gap-6" data-testid="mcp-server-list">
 +          {groups.map((group) => (
 +            <section
-+              key={group.repository ?? ""}
-+              aria-label={group.repository ? `Sessions on ${group.repository}` : "Every session"}
++              key={group.repositories.join("\n")}
++              aria-label={
++                group.repositories.length
++                  ? `Sessions on ${group.repositories.join(", ")}`
++                  : "Every session"
++              }
 +              className="flex flex-col gap-3"
 +            >
-+              <GroupHeading repository={group.repository} count={group.servers.length} />
++              <GroupHeading repositories={group.repositories} count={group.servers.length} />
 +              {group.servers.map((server) => (
 +                <ServerCard
 +                  key={server.id}
@@ -1493,7 +1575,7 @@ index 0000000..7446f58
 +                  onRemove={() => confirmRemove(server)}
 +                />
 +              ))}
-+              {group.repository === null && group.servers.length === 0 && (
++              {group.repositories.length === 0 && group.servers.length === 0 && (
 +                <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-ui text-muted-foreground">
 +                  {list.length
 +                    ? "No server for every session. Only the repositories below have their own."
@@ -1508,9 +1590,9 @@ index 0000000..7446f58
 +      <p className="mt-6 max-w-xl text-sm text-muted-foreground">
 +        An agent gets the servers as they are when it starts, so new sessions get changes. A running
 +        session gets them once its agent restarts: choose Restart agent in its environment menu, or
-+        let it wake from being idle. A repository's servers only reach sessions on it, and replace a
-+        server of the same name for every session. A server that needs you to sign in asks in each
-+        session.
++        let it wake from being idle. A server for some repositories only reaches sessions on them,
++        and replaces a server of the same name for every session. A server that needs you to sign in
++        asks in each session.
 +      </p>
 +    </PageScroll>
 +  );
@@ -1521,15 +1603,27 @@ index 0000000..7446f58
 +  return repository.slice(repository.indexOf("/") + 1);
 +}
 +
-+/** "Every session", or the repository whose sessions get the servers below it. */
-+function GroupHeading({ repository, count }: { repository: string | null; count: number }) {
-+  const Icon = repository ? FolderGit2Icon : LayersIcon;
++/** ``["github.com/a/x", "github.com/a/y"]`` → ``"a/x and a/y"``. */
++function repositoryList(repositories: string[]): string {
++  const paths = repositories.map(repositoryPath);
++  return paths.length > 1 ? `${paths.slice(0, -1).join(", ")} and ${paths.at(-1)}` : paths.join("");
++}
++
++/** "Every session", or the repositories whose sessions get the servers below it. */
++function GroupHeading({ repositories, count }: { repositories: string[]; count: number }) {
++  const Icon = repositories.length ? FolderGit2Icon : LayersIcon;
 +  return (
 +    <h2 className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground">
 +      <Icon className="ui-icon shrink-0" />
-+      {repository ? (
-+        <span className="min-w-0 truncate" title={repository}>
-+          Sessions on <span className="text-foreground">{repositoryPath(repository)}</span>
++      {repositories.length ? (
++        <span className="min-w-0 truncate" title={repositories.join("\n")}>
++          Sessions on{" "}
++          {repositories.map((repository, i) => (
++            <span key={repository}>
++              {i > 0 && (i === repositories.length - 1 ? " and " : ", ")}
++              <span className="text-foreground">{repositoryPath(repository)}</span>
++            </span>
++          ))}
 +        </span>
 +      ) : (
 +        <span>Every session</span>
@@ -1591,8 +1685,8 @@ index 0000000..7446f58
 +          title={absoluteTime(updated)}
 +        >
 +          {summary(server)}
-+          {server.repository &&
-+            servers.some((s) => s.repository === null && sameName(s.name, server.name)) &&
++          {server.repositories.length > 0 &&
++            servers.some((s) => s.repositories.length === 0 && sameName(s.name, server.name)) &&
 +            " · replaces the one for every session"}
 +          {ago && ` · updated ${ago === "now" ? "just now" : `${ago} ago`}`}
 +          {server.updated_by && ` by ${server.updated_by}`}
@@ -1633,6 +1727,8 @@ index 0000000..7446f58
 +              Remove <span className="font-mono font-medium">{server.name}</span>
 +              {secrets.length > 0 &&
 +                ` and its ${plural(secrets.length, server.transport === "http" ? "header" : "variable")}`}
++              {server.repositories.length > 1 &&
++                ` from all ${server.repositories.length} repositories`}
 +              ? New agents start without it.
 +            </p>
 +            <div className="ml-auto flex gap-2">
@@ -1731,9 +1827,11 @@ index 0000000..7446f58
 +  onClose: () => void;
 +}) {
 +  const save = useSaveMcpServer();
-+  // A new server picks where it goes; a saved one stays there.
-+  const [forRepository, setForRepository] = useState(server ? server.repository !== null : false);
-+  const [repositoryText, setRepositoryText] = useState(server?.repository ?? "");
++  // Where it goes. Saving a server with other repositories copies or moves it,
++  // its stored values included.
++  const [forRepository, setForRepository] = useState(Boolean(server?.repositories.length));
++  const [chosen, setChosen] = useState<string[]>(server?.repositories ?? []);
++  const [repositoryText, setRepositoryText] = useState("");
 +  const [name, setName] = useState(server?.name ?? "");
 +  const [agents, setAgents] = useState<McpAgent[]>(server?.agents ?? ["claude", "codex"]);
 +  const [transport, setTransport] = useState<McpTransport>(server?.transport ?? "http");
@@ -1752,24 +1850,37 @@ index 0000000..7446f58
 +  const nameCheck = transport === "http" ? headerNameError : envNameError;
 +  const errors = rows.map((row, i) => rowError(row, rows, i, nameCheck));
 +  const missingValue = rows.some((r) => r.name && !r.existing && !r.value);
-+  const repository = server ? server.repository : forRepository ? repoKey(repositoryText) : null;
-+  const repositoryMissing = forRepository && repository === null;
++  // A repository typed but not added yet counts too.
++  const typed = repoKey(repositoryText);
++  const repositories = forRepository ? [...new Set([...chosen, ...(typed ? [typed] : [])])] : [];
++  const repositoryMissing = forRepository && repositories.length === 0;
++  const repositoryInvalid = forRepository && repositoryText.trim() !== "" && typed === null;
 +  const nameError = serverNameError(
 +    name,
-+    servers.filter((s) => s.repository === repository).map((s) => s.name),
++    servers
++      .filter((s) =>
++        forRepository
++          ? s.repositories.some((r) => repositories.includes(r))
++          : s.repositories.length === 0,
++      )
++      .map((s) => s.name),
 +  );
 +  // The same name in the other place is allowed: a repository's replaces the
 +  // one for every session in its sessions.
 +  const overlap = !name
 +    ? null
-+    : repository
-+      ? servers.some((s) => s.repository === null && sameName(s.name, name))
-+        ? `Sessions on ${repositoryPath(repository)} get this one instead of the ${name} for every session.`
++    : repositories.length
++      ? servers.some((s) => s.repositories.length === 0 && sameName(s.name, name))
++        ? `Sessions on ${repositoryList(repositories)} get this one instead of the ${name} for every session.`
 +        : null
 +      : (() => {
-+          const shadowing = servers.filter((s) => s.repository && sameName(s.name, name));
++          const shadowing = [
++            ...new Set(
++              servers.filter((s) => sameName(s.name, name)).flatMap((s) => s.repositories),
++            ),
++          ];
 +          return shadowing.length
-+            ? `Sessions on ${shadowing.map((s) => repositoryPath(s.repository!)).join(", ")} get their repository's ${name} instead.`
++            ? `Sessions on ${repositoryList(shadowing)} get their repository's ${name} instead.`
 +            : null;
 +        })();
 +  const urlProblem = transport === "http" ? urlError(url) : null;
@@ -1780,17 +1891,19 @@ index 0000000..7446f58
 +        ? server.header_names.length
 +        : server.env_names.length
 +      : 0;
-+  const hint = repositoryMissing
-+    ? "Choose the repository."
-+    : !name
-+      ? "Name the server."
-+      : transport === "http" && !url.trim()
-+        ? "Give the server's URL."
-+        : transport === "stdio" && !command.trim()
-+          ? "Give the command that starts it."
-+          : missingValue
-+            ? `Give every new ${transport === "http" ? "header" : "variable"} a value.`
-+            : null;
++  const hint = repositoryInvalid
++    ? "Enter owner/repo or a clone URL."
++    : repositoryMissing
++      ? "Choose a repository."
++      : !name
++        ? "Name the server."
++        : transport === "http" && !url.trim()
++          ? "Give the server's URL."
++          : transport === "stdio" && !command.trim()
++            ? "Give the command that starts it."
++            : missingValue
++              ? `Give every new ${transport === "http" ? "header" : "variable"} a value.`
++              : null;
 +  const canSave =
 +    hint === null &&
 +    nameError === null &&
@@ -1810,7 +1923,7 @@ index 0000000..7446f58
 +    save.mutate(
 +      {
 +        ...(server ? { id: server.id } : {}),
-+        repository,
++        repositories,
 +        name,
 +        transport,
 +        agents,
@@ -1820,8 +1933,8 @@ index 0000000..7446f58
 +      },
 +      {
 +        onSuccess: (saved) => {
-+          const where = saved.repository
-+            ? `New agents on ${repositoryPath(saved.repository)} get it.`
++          const where = saved.repositories.length
++            ? `New agents on ${repositoryList(saved.repositories)} get it.`
 +            : "New agents get it.";
 +          showToast(
 +            server
@@ -1851,10 +1964,13 @@ index 0000000..7446f58
 +          server={server}
 +          forRepository={forRepository}
 +          onForRepository={setForRepository}
++          chosen={chosen}
++          onChosen={setChosen}
 +          text={repositoryText}
 +          onText={setRepositoryText}
-+          repository={repository}
-+          known={servers.flatMap((s) => (s.repository ? [s.repository] : []))}
++          typed={typed}
++          repositories={repositories}
++          known={servers.flatMap((s) => s.repositories)}
 +        />
 +      </div>
 +
@@ -2038,25 +2154,34 @@ index 0000000..7446f58
 +}
 +
 +/**
-+ * Where a server goes: every session, or sessions on one repository, picked
++ * Where a server goes: every session, or sessions on some repositories, picked
 + * from your GitHub repositories and the ones with variables, or pasted. A
-+ * saved server says where it is; it can't move.
++ * saved server can gain or lose repositories, or move; saving says what moves.
 + */
 +function ScopeField({
 +  server,
 +  forRepository,
 +  onForRepository,
++  chosen,
++  onChosen,
 +  text,
 +  onText,
-+  repository,
++  typed,
++  repositories,
 +  known,
 +}: {
 +  server?: McpServer;
 +  forRepository: boolean;
 +  onForRepository: (on: boolean) => void;
++  /** The repositories added to the list. */
++  chosen: string[];
++  onChosen: (update: (chosen: string[]) => string[]) => void;
 +  text: string;
 +  onText: (text: string) => void;
-+  repository: string | null;
++  /** The repository typed in the field, or null. */
++  typed: string | null;
++  /** Where it goes on save: the list and the one typed; empty for every session. */
++  repositories: string[];
 +  /** Repositories that already have MCP servers. */
 +  known: string[];
 +}) {
@@ -2066,31 +2191,11 @@ index 0000000..7446f58
 +  const { data: github } = useQuery({
 +    queryKey: ["github-repos"],
 +    queryFn: fetchGithubRepos,
-+    enabled: githubEnabled && !server && forRepository,
++    enabled: githubEnabled && forRepository,
 +    staleTime: 5 * 60_000,
 +  });
 +  const { data: withVariables } = useRepoEnv();
 +  const listId = useId();
-+
-+  if (server) {
-+    return (
-+      <>
-+        <span className="text-sm font-medium text-muted-foreground">Sessions</span>
-+        <p className="text-ui">
-+          {server.repository ? (
-+            <>
-+              Sessions on <span className="font-mono">{server.repository}</span>
-+            </>
-+          ) : (
-+            "Every session"
-+          )}
-+        </p>
-+        <p className="text-sm text-muted-foreground">
-+          To move it, add it again where you want it and remove it here.
-+        </p>
-+      </>
-+    );
-+  }
 +
 +  const suggestions = [
 +    ...new Set([
@@ -2100,7 +2205,34 @@ index 0000000..7446f58
 +        ? github.repos.map((r) => `github.com/${r.full_name.toLowerCase()}`)
 +        : []),
 +    ]),
-+  ].sort();
++  ]
++    .filter((key) => !chosen.includes(key))
++    .sort();
++
++  function add() {
++    if (!typed) return;
++    onChosen((current) => (current.includes(typed) ? current : [...current, typed]));
++    onText("");
++  }
++
++  // What saving a saved server changes about where it is.
++  let moving: string | null = null;
++  if (server) {
++    const before = server.repositories;
++    const added = repositories.filter((r) => !before.includes(r));
++    const removed = before.filter((r) => !repositories.includes(r));
++    if (before.length && !repositories.length) {
++      moving = "Saving moves it, with its keys, to every session.";
++    } else if (!before.length && repositories.length) {
++      moving = "Saving moves it, with its keys, to these repositories only.";
++    } else if (added.length || removed.length) {
++      const parts = [
++        ...(added.length ? [`adds it, with its keys, to ${repositoryList(added)}`] : []),
++        ...(removed.length ? [`removes it from ${repositoryList(removed)}`] : []),
++      ];
++      moving = `Saving ${parts.join(" and ")}.`;
++    }
++  }
 +
 +  return (
 +    <>
@@ -2109,7 +2241,7 @@ index 0000000..7446f58
 +        {(
 +          [
 +            [false, "Every session"],
-+            [true, "Sessions on one repository"],
++            [true, "Sessions on some repositories"],
 +          ] as const
 +        ).map(([value, label]) => (
 +          <label
@@ -2129,33 +2261,85 @@ index 0000000..7446f58
 +      </fieldset>
 +      {forRepository && (
 +        <>
-+          <Input
-+            value={text}
-+            onChange={(e) => onText(e.target.value)}
-+            list={listId}
-+            placeholder="owner/repo, or a clone URL"
-+            aria-label="Repository"
-+            autoComplete="off"
-+            spellCheck={false}
-+            autoFocus
-+            className={cn("font-mono", TOUCH_HEIGHT)}
-+          />
++          {chosen.length > 0 && (
++            <ul className="flex flex-col" aria-label="Repositories">
++              {chosen.map((repository) => (
++                <li
++                  key={repository}
++                  className="flex items-center gap-2 py-0.5 text-ui max-md:pointer-coarse:py-0"
++                >
++                  <FolderGit2Icon className="ui-icon shrink-0 text-muted-foreground" />
++                  <span className="min-w-0 flex-1 truncate font-mono text-sm" title={repository}>
++                    {repository}
++                  </span>
++                  <Button
++                    type="button"
++                    variant="ghost"
++                    size="icon-sm"
++                    onClick={() => onChosen((current) => current.filter((r) => r !== repository))}
++                    aria-label={`Remove ${repository}`}
++                    title="Remove"
++                    className={TOUCH_ICON_BUTTON}
++                  >
++                    <XIcon className="ui-icon" />
++                  </Button>
++                </li>
++              ))}
++            </ul>
++          )}
++          <div className="flex items-center gap-2">
++            <Input
++              value={text}
++              onChange={(e) => onText(e.target.value)}
++              onKeyDown={(e) => {
++                // Enter adds the repository rather than saving.
++                if (e.key === "Enter" && text.trim()) {
++                  e.preventDefault();
++                  add();
++                }
++              }}
++              list={listId}
++              placeholder={chosen.length ? "Add another repository" : "owner/repo, or a clone URL"}
++              aria-label="Repository"
++              autoComplete="off"
++              spellCheck={false}
++              autoFocus={!chosen.length}
++              className={cn("min-w-0 flex-1 font-mono", TOUCH_HEIGHT)}
++            />
++            <Button
++              type="button"
++              variant="outline"
++              onClick={add}
++              disabled={!typed}
++              className={TOUCH_HEIGHT}
++            >
++              <PlusIcon className="ui-icon" />
++              Add
++            </Button>
++          </div>
 +          <datalist id={listId}>
 +            {suggestions.map((key) => (
 +              <option key={key} value={key} />
 +            ))}
 +          </datalist>
-+          {repository ? (
-+            <p className="text-sm text-muted-foreground wrap-anywhere">
-+              Only sessions on <span className="font-mono">{repository}</span> get it, and its keys.
-+            </p>
++          {text.trim() && !typed ? (
++            <p className="text-sm text-destructive">Enter owner/repo or a clone URL.</p>
 +          ) : (
-+            text.trim() && (
-+              <p className="text-sm text-destructive">Enter owner/repo or a clone URL.</p>
++            repositories.length > 0 && (
++              <p className="text-sm text-muted-foreground wrap-anywhere">
++                Only sessions on{" "}
++                {repositories.length === 1 ? (
++                  <span className="font-mono">{repositories[0]}</span>
++                ) : (
++                  `these ${repositories.length} repositories`
++                )}{" "}
++                get it, and its keys.
++              </p>
 +            )
 +          )}
 +        </>
 +      )}
++      {moving && <p className="text-sm text-muted-foreground">{moving}</p>}
 +    </>
 +  );
 +}

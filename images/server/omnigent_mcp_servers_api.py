@@ -36,14 +36,15 @@ class McpServerRoute(APIRoute):
 
 class SaveMcpServer(BaseModel):
     """
-    Body for ``PUT /v1/mcp-servers``. Without ``id`` it adds a server.
+    Body for ``PUT /v1/mcp-servers``. Without ``id`` it adds a server; with
+    it, ``repositories`` may differ from the server's, which moves or copies it.
 
     ``headers`` and ``env`` map each name to its new value, or to ``null`` to
     keep the current one. Names left out are removed.
     """
     id: str | None = None
-    # owner/repo or a clone URL for a repository's server; None for every session's.
-    repository: str | None = None
+    # owner/repo or clone URLs of the repositories it's for; none for every session.
+    repositories: list[str] = []
     name: str = Field(min_length=1, max_length=64)
     transport: Literal["http", "stdio"]
     agents: list[Literal["claude", "codex"]]
@@ -92,9 +93,9 @@ def create_settings_mcp_servers_router(auth_provider, is_admin, multi_user, core
         return await run(lambda: mcp_servers.save(core(), body.model_dump(), updated_by=user))
 
     @router.delete("/mcp-servers/{server_id}")
-    async def delete(request: Request, server_id: str, repository: str | None = None) -> dict[str, Any]:
+    async def delete(request: Request, server_id: str) -> dict[str, Any]:
         user = await admin(request)
-        await run(lambda: mcp_servers.delete(core(), server_id, repository, updated_by=user))
+        await run(lambda: mcp_servers.delete(core(), server_id, updated_by=user))
         return {"id": server_id, "deleted": True}
 
     return router

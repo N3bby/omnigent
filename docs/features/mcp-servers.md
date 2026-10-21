@@ -1,11 +1,11 @@
 # MCP servers in Settings
 
 Give sessions' Claude Code and Codex the MCP servers they need, such as Figma
-or GitHub, with their keys: for every session, or for sessions on one
-repository. Admins add them once in **Settings → MCP servers**. Switching a
+or GitHub, with their keys: for every session, or for sessions on some
+repositories. Admins add them once in **Settings → MCP servers**. Switching a
 server on or off needs no deploy.
 
-![Settings → MCP servers: three servers for every session, and the servers of two repositories, one replacing a server for every session](../images/mcp-servers-settings.webp)
+![Settings → MCP servers: three servers for every session, storybook for both kunlabora/design-system and kunlabora/roadpass, and three servers for roadpass alone, one replacing a server for every session](../images/mcp-servers-settings.webp)
 
 Without this page, an MCP server you add in a session with `claude mcp add` or
 `codex mcp add` only exists in that session: the next session starts in a new
@@ -15,9 +15,9 @@ Pod without it.
 
 1. In Omnigent, go to **Settings → MCP servers** (admins only) and choose
    **Add server**.
-2. Under **Sessions**, choose **Every session**, or **Sessions on one
-   repository** and the repository: pick it from the suggestions, or type
-   `owner/repo` or paste a clone URL. See
+2. Under **Sessions**, choose **Every session**, or **Sessions on some
+   repositories** and the repositories: pick one from the suggestions, or type
+   `owner/repo` or paste a clone URL, and press Enter or **Add** for each. See
    [a repository's servers](#a-repositorys-servers).
 3. Give it a **Name**, such as `figma`. The agents list the server's tools
    under it. Use letters, digits, `-` and `_`; `omnigent` is taken by
@@ -32,12 +32,12 @@ Pod without it.
      **Variables**, not in the arguments.
 6. **Save.**
 
-The page lists the servers for every session first, then each repository's
-under its name. Each server has an icon so you can tell them apart: the logo
+The page lists the servers for every session first, then those for
+repositories, under the names of the repositories they're for. Each server has an icon so you can tell them apart: the logo
 of the service it's for, such as Figma or GitHub, or its initial on a colour
 of its own. The editor shows the icon as you type.
 
-![Adding a server for kunlabora/roadpass: its URL and an Authorization header](../images/mcp-servers-repository.webp)
+![Editing roadpass's sentry server to add kunlabora/design-system: both repositories listed under Sessions, a note that saving adds it there with its keys, and its saved Authorization header left blank to keep it](../images/mcp-servers-repository.webp)
 
 Like [repository variables](repo-env.md), a header's or variable's value only
 goes from the browser to the server. The page shows its name and
@@ -45,9 +45,9 @@ goes from the browser to the server. The page shows its name and
 
 ## A repository's servers
 
-A server for one repository only reaches sessions that start with that
-repository, like its [variables](repo-env.md), and so do its keys. Use it for
-a server only that project needs, or to give one project a different key.
+A server for some repositories only reaches sessions that start with one of
+them, like their [variables](repo-env.md), and so do its keys. Use it for a
+server only those projects need, or to give one project a different key.
 
 - **It replaces a server of the same name for every session.** With a
   `github` for every session and another `github` for roadpass, sessions on
@@ -59,8 +59,16 @@ a server only that project needs, or to give one project a different key.
   [Repository variables](repo-env.md) counts its MCP servers, saving the
   variables keeps them, and removing the repository there removes them too.
   A repository with only MCP servers is listed there as well.
-- **It stays where you added it.** To move a server to another repository or
-  to every session, add it again there and remove it here.
+- **You can give it more repositories later.** Edit the server, add the
+  repository under **Sessions**, and save: it gets the server with the keys
+  you already saved, without typing them again. Removing a repository from
+  that list takes the server from it, and switching to **Every session**, or back, moves
+  the server with its keys. Before you save, the editor says what saving adds,
+  removes or moves.
+- **Each repository keeps its own copy.** The server, keys included, is
+  stored with each of its repositories' variables, so a Pod only gets the
+  keys of the repositories its session started with. Editing the server
+  changes every copy, and removing it removes all of them.
 - **It shows in the new-session form.** A repository with MCP servers has a
   plug icon next to it once picked; click it to see its servers, with their
   icons and which agent each is for when it isn't both. Anyone signed in sees
@@ -165,7 +173,8 @@ delete the session.
   servers. A sleeping session gets them when it wakes.
 - **Omnigent's model probes don't start them**, so they don't slow down the
   model picker.
-- **Up to 32 servers** for every session, and up to 32 per repository.
+- **Up to 32 servers** for every session, and up to 32 per repository. A
+  server can be for up to 64 repositories.
 - **About 40 services have a logo**, such as Figma, GitHub, Linear, Sentry,
   Notion, Jira, Postgres and Docker. A server gets one when its name, its
   URL's host or its arguments name the service, in that order; the command
@@ -189,9 +198,13 @@ Agents then start exactly as they did before this feature.
   (`images/server/omnigent_mcp_servers.py`). A repository's are the
   `mcp-servers.json` key of its [variables Secret](repo-env.md#how-it-works),
   which `omnigent_repo_env.py` keeps when the variables are saved and doesn't
-  list as a variable. Saves replace a Secret only if nobody changed it since
-  it was read; otherwise the page asks you to reload. Removing a repository's
-  last server removes its Secret when nothing else is left in it.
+  list as a variable. A server for several repositories is a copy in each of
+  their Secrets, all with the same id, which the page lists as one server. A
+  save checks every Secret it changes before writing any, and writes the
+  repositories the server goes to before removing it from the others, so a
+  failed save never loses it. Saves replace a Secret only if nobody changed it
+  since it was read; otherwise the page asks you to reload. Removing a
+  repository's last server removes its Secret when nothing else is left in it.
 - **The Settings page** (`images/server/web-patches/0028-mcp-servers.patch`)
   takes its logos from `web/src/lib/mcpServerIcons.ts` and calls
   `/v1/mcp-servers`, which `images/server/omnigent_mcp_servers_api.py`

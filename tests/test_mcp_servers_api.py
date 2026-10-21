@@ -62,8 +62,17 @@ class Routes(unittest.TestCase):
         kept = self.client.put("/v1/mcp-servers", headers=ADMIN,
                                json={**FIGMA, "id": server_id, "env": {"FIGMA_API_KEY": None}})
         self.assertEqual(kept.json()["env_names"], ["FIGMA_API_KEY"])
+        # Adding repositories later keeps its key, without sending it again.
+        copied = self.client.put("/v1/mcp-servers", headers=ADMIN,
+                                 json={**FIGMA, "id": server_id, "repositories": ["kunlabora/roadpass", "kunlabora/other"],
+                                       "env": {"FIGMA_API_KEY": None}})
+        self.assertEqual(copied.status_code, 200, copied.text)
+        self.assertEqual(copied.json()["repositories"], ["github.com/kunlabora/roadpass", "github.com/kunlabora/other"])
+        self.assertNotIn(FIGMA_KEY, copied.text)
         deleted = self.client.delete(f"/v1/mcp-servers/{server_id}", headers=ADMIN)
         self.assertEqual(deleted.json(), {"id": server_id, "deleted": True})
+        self.assertEqual([s["name"] for s in self.client.get("/v1/mcp-servers", headers=ADMIN).json()["data"]],
+                         ["linear"])
 
     def test_errors_never_echo_the_values_sent(self):
         malformed = self.client.put("/v1/mcp-servers", headers=ADMIN,
