@@ -1,0 +1,391 @@
+Keep the Claude permission hook's bearer fresh so questions reach the web UI.
+
+Claude's AskUserQuestion and plan prompts reach the web UI through the
+PermissionRequest hook, which posts to the server with the bearer in the
+bridge's permission_hook.json. Upstream stopped refreshing that file when it
+moved the policy hook onto the runner's relay, but left this hook on it. A
+sandbox runner's bearer lasts 30 minutes, and the hook has no credential to
+mint a new one, so after that the server answered 401, the hook gave up, and
+the question waited in Claude's terminal while the web UI showed a spinner.
+The runner again rewrites the file every minute, as upstream did before, and
+the hook retries a 401 with the file's newer bearer before re-minting.
+Upstream fix to backport; delete this patch once upstream ships one.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0012-environment-exit-node.patch.
+
+diff --git a/omnigent/harnesses/claude_native/hook.py b/omnigent/harnesses/claude_native/hook.py
+index 67c0991..033c67e 100644
+--- a/omnigent/harnesses/claude_native/hook.py
++++ b/omnigent/harnesses/claude_native/hook.py
+@@ -881,6 +881,44 @@ def _post_hook_with_reattach(
+                 return None
+ 
+ 
++def _permission_hook_reauth(
++    bridge_dir: Path,
++    ap_server_url: str,
++    headers: dict[str, str],
++) -> Callable[[], dict[str, str] | None]:
++    """
++    Build the permission hook's re-auth: the runner's newer bearer first.
++
++    The runner rewrites ``permission_hook.json`` with a fresh bearer while
++    the session runs, so a rejected bearer is usually just older than the
++    file. Re-minting is only the fallback: a sandbox runner has no
++    credential of its own to mint from.
++
++    :param bridge_dir: Bridge directory holding ``permission_hook.json``.
++    :param ap_server_url: Omnigent server base URL the hook POSTs to.
++    :param headers: Headers of the first POST, kept under the fresh ones so
++        routing headers survive.
++    :returns: Callable returning fresh headers, or ``None`` when neither the
++        file nor a re-mint has a newer bearer.
++    """
++    from omnigent.native.native_policy_hook import policy_hook_reauth
++
++    mint = policy_hook_reauth(ap_server_url, headers)
++    sent = headers.get("Authorization")
++
++    def _reauth() -> dict[str, str] | None:
++        nonlocal sent
++        raw = read_permission_hook_config(bridge_dir).get("ap_auth_headers")
++        if isinstance(raw, dict):
++            fresh = {str(key): str(value) for key, value in raw.items()}
++            if fresh.get("Authorization") not in (None, sent):
++                sent = fresh["Authorization"]
++                return {**headers, **fresh}
++        return mint()
++
++    return _reauth
++
++
+ def _main_permission_request(argv: list[str]) -> int:
+     """
+     Forward one Claude ``PermissionRequest`` hook to the active Omnigent session.
+@@ -891,8 +929,6 @@ def _main_permission_request(argv: list[str]) -> int:
+     :returns: Process exit code. Returns ``0`` on transport failures so
+         Claude Code falls back to its terminal prompt.
+     """
+-    from omnigent.native.native_policy_hook import policy_hook_reauth
+-
+     args = _parse_permission_args(argv)
+     raw = sys.stdin.read()
+     try:
+@@ -934,7 +970,7 @@ def _main_permission_request(argv: list[str]) -> int:
+         headers,
+         payload,
+         "claude permission",
+-        reauth=policy_hook_reauth(ap_server_url, headers),
++        reauth=_permission_hook_reauth(bridge_dir, ap_server_url, headers),
+         wait_marker=approval_wait_marker_path(session_id, bridge_dir=bridge_dir),
+     )
+     if resp is None:
+diff --git a/omnigent/runner/native/orchestration.py b/omnigent/runner/native/orchestration.py
+index e2cac5e..cf655ca 100644
+--- a/omnigent/runner/native/orchestration.py
++++ b/omnigent/runner/native/orchestration.py
+@@ -185,6 +185,7 @@ _AUTO_FORWARDER_CANCEL_TIMEOUT_S = 15.0
+ # Delegated runner bearers last 30 minutes and refresh five minutes before
+ # expiry. A one-minute cadence allows several retries without giving the child
+ # the runner binding token; cached factory calls stay local and cheap.
++_PERMISSION_HOOK_AUTH_REFRESH_INTERVAL_S = 60.0
+ 
+ 
+ class _CodexNativeModelOptionsNotReady(RuntimeError):
+@@ -343,6 +344,41 @@ def _register_auto_forwarder_task(session_id: str, task: asyncio.Task[object]) -
+     task.add_done_callback(_evict)
+ 
+ 
++async def _refresh_claude_permission_hook_auth(
++    *,
++    bridge_dir: Path,
++    server_url: str,
++    auth_token_factory: Callable[[], str | None],
++    refresh_interval_s: float = _PERMISSION_HOOK_AUTH_REFRESH_INTERVAL_S,
++) -> None:
++    """Keep the Claude permission hook's bearer snapshot current.
++
++    The ``PermissionRequest`` hook still posts straight to the server with
++    the bearer in ``permission_hook.json``. Without this loop that bearer is
++    the one from launch, so once it expires every question and plan prompt
++    stays in Claude's terminal and never reaches the web UI.
++
++    :param bridge_dir: Owner-only Claude bridge directory.
++    :param server_url: Omnigent server receiving permission requests.
++    :param auth_token_factory: Refresh-capable runner bearer factory.
++    :param refresh_interval_s: Delay between snapshot refresh attempts.
++    """
++    from omnigent.cli_auth import databricks_request_headers
++    from omnigent.harnesses.claude_native.bridge import update_permission_hook_auth_headers
++
++    while True:
++        await asyncio.sleep(refresh_interval_s)
++        try:
++            token = await asyncio.to_thread(auth_token_factory)
++            if token:
++                headers = databricks_request_headers(server_url, bearer_token=token)
++                update_permission_hook_auth_headers(bridge_dir, headers)
++        except asyncio.CancelledError:
++            raise
++        except Exception:  # noqa: BLE001 — retain the last still-valid snapshot
++            _logger.warning("Could not refresh Claude permission-hook auth")
++
++
+ # Background tasks that re-pop a still-pending cost-budget approval on a
+ # terminal client that attaches after the ASK fired. Kept referenced so
+ # they aren't garbage-collected before they run.
+@@ -9192,6 +9228,16 @@ async def _auto_create_claude_terminal(
+     from omnigent.harnesses.claude_native.forwarder import supervise_forwarder
+ 
+     async def _supervise_bridge() -> None:
++        refresh_task: asyncio.Task[None] | None = None
++        if _auth_factory is not None:
++            refresh_task = asyncio.create_task(
++                _refresh_claude_permission_hook_auth(
++                    bridge_dir=bridge_dir,
++                    server_url=server_url,
++                    auth_token_factory=_auth_factory,
++                ),
++                name=f"claude-hook-auth-{session_id}",
++            )
+         try:
+             await supervise_forwarder(
+                 base_url=server_url,
+@@ -9205,6 +9251,9 @@ async def _auto_create_claude_terminal(
+                 event_dispatcher=event_dispatcher,
+             )
+         finally:
++            if refresh_task is not None:
++                refresh_task.cancel()
++                _ = await asyncio.gather(refresh_task, return_exceptions=True)
+             await _shutdown_session_router_async(session_id, _subagent_router)
+             await _shutdown_session_turn_router_async(session_id, _claude_turn_router)
+ 
+diff --git a/tests/harnesses/claude_native/test_permission_hook_auth_refresh.py b/tests/harnesses/claude_native/test_permission_hook_auth_refresh.py
+new file mode 100644
+index 0000000..04a3b89
+--- /dev/null
++++ b/tests/harnesses/claude_native/test_permission_hook_auth_refresh.py
+@@ -0,0 +1,223 @@
++"""The Claude permission hook keeps working after its launch bearer expires."""
++
++from __future__ import annotations
++
++import asyncio
++import io
++import json
++import sys
++from collections.abc import Callable
++from pathlib import Path
++
++import httpx
++import pytest
++
++from omnigent.harnesses.claude_native import hook as claude_native_hook
++from omnigent.harnesses.claude_native.bridge import (
++    build_hook_settings,
++    prepare_bridge_dir,
++    read_permission_hook_config,
++    update_permission_hook_auth_headers,
++)
++from omnigent.native import native_policy_hook
++from omnigent.runner.native.orchestration import _refresh_claude_permission_hook_auth
++
++_SERVER_URL = "http://127.0.0.1:8787"
++_ALLOW = json.dumps(
++    {
++        "hookSpecificOutput": {
++            "hookEventName": "PermissionRequest",
++            "decision": {"behavior": "allow"},
++        }
++    }
++)
++
++
++@pytest.fixture
++def bridge_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
++    """
++    Stand up a bridge dir whose permission hook holds the launch bearer.
++
++    :param tmp_path: Test-scoped temp directory.
++    :param monkeypatch: Pytest monkeypatch fixture.
++    :returns: The prepared bridge directory.
++    """
++    monkeypatch.setattr("omnigent.harnesses.claude_native.bridge._TRUSTED_PARENT", tmp_path)
++    monkeypatch.setattr("omnigent.harnesses.claude_native.bridge._BRIDGE_ROOT", tmp_path / "root")
++    bridge = prepare_bridge_dir("conv_auth", bridge_id="bridge_auth", workspace=tmp_path)
++    build_hook_settings(
++        bridge,
++        ap_server_url=_SERVER_URL,
++        ap_auth_headers={"Authorization": "Bearer launch-token"},
++    )
++    return bridge
++
++
++@pytest.mark.asyncio
++async def test_runner_refreshes_the_hook_bearer(bridge_dir: Path) -> None:
++    """
++    The runner writes its current bearer into ``permission_hook.json``.
++
++    :param bridge_dir: Bridge dir holding the launch bearer.
++    """
++    task = asyncio.create_task(
++        _refresh_claude_permission_hook_auth(
++            bridge_dir=bridge_dir,
++            server_url=_SERVER_URL,
++            auth_token_factory=lambda: "fresh-token",
++            refresh_interval_s=0.01,
++        )
++    )
++    try:
++
++        async def _wait_for_refresh() -> None:
++            while True:
++                headers = read_permission_hook_config(bridge_dir).get("ap_auth_headers", {})
++                if headers.get("Authorization") == "Bearer fresh-token":
++                    return
++                await asyncio.sleep(0.01)
++
++        await asyncio.wait_for(_wait_for_refresh(), timeout=1.0)
++    finally:
++        task.cancel()
++        _ = await asyncio.gather(task, return_exceptions=True)
++
++
++@pytest.mark.asyncio
++async def test_runner_keeps_the_last_bearer_when_minting_fails(bridge_dir: Path) -> None:
++    """
++    A failed mint leaves the snapshot alone and the loop keeps going.
++
++    :param bridge_dir: Bridge dir holding the launch bearer.
++    """
++    calls = 0
++
++    def _factory() -> str | None:
++        nonlocal calls
++        calls += 1
++        raise RuntimeError("mint failed")
++
++    task = asyncio.create_task(
++        _refresh_claude_permission_hook_auth(
++            bridge_dir=bridge_dir,
++            server_url=_SERVER_URL,
++            auth_token_factory=_factory,
++            refresh_interval_s=0.01,
++        )
++    )
++    try:
++        while calls < 3:
++            await asyncio.sleep(0.01)
++    finally:
++        task.cancel()
++        _ = await asyncio.gather(task, return_exceptions=True)
++    headers = read_permission_hook_config(bridge_dir)["ap_auth_headers"]
++    assert headers["Authorization"] == "Bearer launch-token"
++
++
++def _run_hook(
++    bridge_dir: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    respond: Callable[[str], httpx.Response],
++) -> int:
++    """
++    Run the permission hook for one ``AskUserQuestion`` against a stub server.
++
++    :param bridge_dir: Bridge dir the hook reads.
++    :param monkeypatch: Pytest monkeypatch fixture.
++    :param respond: ``(authorization) -> httpx.Response`` for each POST.
++    :returns: The hook's exit code.
++    """
++
++    class _Client:
++        def __init__(self, *, headers: dict[str, str], timeout: object) -> None:
++            del timeout
++            self._authorization = headers.get("Authorization", "")
++
++        def __enter__(self) -> _Client:
++            return self
++
++        def __exit__(self, *args: object) -> None:
++            del args
++
++        def post(self, url: str, *, json: dict[str, object]) -> httpx.Response:
++            del json
++            response = respond(self._authorization)
++            response.request = httpx.Request("POST", url)
++            return response
++
++    monkeypatch.setattr(native_policy_hook.httpx, "Client", _Client)
++    monkeypatch.setattr(claude_native_hook, "_PERMISSION_RETRY_INITIAL_BACKOFF_S", 0.0)
++    payload = {"hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion"}
++    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
++    return claude_native_hook.main(["permission-request", "--bridge-dir", str(bridge_dir)])
++
++
++def test_hook_retries_with_the_runners_newer_bearer(
++    bridge_dir: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """
++    A 401 re-reads the bearer the runner wrote since, without re-minting.
++
++    In a sandbox runner the hook has nothing to re-mint from; before this
++    fix the 401 left the question in Claude's terminal only.
++
++    :param bridge_dir: Bridge dir holding the launch bearer.
++    :param monkeypatch: Pytest monkeypatch fixture.
++    :param capsys: Pytest capture fixture.
++    """
++    sent: list[str] = []
++
++    def _respond(authorization: str) -> httpx.Response:
++        sent.append(authorization)
++        if authorization != "Bearer fresh-token":
++            # The runner refreshed the file while the stale POST was in flight.
++            update_permission_hook_auth_headers(
++                bridge_dir, {"Authorization": "Bearer fresh-token"}
++            )
++            return httpx.Response(401, text="expired")
++        return httpx.Response(200, text=_ALLOW)
++
++    def _no_mint(self: object) -> None:
++        raise AssertionError("re-minted although the runner had a newer bearer")
++
++    monkeypatch.setattr(native_policy_hook.PolicyHookReauth, "__call__", _no_mint)
++
++    assert _run_hook(bridge_dir, monkeypatch, _respond) == 0
++    assert sent == ["Bearer launch-token", "Bearer fresh-token"]
++    decision = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["decision"]
++    assert decision == {"behavior": "allow"}
++
++
++def test_hook_still_fails_ask_without_a_newer_bearer(
++    bridge_dir: Path,
++    monkeypatch: pytest.MonkeyPatch,
++    capsys: pytest.CaptureFixture[str],
++) -> None:
++    """
++    With no newer bearer anywhere, a 401 still falls back to the terminal.
++
++    :param bridge_dir: Bridge dir holding the launch bearer.
++    :param monkeypatch: Pytest monkeypatch fixture.
++    :param capsys: Pytest capture fixture.
++    """
++    sent: list[str] = []
++    minted: list[bool] = []
++
++    def _respond(authorization: str) -> httpx.Response:
++        sent.append(authorization)
++        return httpx.Response(401, text="expired")
++
++    def _mint(self: object) -> None:
++        minted.append(True)
++
++    monkeypatch.setattr(native_policy_hook.PolicyHookReauth, "__call__", _mint)
++
++    assert _run_hook(bridge_dir, monkeypatch, _respond) == 0
++    assert sent == ["Bearer launch-token"]
++    assert minted == [True]
++    captured = capsys.readouterr()
++    assert captured.out == ""
++    assert "401" in captured.err

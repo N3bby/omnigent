@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, and images, video and audio in the chat with Copy image. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, and Claude's questions reaching the web UI however long it has run. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -75,6 +75,7 @@ PASS  images/runner/patches/0009-stop-codex-process.patch
 PASS  images/runner/patches/0010-subscription-in-use.patch
 PASS  images/runner/patches/0011-environment-menu.patch
 PASS  images/runner/patches/0012-environment-exit-node.patch
+PASS  images/runner/patches/0013-permission-hook-auth-refresh.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -208,7 +209,7 @@ patch sets, and runs the following suites against that source:
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
 | Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx` | 2438 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py` | 377 passed, 1 skipped |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py`, `tests/harnesses/claude_native/test_permission_hook_auth_refresh.py` | 381 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
@@ -244,7 +245,9 @@ repository's exit node (`0036-repo-exit-node.patch`) adds 4 cases to
 `test_environment_report_exit_node.py` and
 `test_session_environment_exit_node.py`. An exit node only for the Git
 server (`0038-repo-exit-node-git-only.patch`) adds 1 case to
-`RepoVariablesPage.test.tsx` and 1 to `RepoEnvBadge.test.tsx`. These are
+`RepoVariablesPage.test.tsx` and 1 to `RepoEnvBadge.test.tsx`. Refreshing
+Claude's permission-hook bearer (`0013-permission-hook-auth-refresh.patch`)
+adds the last backend file (4 cases), with a stubbed server. These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -330,6 +333,9 @@ PASS  running Claude doesn't auto-update
 PASS  running Claude has --allow-dangerously-skip-permissions
 PASS  codex is the deployment wrapper
 SKIP  running Codex has --dangerously-bypass-approvals-and-sandbox (no Codex running in this Pod)
+== Questions reach the web UI
+PASS  runner refreshes Claude's permission-hook bearer
+PASS  the permission hook's bearer is current (refreshed <n>s ago)
 == Root and containers
 PASS  root is mapped by a user namespace
 PASS  Podman service is running
@@ -447,6 +453,7 @@ What a failure usually means:
 | `Claude statusLine reports …` | the Claude Code statusLine payload changed shape, or it's not a Pro/Max login |
 | managed settings / wrappers | `images/runner/Dockerfile` no longer installs the wrappers over the real CLIs, or `claude_bypass_permissions` is off |
 | `claude wrapper skips Claude's first-run setup`, `Claude's config has finished onboarding` | the wrapper lost the block that creates `~/.claude.json` with `hasCompletedOnboarding`, or this session's home predates it. A new session's first message then sometimes fails after 180s with Claude Code's theme picker as the terminal's last output |
+| `runner refreshes Claude's permission-hook bearer`, `the permission hook's bearer is current` | `images/runner/patches/0013-permission-hook-auth-refresh.patch` was dropped or upstream moved the Claude terminal's forwarder (see step 2), or this session predates the deploy. Claude has to have run for a minute first. `server answers 401` means that once Claude has run for 30 minutes, its questions and plan prompts wait in its terminal while the web UI shows a spinner |
 | `… switch Claude back to bypass`, `running Claude has --allow-dangerously-skip-permissions` | `images/runner/patches/0003-claude-bypass-switch.patch` was dropped, or this session's Pod started before the deploy |
 | `claude is the deployment wrapper`, `claude is first on PATH`, `… doesn't auto-update` | Claude Code updated itself: it replaced `/usr/local/bin/claude`, or put a `claude` shim in `~/.local/share/mise/shims` by installing into a mise Node. The wrapper sets `DISABLE_AUTOUPDATER=1` to prevent that; this session may predate it. Remove the shim's package with that Node's `npm rm -g @anthropic-ai/claude-code` and run `mise reshim` |
 | user namespace / Podman / compose | k3s, containerd or the admission policies changed; run `scripts/check-userns` on the VM |

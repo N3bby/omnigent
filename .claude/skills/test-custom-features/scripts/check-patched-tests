@@ -6,8 +6,9 @@
 # badge's, a repository's exit node, also only for its Git server, on the
 # repository variables page, a first message waiting for its sandbox, the
 # repository picker's Custom tab, the chat stream's reconnect after a network
-# drop, inline media with the image lightbox and its Copy image menu, and the
-# composers without a mic, against a fresh, fully patched upstream checkout.
+# drop, inline media with the image lightbox and its Copy image menu, the
+# composers without a mic, and the Claude permission hook's bearer refresh,
+# against a fresh, fully patched upstream checkout.
 # Keep logs and JUnit reports.
 set -euo pipefail
 
@@ -102,6 +103,7 @@ PY
       tests/server/routes/test_codex_bypass_default.py \
       tests/server/routes/test_session_resources.py \
       tests/server/integration/test_message_waiting_for_sandbox.py \
+      tests/harnesses/claude_native/test_permission_hook_auth_refresh.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \

@@ -112,6 +112,38 @@ else
   fail "running Codex has --dangerously-bypass-approvals-and-sandbox" "$codex_args"
 fi
 
+echo "== Questions reach the web UI"
+check "runner refreshes Claude's permission-hook bearer" grep -q 'def _refresh_claude_permission_hook_auth' "$site/omnigent/runner/native/orchestration.py"
+# The hook posts questions with the bearer in permission_hook.json; the runner
+# rewrites it every minute, so it is never older than that and the server takes it.
+bridge="$(grep -o -- '--settings [^ ]*/claude-settings.json' <<< "$claude_args" | head -n1)"
+bridge="${bridge#--settings }"
+if [[ -z "$bridge" ]]; then
+  skip "the permission hook's bearer is current" "no Claude running in this Pod"
+else
+  got="$(python - "${bridge%/claude-settings.json}" <<'PY' 2>&1
+import json, sys, time
+from pathlib import Path
+import httpx
+bridge = Path(sys.argv[1])
+hook = json.loads((bridge / "permission_hook.json").read_text())
+session = json.loads((bridge / "bridge.json").read_text())["active_session_id"]
+age = time.time() - hook["updated_at"]
+url = f"{hook['ap_server_url'].rstrip('/')}/v1/sessions/{session}"
+status = httpx.get(url, headers=hook["ap_auth_headers"], timeout=10).status_code
+print(f"{age:.0f} {status}")
+PY
+)"
+  read -r age status <<< "$got"
+  if ! [[ "$age" =~ ^[0-9]+$ && "$status" =~ ^[0-9]+$ ]]; then
+    fail "the permission hook's bearer is current" "${got:-no output}"
+  elif ((age < 180)) && [[ "$status" == 200 ]]; then
+    pass "the permission hook's bearer is current (refreshed ${age}s ago)"
+  else
+    fail "the permission hook's bearer is current" "written ${age}s ago, server answers $status"
+  fi
+fi
+
 echo "== Root and containers"
 uid_map="$(tr -s ' ' < /proc/self/uid_map)"
 if [[ "$uid_map" == " 0 0 4294967295" ]]; then
