@@ -93,10 +93,11 @@ the tailnet address, not `localhost`.
 - Get the Pod's tailnet name with `tailscale status --peers=false`. The third
   column is the full name, e.g. `omnigent-cd44cbc5.taild5bc1b.ts.net`.
 - Every port a process in the Pod listens on is reachable, whether it listens
-  on `localhost` or on all addresses, e.g.
-  `http://omnigent-cd44cbc5.taild5bc1b.ts.net:3000`.
+  on `localhost` or on all addresses, and so is every port a container
+  publishes, e.g. `http://omnigent-cd44cbc5.taild5bc1b.ts.net:3000`.
 - The user can SSH in with `ssh root@<short name>`, the full name up to the
-  first dot, e.g. `ssh root@omnigent-cd44cbc5`.
+  first dot, e.g. `ssh root@omnigent-cd44cbc5`. The short name needs MagicDNS
+  on their device; the full name always works.
 
 If `tailscale status` fails, the Pod isn't on the tailnet. Tell the user,
 and point them at `/run/omnigent-tailscale.log`, instead of making up an
@@ -105,46 +106,37 @@ address.
 ## Reaching the user's tailnet
 
 You can connect to the user's other devices on the tailnet, which
-`tailscale status` lists. How depends on whether the Pod has a
-`tailscale0` interface (`ip link show tailscale0`):
-
-- **With `tailscale0`**, the Pod routes tailnet traffic itself. Tailnet
-  names, short or full `.ts.net`, resolve, and `100.x` addresses connect,
-  from any tool, with no proxy: `curl http://<host>:3000`, `psql -h <host>`.
-- **Without it**, the Pod has no route to the tailnet and no MagicDNS, so go
-  through Tailscale instead:
-  - **SSH:** `ssh root@<host>` works with the short name, the full `.ts.net`
-    name or the `100.x` address. The SSH config already sends it through
-    `tailscale nc`, so don't wrap it yourself. (It does so with
-    `tailscale0` too, which is fine.)
-  - **Everything else** (curl, HTTP clients, browsers): use the proxy on
-    `localhost:1055`, which speaks SOCKS5 and HTTP. Pass it per command, e.g.
-    `curl --proxy socks5h://localhost:1055 http://<host>:3000`, or
-    `--proxy-server=socks5://localhost:1055` for Chromium and Playwright.
-    With curl, use `socks5h://`, so the proxy resolves the name.
-- **Your browser tools** (`browser_navigate` and the others) drive the
-  browser in the user's Omnigent desktop app, on their device, so they reach
-  tailnet hosts without the proxy.
-
-A repository can send a session's internet traffic through a tailnet exit
-node, for a server that only lets in certain addresses. `tailscale status`
-then names the exit node. If the internet is unreachable, the exit node may be
-offline: tell the user.
-
-A repository can also send only the traffic to its Git server through the
-exit node, when the VPN behind it is slow. Then
-`/run/omnigent-tailscale.exit-node-hosts` lists the Git server, and
-`ip rule` lists its addresses at priority 5261. Everything else, such as
-package downloads, goes out directly. If another host behind the same VPN,
-such as a registry or an API on another name, refuses or times out, add it
-to that file and run
-`omnigent-exit-node-routes`; it then goes through the exit node for this
-session. Tell the user, so they know which hosts need the VPN. If the Git
-server itself times out, the exit node may be offline: tell the user. Don't
-switch the exit node off or route everything through it to get around
-either.
+`tailscale status` lists, as from any machine on it. Tailnet names, short or
+full `.ts.net`, resolve, and `100.x` addresses connect, from any tool and
+from containers: `ssh root@<host>`, `curl http://<host>:3000`,
+`psql -h <host>`. SSH accepts a tailnet host's key the first time. Your
+browser tools (`browser_navigate` and the others) drive the browser in the
+user's Omnigent desktop app, so they reach what the user's device reaches,
+not what this Pod reaches.
 
 The tailnet policy decides which devices the Pod may reach, and by default
 that's none. If a connection times out, or SSH says the tailnet policy
 doesn't permit it, the user hasn't given sessions access to that device. Tell
 them that, rather than trying other routes.
+
+If `ip link show tailscale0` fails, the Pod has no route to the tailnet:
+`ssh` still works, and anything else needs the proxy on `localhost:1055`,
+e.g. `curl --proxy socks5h://localhost:1055 http://<host>:3000`. Tell the
+user, and point them at `/run/omnigent-tailscale.log`.
+
+### A repository's exit node
+
+The user can set a tailnet exit node in a repository's settings, for a Git
+server that only a VPN can reach. A session with that repository checked out
+then uses the exit node, which `tailscale status` names, for either:
+
+- **All of its internet traffic**, or
+- **Only its traffic to the Git server**, when
+  `/run/omnigent-tailscale.exit-node-hosts` lists it. To send another host
+  behind the same VPN through it too, add the host to that file, run
+  `omnigent-exit-node-routes`, and tell the user which host you added.
+
+If what should go through the exit node times out, the exit node may be
+offline: tell the user. Names that only resolve inside the VPN don't resolve
+here; use the public name or the address. Don't switch the exit node off to
+get around a problem.

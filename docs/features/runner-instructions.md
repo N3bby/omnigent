@@ -22,8 +22,9 @@ session's runner, so you don't have to explain it yourself.
 - To give the [tailnet address](tailscale.md), not `localhost`, when you ask
   how to reach something running in the session.
 - How to [reach your other devices](tailscale.md#reaching-your-devices-from-a-session)
-  on the tailnet: SSH as usual, anything else through the proxy on
-  `localhost:1055`.
+  on the tailnet, as from any machine on it, and what to do when they can't.
+- How a [repository's exit node](repo-exit-node.md) routes the session's
+  traffic, and how to send another host behind the same VPN through it.
 
 ## Changing the text
 
