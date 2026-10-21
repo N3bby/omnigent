@@ -41,12 +41,14 @@ RUN python -m pip install --no-cache-dir "hvac==${HVAC_VERSION}" \
 # 0004-repo-env.patch, 0006-repo-env-routes.patch, 0010-repo-git-token.patch
 # and 0012-repo-checkouts.patch import them. So are omnigent_startup and
 # omnigent_startup_api, for 0016-startup-progress.patch, and
-# omnigent_mcp_servers and omnigent_mcp_servers_api, for 0019-mcp-servers.patch.
+# omnigent_mcp_servers and omnigent_mcp_servers_api, for 0019-mcp-servers.patch,
+# and omnigent_progress and omnigent_progress_api, for 0022-agent-progress.patch.
 COPY patches/ /tmp/omnigent-patches/
 COPY omnigent_repo_env.py omnigent_repo_env_api.py /tmp/omnigent-modules/
 COPY omnigent_subscriptions.py omnigent_subscriptions_api.py omnigent_subscription_login.py /tmp/omnigent-modules/
 COPY omnigent_startup.py omnigent_startup_api.py /tmp/omnigent-modules/
 COPY omnigent_mcp_servers.py omnigent_mcp_servers_api.py /tmp/omnigent-modules/
+COPY omnigent_progress.py omnigent_progress_api.py /tmp/omnigent-modules/
 RUN set -eu; \
     site="$(python -c 'import omnigent, pathlib; print(pathlib.Path(omnigent.__file__).parents[1])')"; \
     purelib="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
@@ -60,7 +62,7 @@ RUN set -eu; \
     done; \
     apt-get purge -y --auto-remove patch; \
     rm -rf /var/lib/apt/lists/* /tmp/omnigent-patches; \
-    python -m compileall -q -f "$site/omnigent/server" "$site/omnigent/onboarding/sandboxes" "$purelib/omnigent_repo_env.py" "$purelib/omnigent_repo_env_api.py" "$purelib/omnigent_startup.py" "$purelib/omnigent_startup_api.py" "$purelib/omnigent_mcp_servers.py" "$purelib/omnigent_mcp_servers_api.py"; \
+    python -m compileall -q -f "$site/omnigent/server" "$site/omnigent/onboarding/sandboxes" "$purelib/omnigent_repo_env.py" "$purelib/omnigent_repo_env_api.py" "$purelib/omnigent_startup.py" "$purelib/omnigent_startup_api.py" "$purelib/omnigent_mcp_servers.py" "$purelib/omnigent_mcp_servers_api.py" "$purelib/omnigent_progress.py" "$purelib/omnigent_progress_api.py"; \
     python -c 'import omnigent.server.sandbox_catalog_fallback, omnigent.server.routes.sessions, omnigent.onboarding.sandboxes.agent_sandbox, omnigent.server.app'
 
 # The server serves the SPA from OMNIGENT_WEB_UI_DIST instead of its package data.

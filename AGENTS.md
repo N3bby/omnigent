@@ -106,6 +106,15 @@ OMNIGENT_DATA_DIR=<this repo>/.generated/host-data OMNIGENT_CONFIG_HOME=<this re
   mise exec uv@<uv> -- uv run omnigent host --server http://127.0.0.1:7767 --non-interactive &
 ```
 
+Start the local server and host without your session's `OMNIGENT_*` and
+`RUNNER_*` variables, but keep `OMNIGENT_URL` for Vite, and give the host its
+own `OMNIGENT_HARNESS_TMP_PARENT`, such as `/tmp/omnigent-localtest`.
+Otherwise they write into your runner's log and share its temporary
+directory, and the Pod once restarted seconds after such a test host was
+stopped. Stop them
+by PID, never with `pkill -f`: the pattern also matches the shell that runs
+it, and every shell whose command line started them.
+
 Kubernetes sandboxes don't run locally; those need a deploy.
 
 ### Before you commit a patch

@@ -84,6 +84,35 @@ Keep files the user should open under `/home/omnigent`, never under `/tmp`,
 even when your harness offers a scratch directory there: the user gets a 404
 for links into `/tmp`, and it's gone when the Pod stops.
 
+## Showing progress
+
+The user sees a progress bar in the chat when you set one with the
+`sys_session_progress` tool (`mcp__omnigent__sys_session_progress` in Claude
+Code). Show one whenever a task will keep you working for more than a minute
+or two, such as changing many files, a long test run or a batch job, and
+when you start something that keeps running, such as a dev server:
+
+1. Work out how you'll do it first. Then set the bar right before the first
+   long command, saying what's about to run. Count a test suite, build or
+   install you haven't timed as long.
+2. The bar only changes between your commands. For a loop over many items,
+   run it in a few batches, such as a quarter of the items each, and update
+   the bar between them with counts and a `percent` that matches them:
+   `sys_session_progress(label="Migrating settings pages (12/40)", percent=30)`.
+3. For one long command you can't split, such as a test suite, leave
+   `percent` out: `sys_session_progress(label="Running the test suite")`.
+   The bar then sweeps instead of sitting at 0%.
+4. Let the user watch a long command's output: send it to a file under
+   `/home/omnigent/logs/` and give that file as `log_file`, e.g.
+   `./run-tests.sh 2>&1 | tee /home/omnigent/logs/tests.log` with
+   `log_file="/home/omnigent/logs/tests.log"`. For a dev server or anything
+   else you start in the background, redirect its output to such a file: its
+   log keeps streaming in the chat after your turn.
+5. Update it when the work moves on, such as from running the tests to
+   fixing a failure. When you're done, set it once more to say how it went,
+   e.g. `label="All 40 settings pages migrated", percent=100`: your turn's
+   last bar stays in the chat, with its log.
+
 ## Connection details
 
 The Pod is usually on the user's tailnet. When the user asks how to reach

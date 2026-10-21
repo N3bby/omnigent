@@ -19,6 +19,9 @@ session's runner, so you don't have to explain it yourself.
 - To [show images](inline-media.md), such as screenshots, in the chat rather
   than link them, several in a row so they share a grid, and that video and
   audio files play there too.
+- To show a [progress bar](agent-progress.md) in the chat during long work,
+  updated right before each long step, with the work's output in a log file
+  under `/home/omnigent/logs/` that you can open under the bar.
 - To give the [tailnet address](tailscale.md), not `localhost`, when you ask
   how to reach something running in the session.
 - How to [reach your other devices](tailscale.md#reaching-your-devices-from-a-session)

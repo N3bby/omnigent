@@ -1,0 +1,758 @@
+Progress bars agents show in the chat, runner side: sys_session_progress.
+
+Claude Code and Codex get a sys_session_progress tool through the native
+relay, beside sys_session_rename. An agent calls it with a label and, when it
+can tell, a percent (0-100); leaving percent out shows a bar that only says
+it's busy, and clear: true ends it. It can name a log_file, the file a long
+command writes its output to. The runner posts the update to the server's
+POST /v1/sessions/{id}/progress (images/server/patches/
+0022-agent-progress.patch), and returns what the server shows, or the
+server's refusal, as the tool result.
+
+For a log_file, omnigent/runner/progress_log.py follows the file: its last
+64 KiB first, unless nothing wrote it for 30 seconds (an earlier run's log
+the command is about to write again), then new lines about every second, without colour codes, with
+the session's repository variable values hidden, posted to
+POST /v1/sessions/{id}/progress/{bar}/log. It keeps following after the
+agent's turn, so a dev server's log keeps streaming, and stops when the
+server no longer keeps the bar or the file hasn't grown for 2 hours. Naming
+the same file again for the same bar keeps its follower.
+
+The tool stays out of ToolManager: upstream's tests pin the tool set every
+agent registers, and it only means something in this deployment's web UI. So
+the relay advertises it to a session whose agent resolved (the spec-less
+fallback's set is pinned too), _ungranted_tool_reason lets it through for
+every agent, and it's runner-dispatched like the rename. Codex doesn't
+pre-approve it the way it does the rename; this deployment runs Codex without
+approval prompts.
+
+diff --git a/omnigent/runner/progress_log.py b/omnigent/runner/progress_log.py
+new file mode 100644
+index 0000000..45ce8bb
+--- /dev/null
++++ b/omnigent/runner/progress_log.py
+@@ -0,0 +1,198 @@
++"""Follow the log file an agent names for its progress bar.
++
++``sys_session_progress`` takes a ``log_file``: a file a long command writes its
++output to, such as a test run or a dev server. The runner follows it here and
++posts its new lines to the server, which keeps them under the bar for the web
++UI (``POST /v1/sessions/{id}/progress/{bar id}/log``). Following carries on
++after the agent's turn, so a dev server's log keeps streaming, and stops when
++the server no longer keeps the bar, or when the file hasn't grown for
++:data:`QUIET_STOP_S`.
++
++Values of the session's repository variables, mounted under
++:data:`REPO_ENV_DIR`, are hidden before a line leaves the Pod, as in the
++startup log.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import contextlib
++import logging
++import os
++import re
++import stat
++import time
++
++import httpx
++
++_logger = logging.getLogger(__name__)
++
++POLL_S = 1.0
++START_BYTES = 64 * 1024
++"""How much of a file written just now is sent when following starts."""
++STALE_S = 30.0
++"""A file not written for this long is an earlier run's, so following starts at its end."""
++READ_BYTES = 1024 * 1024
++MAX_POST_LINES = 500
++MAX_PENDING_LINES = 2000
++MAX_LINE_CHARS = 1000
++PARTIAL_FLUSH_S = 3.0
++"""A line without its newline yet is sent once the file has been still this long."""
++WAIT_FOR_FILE_S = 120.0
++"""How long a file that doesn't exist yet is waited for."""
++QUIET_STOP_S = 2 * 3600.0
++MAX_PER_SESSION = 5
++REPO_ENV_DIR = os.environ.get("OMNIGENT_REPO_ENV_DIR", "/run/omnigent/repo-env")
++
++_ANSI = re.compile(r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
++_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
++
++_tails: dict[tuple[str, str], asyncio.Task[None]] = {}
++_bars: dict[tuple[str, str], str] = {}
++"""The bar each followed file belongs to."""
++
++
++def follow(client: httpx.AsyncClient, session_id: str, bar_id: str, path: str) -> None:
++    """
++    Start following *path* for a bar, in place of any earlier follower of it.
++
++    The same file for the same bar keeps its follower, so a later update that
++    names it again doesn't send its lines twice.
++
++    :param client: The runner's client for the server, which outlives the call.
++    :param session_id: The session, e.g. ``"conv_abc123"``.
++    :param bar_id: The bar the server returned, e.g. ``"bar_1a2b3c4d5e6f"``.
++    :param path: The absolute path of the log file.
++    """
++    key = (session_id, path)
++    if key in _tails and _bars.get(key) == bar_id and not _tails[key].done():
++        return
++    old = _tails.pop(key, None)
++    if old is not None:
++        old.cancel()
++    mine = [k for k in _tails if k[0] == session_id]
++    for oldest in mine[: max(0, len(mine) - MAX_PER_SESSION + 1)]:
++        _tails.pop(oldest).cancel()
++    task = asyncio.get_running_loop().create_task(_follow(client, session_id, bar_id, path))
++    _tails[key] = task
++    _bars[key] = bar_id
++
++    def _done(done: asyncio.Task[None]) -> None:
++        if _tails.get(key) is done:
++            del _tails[key]
++            _bars.pop(key, None)
++
++    task.add_done_callback(_done)
++
++
++def clean(raw: bytes, secrets: list[str]) -> str:
++    """
++    One line of a log as the chat shows it.
++
++    :param raw: The line's bytes, without its newline.
++    :param secrets: Values to hide, longest first.
++    :returns: The text after the line's last carriage return, as a terminal
++        shows it, without colour codes, secrets hidden, cut to
++        :data:`MAX_LINE_CHARS`.
++    """
++    text = raw.decode("utf-8", errors="replace")
++    text = _ANSI.sub("", text).rstrip("\r")
++    if "\r" in text:
++        text = text.rsplit("\r", 1)[1]
++    for value in secrets:
++        text = text.replace(value, "[hidden]")
++    return text[:MAX_LINE_CHARS]
++
++
++def repo_secrets(directory: str = REPO_ENV_DIR) -> list[str]:
++    """The values of the session's repository variables, longest first."""
++    values: set[str] = set()
++    with contextlib.suppress(OSError):
++        for repo in os.listdir(directory):
++            folder = os.path.join(directory, repo)
++            with contextlib.suppress(OSError):
++                for name in os.listdir(folder):
++                    if not _NAME.match(name):
++                        continue
++                    with contextlib.suppress(OSError):
++                        with open(
++                            os.path.join(folder, name), encoding="utf-8", errors="replace"
++                        ) as f:
++                            value = f.read().strip()
++                        if len(value) >= 6:
++                            values.add(value)
++    return sorted(values, key=len, reverse=True)
++
++
++async def _follow(client: httpx.AsyncClient, session_id: str, bar_id: str, path: str) -> None:
++    secrets = repo_secrets()
++    started = time.monotonic()
++    last_growth = started
++    offset: int | None = None
++    skip_first = False
++    partial = b""
++    pending: list[str] = []
++    url = f"/v1/sessions/{session_id}/progress/{bar_id}/log"
++    try:
++        while True:
++            now = time.monotonic()
++            try:
++                info = os.stat(path)
++            except OSError:
++                info = None
++            if info is not None and not stat.S_ISREG(info.st_mode):
++                return
++            if info is None:
++                if now - (started if offset is None else last_growth) > (
++                    WAIT_FOR_FILE_S if offset is None else QUIET_STOP_S
++                ):
++                    return
++            else:
++                if offset is None:
++                    # A command often rewrites its log after the bar is set:
++                    # don't show the last run's lines first.
++                    if time.time() - info.st_mtime > STALE_S:
++                        offset = info.st_size
++                    else:
++                        offset = max(0, info.st_size - START_BYTES)
++                        skip_first = offset > 0
++                if info.st_size < offset:
++                    # Truncated or replaced: read it again from the start.
++                    offset, partial, skip_first = 0, b"", False
++                if info.st_size > offset:
++                    with open(path, "rb") as f:
++                        f.seek(offset)
++                        chunk = f.read(READ_BYTES)
++                    offset += len(chunk)
++                    last_growth = now
++                    *lines, partial = (partial + chunk).split(b"\n")
++                    if skip_first and lines:
++                        lines, skip_first = lines[1:], False
++                    pending.extend(clean(line, secrets) for line in lines)
++                    if len(partial) > MAX_LINE_CHARS * 4:
++                        pending.append(clean(partial, secrets))
++                        partial = b""
++                elif partial and now - last_growth > PARTIAL_FLUSH_S:
++                    pending.append(clean(partial, secrets))
++                    partial = b""
++                elif now - last_growth > QUIET_STOP_S:
++                    return
++            del pending[:-MAX_PENDING_LINES]
++            while pending:
++                batch = pending[:MAX_POST_LINES]
++                try:
++                    response = await client.post(url, json={"lines": batch}, timeout=30.0)
++                except httpx.TransportError:
++                    break
++                if response.status_code >= 400:
++                    _logger.warning("progress log post returned %s", response.status_code)
++                    return
++                del pending[: len(batch)]
++                with contextlib.suppress(ValueError):
++                    if response.json().get("kept") is False:
++                        return
++            await asyncio.sleep(POLL_S)
++    except asyncio.CancelledError:
++        raise
++    except Exception:  # noqa: BLE001 - a log must never take the runner down
++        _logger.warning("following %s for a progress bar failed", path, exc_info=True)
+diff --git a/omnigent/runner/tool_dispatch.py b/omnigent/runner/tool_dispatch.py
+index 6673465..bc3b842 100644
+--- a/omnigent/runner/tool_dispatch.py
++++ b/omnigent/runner/tool_dispatch.py
+@@ -84,6 +84,7 @@ from omnigent.tools.builtins.os_env import (
+     SysOsShellTool,
+     SysOsWriteTool,
+ )
++from omnigent.tools.builtins.session_progress import SysSessionProgressTool
+ from omnigent.tools.builtins.session_rename import SysSessionRenameTool
+ from omnigent.tools.builtins.spawn import (
+     # Shared contract values with the in-process sys_session_* tools. Imported
+@@ -307,6 +308,9 @@ _SESSION_QUERY_TOOLS = frozenset(
+ )
+ 
+ _SESSION_SELF_WRITE_TOOLS = frozenset({SysSessionRenameTool.name()})
++# The chat's progress bar. Advertised to native harnesses only, outside the
++# spec's tool surface: it touches nothing but the calling session's web UI.
++_SESSION_PROGRESS_TOOLS = frozenset({SysSessionProgressTool.name()})
+ 
+ # The title bound the rename tool advertises to the LLM — read once from the
+ # tool schema so the dispatcher can never drift from the published contract.
+@@ -576,6 +580,8 @@ def build_native_relay_tool_schemas(spec: AgentSpec | None) -> list[_JsonObject]
+             function = _string_object_dict(schema.get("function"))
+             if function is not None and function.get("name") in _NATIVE_RELAY_BUILTIN_TOOLS:
+                 _append(function)
++        # Like the spawn writes, only for a session whose agent resolved.
++        _append(SysSessionProgressTool().get_schema()["function"])
+     else:
+         from omnigent.tools.builtins.policy import SysAddPolicyTool, SysPolicyRegistryTool
+ 
+@@ -863,6 +869,7 @@ _ALL_LOCAL_TOOLS = (
+     | _SESSION_CREATE_TOOLS
+     | _SESSION_QUERY_TOOLS
+     | _SESSION_SELF_WRITE_TOOLS
++    | _SESSION_PROGRESS_TOOLS
+     | _WEB_FETCH_TOOLS
+     | _WEB_SEARCH_TOOLS
+     | _WEB_READ_TOOLS
+@@ -1006,7 +1013,7 @@ def _ungranted_tool_reason(
+     """
+     from omnigent.spec.types import AgentSpec as _AgentSpec
+ 
+-    if not isinstance(agent_spec, _AgentSpec):
++    if not isinstance(agent_spec, _AgentSpec) or tool_name in _SESSION_PROGRESS_TOOLS:
+         return None
+     try:
+         granted = _granted_tool_names(
+@@ -5906,6 +5913,64 @@ async def _session_list_via_rest(
+     )
+ 
+ 
++async def _set_session_progress_via_rest(
++    args: _JsonObject,
++    conversation_id: str | None,
++    server_client: httpx.AsyncClient | None,
++) -> str:
++    """Set or end the calling session's progress bar through the server API.
++
++    The server checks the update and keeps the bar for the web UI; a
++    ``log_file`` is then followed for the bar (:mod:`omnigent.runner.progress_log`).
++    Like a rename, a failure comes back as a tool result, never an exception.
++    """
++    name = SysSessionProgressTool.name()
++    if server_client is None:
++        return json.dumps({"error": f"{name} requires server access"})
++    if conversation_id is None:
++        return json.dumps({"error": f"{name} requires a session id"})
++    body = {key: args[key] for key in ("label", "percent", "clear", "log_file") if key in args}
++    try:
++        response = await server_client.post(
++            f"/v1/sessions/{conversation_id}/progress",
++            json=body,
++            timeout=30.0,
++        )
++    except Exception as exc:  # noqa: BLE001
++        return json.dumps({"error": f"{name} failed: {exc}"})
++    if response.status_code >= 400:
++        try:
++            detail = response.json().get("detail")
++        except (ValueError, AttributeError):
++            detail = None
++        return json.dumps(
++            {
++                "error": f"{name} returned {response.status_code}",
++                "detail": detail if isinstance(detail, str) else response.text[:200],
++            }
++        )
++    try:
++        payload = response.json()
++    except ValueError as exc:
++        return json.dumps({"error": f"{name} returned invalid JSON: {exc}"})
++    progress = payload.get("progress") if isinstance(payload, dict) else None
++    if not isinstance(progress, dict):
++        return json.dumps({"shown": False})
++    result: _JsonObject = {
++        "shown": True,
++        "label": progress.get("label"),
++        "percent": progress.get("percent"),
++    }
++    log_file = body.get("log_file")
++    bar_id = progress.get("id")
++    if isinstance(log_file, str) and isinstance(bar_id, str):
++        from omnigent.runner import progress_log
++
++        progress_log.follow(server_client, conversation_id, bar_id, log_file)
++        result["log_file"] = log_file
++    return json.dumps(result)
++
++
+ async def _rename_current_session_via_rest(
+     args: _JsonObject,
+     conversation_id: str | None,
+@@ -6686,6 +6751,12 @@ async def execute_tool(
+                 conversation_id,
+                 server_client,
+             )
++        elif tool_name in _SESSION_PROGRESS_TOOLS:
++            output = await _set_session_progress_via_rest(
++                args,
++                conversation_id,
++                server_client,
++            )
+         elif tool_name in _SESSION_QUERY_TOOLS:
+             output = await _execute_session_query_tool(
+                 tool_name,
+diff --git a/omnigent/tools/builtins/session_progress.py b/omnigent/tools/builtins/session_progress.py
+new file mode 100644
+index 0000000..a0b8522
+--- /dev/null
++++ b/omnigent/tools/builtins/session_progress.py
+@@ -0,0 +1,90 @@
++"""Tool for showing a progress bar in the current session's chat."""
++
++from __future__ import annotations
++
++from typing import Any
++
++from omnigent.tools.base import Tool
++
++#: Longest label the web UI shows; the server cuts longer ones.
++SESSION_PROGRESS_LABEL_MAX_CHARS = 120
++
++
++class SysSessionProgressTool(Tool):
++    """Schema-only tool that sets or clears the calling session's progress bar."""
++
++    @classmethod
++    def name(cls) -> str:
++        """Return the tool name."""
++        return "sys_session_progress"
++
++    @classmethod
++    def description(cls) -> str:
++        """Return the LLM-facing description."""
++        return (
++            "Show the user a progress bar in the chat while you work on a long, "
++            "multi-step task, such as a migration across many files, a long test run "
++            "or a batch job, or while a long-running process such as a dev server "
++            "starts. Call it right before each long step, saying what that step does; "
++            "each call replaces this turn's bar. The bar can't move while a single "
++            "command runs, so before one command that does all of the work, such as a "
++            "loop over every file or a whole test suite, leave `percent` out and the "
++            "bar sweeps instead of sitting at 0%. When you go step by step, give counts "
++            "in the label and `percent` (0-100) before each step. When the command "
++            "writes its output to a file, give it as `log_file`: the chat streams the "
++            "file under the bar, and keeps streaming it after your turn. Once your "
++            "turn ends, the bar stays in the chat as a line under it, with its log, so "
++            "when you finish, set it once more to say how it went. Skip it for quick "
++            "tasks."
++        )
++
++    def get_schema(self) -> dict[str, Any]:
++        """Return the OpenAI-format schema."""
++        return {
++            "type": "function",
++            "function": {
++                "name": self.name(),
++                "description": self.description(),
++                "parameters": {
++                    "type": "object",
++                    "properties": {
++                        "label": {
++                            "type": "string",
++                            "description": (
++                                "What's in progress, short and specific, with counts when "
++                                "you have them, e.g. 'Migrating components (12/40)' or "
++                                "'Running the integration tests'."
++                            ),
++                            "maxLength": SESSION_PROGRESS_LABEL_MAX_CHARS,
++                        },
++                        "percent": {
++                            "type": "number",
++                            "description": (
++                                "How far along, from 0 to 100. Leave it out when you can't "
++                                "tell, or before one command that does all of the work."
++                            ),
++                            "minimum": 0,
++                            "maximum": 100,
++                        },
++                        "log_file": {
++                            "type": "string",
++                            "description": (
++                                "Absolute path of the file the command writes its output "
++                                "to, e.g. '/home/omnigent/logs/tests.log' after running "
++                                "`./run-tests.sh > /home/omnigent/logs/tests.log 2>&1`. "
++                                "The user can open its lines under the bar."
++                            ),
++                        },
++                        "clear": {
++                            "type": "boolean",
++                            "description": (
++                                "End the bar now instead of updating it; the label is "
++                                "then ignored."
++                            ),
++                        },
++                    },
++                    "required": ["label"],
++                    "additionalProperties": False,
++                },
++            },
++        }
+diff --git a/tests/runner/test_progress_log.py b/tests/runner/test_progress_log.py
+new file mode 100644
+index 0000000..0d413fb
+--- /dev/null
++++ b/tests/runner/test_progress_log.py
+@@ -0,0 +1,141 @@
++"""Following the log file an agent names for its progress bar (this deployment)."""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import os
++import time
++from pathlib import Path
++
++import httpx
++import pytest
++
++from omnigent.runner import progress_log
++
++
++@pytest.fixture(autouse=True)
++def _fast(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
++    monkeypatch.setattr(progress_log, "POLL_S", 0.01)
++    monkeypatch.setattr(progress_log, "PARTIAL_FLUSH_S", 0.05)
++    monkeypatch.setattr(progress_log, "REPO_ENV_DIR", str(tmp_path / "repo-env"))
++
++
++def test_a_line_reads_as_a_terminal_shows_it() -> None:
++    raw = b"\x1b[32m  VITE v6\x1b[0m ready\r\x1b[2K  Building 10%\r  Building 100%\r"
++
++    assert progress_log.clean(raw, []) == "  Building 100%"
++    assert progress_log.clean(b"token=abcdef123 ok", ["abcdef123"]) == "token=[hidden] ok"
++    assert len(progress_log.clean(b"x" * 5000, [])) == progress_log.MAX_LINE_CHARS
++
++
++def test_repository_variable_values_are_hidden(tmp_path: Path) -> None:
++    folder = tmp_path / "repo-env" / "roadpass"
++    folder.mkdir(parents=True)
++    (folder / "NPM_TOKEN").write_text("npm_secret_value\n")
++    (folder / "SHORT").write_text("abc")
++    (folder / "agent-instructions.md").write_text("Use pnpm, never npm.")
++
++    assert progress_log.repo_secrets(str(tmp_path / "repo-env")) == ["npm_secret_value"]
++
++
++class _Server:
++    def __init__(self, keep_for: int = 1_000_000) -> None:
++        self.lines: list[str] = []
++        self.keep_for = keep_for
++
++    def handler(self, request: httpx.Request) -> httpx.Response:
++        assert request.url.path.startswith("/v1/sessions/conv_1/progress/bar_")
++        self.lines.extend(json.loads(request.content)["lines"])
++        return httpx.Response(200, json={"kept": len(self.lines) < self.keep_for})
++
++
++async def _wait(condition, timeout: float = 3.0) -> None:  # type: ignore[no-untyped-def]
++    deadline = asyncio.get_running_loop().time() + timeout
++    while not condition():
++        assert asyncio.get_running_loop().time() < deadline, "timed out"
++        await asyncio.sleep(0.01)
++
++
++@pytest.mark.asyncio
++async def test_new_lines_stream_until_the_bar_is_gone(tmp_path: Path) -> None:
++    log = tmp_path / "dev.log"
++    log.write_text("starting\n")
++    server = _Server(keep_for=4)
++    async with httpx.AsyncClient(
++        transport=httpx.MockTransport(server.handler), base_url="http://server"
++    ) as client:
++        progress_log.follow(client, "conv_1", "bar_1", str(log))
++        await _wait(lambda: server.lines == ["starting"])
++        with log.open("a") as f:
++            f.write("ready in 312 ms\nwaiting for ")
++        await _wait(lambda: server.lines == ["starting", "ready in 312 ms", "waiting for "])
++        with log.open("a") as f:
++            f.write("changes\nGET /\n")
++        await _wait(lambda: not progress_log._tails)
++
++    # The server stopped keeping the bar after 4 lines, so following stopped.
++    assert server.lines == ["starting", "ready in 312 ms", "waiting for ", "changes", "GET /"]
++
++
++@pytest.mark.asyncio
++async def test_a_big_file_starts_from_its_end_and_a_truncated_one_again(tmp_path: Path) -> None:
++    log = tmp_path / "tests.log"
++    log.write_text("".join(f"line {n}\n" for n in range(20000)))
++    server = _Server()
++    async with httpx.AsyncClient(
++        transport=httpx.MockTransport(server.handler), base_url="http://server"
++    ) as client:
++        progress_log.follow(client, "conv_1", "bar_1", str(log))
++        await _wait(lambda: server.lines and server.lines[-1] == "line 19999")
++        assert len("".join(f"{line}\n" for line in server.lines)) <= progress_log.START_BYTES
++        # Every line sent is whole: the cut-off line at the start was skipped.
++        assert all(line.startswith("line ") for line in server.lines)
++        log.write_text("run 2\n")
++        await _wait(lambda: server.lines[-1] == "run 2")
++        for task in list(progress_log._tails.values()):
++            task.cancel()
++
++
++@pytest.mark.asyncio
++async def test_the_same_file_again_keeps_or_moves_its_follower(tmp_path: Path) -> None:
++    log = tmp_path / "dev.log"
++    log.write_text("ready\n")
++    server = _Server()
++    async with httpx.AsyncClient(
++        transport=httpx.MockTransport(server.handler), base_url="http://server"
++    ) as client:
++        progress_log.follow(client, "conv_1", "bar_1", str(log))
++        first = progress_log._tails[("conv_1", str(log))]
++        await _wait(lambda: server.lines == ["ready"])
++        # A later update of the same bar names the file again: no lines twice.
++        progress_log.follow(client, "conv_1", "bar_1", str(log))
++        await asyncio.sleep(0.05)
++        assert progress_log._tails[("conv_1", str(log))] is first
++        assert server.lines == ["ready"]
++        # A new bar takes the file over.
++        progress_log.follow(client, "conv_1", "bar_2", str(log))
++        await asyncio.sleep(0.05)
++        assert first.cancelled()
++        assert len(progress_log._tails) == 1
++        for task in list(progress_log._tails.values()):
++            task.cancel()
++
++
++@pytest.mark.asyncio
++async def test_an_earlier_runs_log_starts_from_its_new_lines(tmp_path: Path) -> None:
++    log = tmp_path / "tests.log"
++    log.write_text("== last run\nok old\n")
++    old = time.time() - progress_log.STALE_S - 5
++    os.utime(log, (old, old))
++    server = _Server()
++    async with httpx.AsyncClient(
++        transport=httpx.MockTransport(server.handler), base_url="http://server"
++    ) as client:
++        progress_log.follow(client, "conv_1", "bar_1", str(log))
++        await asyncio.sleep(0.05)
++        # The command writes its log again, as `| tee` does.
++        log.write_text("== this run\n")
++        await _wait(lambda: server.lines == ["== this run"])
++        for task in list(progress_log._tails.values()):
++            task.cancel()
+diff --git a/tests/runner/test_session_progress_dispatch.py b/tests/runner/test_session_progress_dispatch.py
+new file mode 100644
+index 0000000..5fa3880
+--- /dev/null
++++ b/tests/runner/test_session_progress_dispatch.py
+@@ -0,0 +1,151 @@
++"""Runner dispatch and native-relay coverage for the chat's progress bar (this deployment)."""
++
++from __future__ import annotations
++
++import json
++
++import httpx
++import pytest
++
++from omnigent.runner.tool_dispatch import (
++    _granted_tool_names,
++    build_native_relay_tool_schemas,
++    execute_tool,
++    should_dispatch_locally,
++)
++from omnigent.spec.types import AgentSpec
++
++
++def test_native_relay_exposes_session_progress() -> None:
++    schemas = build_native_relay_tool_schemas(AgentSpec(spec_version=1))
++
++    progress = next(schema for schema in schemas if schema["name"] == "sys_session_progress")
++
++    assert set(progress["parameters"]["properties"]) == {"label", "percent", "log_file", "clear"}
++    # An empty call fails in the agent's own tool validation, with the reason.
++    assert progress["parameters"]["required"] == ["label"]
++    assert progress["parameters"]["additionalProperties"] is False
++    assert should_dispatch_locally("sys_session_progress")
++
++
++def test_the_spec_less_fallback_leaves_session_progress_out() -> None:
++    # The fallback's tool set is pinned by upstream's comment relay tests.
++    names = {schema["name"] for schema in build_native_relay_tool_schemas(None)}
++
++    assert "sys_session_progress" not in names
++
++
++def test_session_progress_stays_out_of_the_spec_surface() -> None:
++    # Allowed for every agent without joining the ToolManager surface, which
++    # SDK harnesses and the spec's granted set are built from.
++    assert "sys_session_progress" not in _granted_tool_names(AgentSpec(spec_version=1))
++
++
++@pytest.mark.asyncio
++async def test_session_progress_posts_the_update() -> None:
++    requests: list[httpx.Request] = []
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        requests.append(request)
++        body = json.loads(request.content)
++        if body.get("clear"):
++            return httpx.Response(200, json={"progress": None})
++        return httpx.Response(200, json={"progress": {**body, "updated_at": 1.0}})
++
++    async with httpx.AsyncClient(
++        transport=httpx.MockTransport(handler), base_url="http://server"
++    ) as server_client:
++        outputs = [
++            await execute_tool(
++                tool_name="sys_session_progress",
++                arguments=json.dumps(arguments),
++                server_client=server_client,
++                conversation_id="conv_current",
++                agent_spec=AgentSpec(spec_version=1),
++            )
++            for arguments in (
++                {"label": "Migrating components (12/40)", "percent": 30},
++                {"label": "Running the test suite"},
++                {"clear": True},
++            )
++        ]
++
++    assert [json.loads(output) for output in outputs] == [
++        {"shown": True, "label": "Migrating components (12/40)", "percent": 30},
++        {"shown": True, "label": "Running the test suite", "percent": None},
++        {"shown": False},
++    ]
++    assert all(request.method == "POST" for request in requests)
++    assert all(request.url.path == "/v1/sessions/conv_current/progress" for request in requests)
++    assert [json.loads(request.content) for request in requests] == [
++        {"label": "Migrating components (12/40)", "percent": 30},
++        {"label": "Running the test suite"},
++        {"clear": True},
++    ]
++
++
++@pytest.mark.asyncio
++async def test_session_progress_returns_the_server_refusal() -> None:
++    def handler(_request: httpx.Request) -> httpx.Response:
++        return httpx.Response(422, json={"detail": "percent must be a number from 0 to 100"})
++
++    async with httpx.AsyncClient(
++        transport=httpx.MockTransport(handler), base_url="http://server"
++    ) as server_client:
++        output = await execute_tool(
++            tool_name="sys_session_progress",
++            arguments=json.dumps({"label": "Building", "percent": 140}),
++            server_client=server_client,
++            conversation_id="conv_current",
++        )
++
++    assert json.loads(output) == {
++        "error": "sys_session_progress returned 422",
++        "detail": "percent must be a number from 0 to 100",
++    }
++
++
++@pytest.mark.asyncio
++async def test_session_progress_without_a_server_is_a_tool_error() -> None:
++    output = await execute_tool(
++        tool_name="sys_session_progress",
++        arguments=json.dumps({"label": "Building"}),
++        server_client=None,
++        conversation_id="conv_current",
++    )
++
++    assert json.loads(output) == {"error": "sys_session_progress requires server access"}
++
++
++@pytest.mark.asyncio
++async def test_a_log_file_is_followed_for_the_bar(monkeypatch: pytest.MonkeyPatch) -> None:
++    from omnigent.runner import progress_log
++
++    followed: list[tuple[str, str, str]] = []
++    monkeypatch.setattr(
++        progress_log, "follow", lambda _client, sid, bar, path: followed.append((sid, bar, path))
++    )
++
++    def handler(request: httpx.Request) -> httpx.Response:
++        body = json.loads(request.content)
++        return httpx.Response(200, json={"progress": {"id": "bar_1", **body}})
++
++    async with httpx.AsyncClient(
++        transport=httpx.MockTransport(handler), base_url="http://server"
++    ) as server_client:
++        output = await execute_tool(
++            tool_name="sys_session_progress",
++            arguments=json.dumps(
++                {"label": "Dev server on :5173", "log_file": "/home/omnigent/dev.log"}
++            ),
++            server_client=server_client,
++            conversation_id="conv_current",
++        )
++
++    assert json.loads(output) == {
++        "shown": True,
++        "label": "Dev server on :5173",
++        "percent": None,
++        "log_file": "/home/omnigent/dev.log",
++    }
++    assert followed == [("conv_current", "bar_1", "/home/omnigent/dev.log")]

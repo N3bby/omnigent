@@ -1,0 +1,417 @@
+Progress bars agents show in the chat, and their logs, server side.
+
+Agents in this deployment get a sys_session_progress tool (the runner's
+0014-agent-progress.patch). The runner posts each call to
+POST /v1/sessions/{id}/progress, and the lines of a log file the agent names
+to POST /v1/sessions/{id}/progress/{bar}/log (omnigent_progress_api, mounted
+here). omnigent_progress (images/server/omnigent_progress.py) keeps each
+session's last bars and their logs in memory and publishes the session's
+bars as a session.progress event on every change; the snapshot carries them
+as `progress`. The web UI reads a log from GET .../progress/{bar}/log.
+
+A bar belongs to a turn. _publish_status reports every session status to
+omnigent_progress.on_status, which ends the newest bar when the session stops
+working; one that works again within 5 seconds, as Claude's terminal does
+between steps, carries on with it. A message from the user, seen where the
+events route accepts it, makes the agent's next update start a new bar.
+
+diff --git a/omnigent/server/app.py b/omnigent/server/app.py
+index 01a9f89..642960e 100644
+--- a/omnigent/server/app.py
++++ b/omnigent/server/app.py
+@@ -129,6 +129,8 @@ import omnigent_startup as _startup
+ from omnigent_startup_api import create_startup_router
+ from omnigent_subscriptions_api import create_subscriptions_router
+ from omnigent_mcp_servers_api import create_settings_mcp_servers_router
++import omnigent_progress as _progress
++from omnigent_progress_api import create_progress_router
+ from omnigent.server.routes.terminal_attach import create_terminal_attach_router
+ from omnigent.server.routes.usage import create_usage_router
+ from omnigent.server.runner_session_init import (
+@@ -3435,6 +3437,30 @@ def create_app(
+         prefix="/v1",
+         tags=["mcp_servers"],
+     )
++    # Progress bars agents show in the chat, from sys_session_progress, and
++    # the logs under them (omnigent_progress_api).
++    app.include_router(
++        create_progress_router(
++            conversation_store=conversation_store,
++            auth_provider=auth_provider,
++            permission_store=permission_store,
++        ),
++        prefix="/v1",
++        tags=["sessions"],
++    )
++
++    def _publish_progress(session_id: str, progress: list[dict[str, Any]]) -> None:
++        from omnigent.server.routes._sessions.common import session_stream
++        from omnigent.server.schemas import SessionProgressEvent
++
++        session_stream.publish(
++            session_id,
++            SessionProgressEvent(
++                type="session.progress", conversation_id=session_id, progress=progress
++            ).model_dump(),
++        )
++
++    _progress.set_publisher(_publish_progress)
+     # First-class projects (owner-private session containers). Mounted only
+     # when a project store is wired; the endpoints self-scope to the caller.
+     if project_store is not None:
+diff --git a/omnigent/server/routes/_sessions/helpers.py b/omnigent/server/routes/_sessions/helpers.py
+index 448e58a..003dff4 100644
+--- a/omnigent/server/routes/_sessions/helpers.py
++++ b/omnigent/server/routes/_sessions/helpers.py
+@@ -31,6 +31,7 @@ from pathlib import PurePath
+ from typing import Any, Final, Literal, cast
+ 
+ import httpx
++import omnigent_progress as _progress
+ import omnigent_startup as _startup
+ from fastapi import (
+     HTTPException,
+@@ -4929,6 +4930,11 @@ def _publish_status(
+         return
+     previous_status = _session_status_cache.get(session_id)
+     _session_status_cache[session_id] = status
++    # A progress bar ends with its turn (omnigent_progress).
++    try:
++        _progress.on_status(session_id, status)
++    except Exception:  # noqa: BLE001 - a progress bar must never break a status
++        _logger.debug("progress bar for %s failed", session_id, exc_info=True)
+     if previous_status != status:
+         _publish_child_status_to_parent(session_id, status)
+     # Mirror the transition onto the conversation row (best-effort,
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index f57971e..d30355d 100644
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
+ from typing import Any, Literal, cast
+ 
+ import httpx
++import omnigent_progress as _progress
+ import omnigent_startup as _startup
+ from fastapi import (
+     HTTPException,
+@@ -1536,6 +1537,7 @@ def _build_session_response(
+         # its reason. Populated by _publish_sandbox_status.
+         sandbox_status=_session_sandbox_status_cache.get(conv.id),
+         startup=_startup.snapshot(conv.id),
++        progress=_progress.snapshot(conv.id),
+         # Replay harness MCP-server startup state (codex-native) so a
+         # client opening the session mid-startup sees the startup band.
+         mcp_startup=_session_mcp_startup_cache.get(conv.id),
+diff --git a/omnigent/server/routes/sessions/routes_events.py b/omnigent/server/routes/sessions/routes_events.py
+index 41387dc..51744f1 100644
+--- a/omnigent/server/routes/sessions/routes_events.py
++++ b/omnigent/server/routes/sessions/routes_events.py
+@@ -13,6 +13,7 @@ from dataclasses import dataclass
+ from typing import Any, Literal, cast
+ 
+ import httpx
++import omnigent_progress as _progress
+ import omnigent_startup as _startup
+ from fastapi import (
+     APIRouter,
+@@ -1215,6 +1216,9 @@ def register_events_routes(
+                 "Session is closed. Start a new sub-agent session to continue.",
+                 code=ErrorCode.CONFLICT,
+             )
++        if body.type == "message" and body.data.get("role") == "user":
++            # The agent's next progress bar is a new one (omnigent_progress).
++            _progress.on_user_message(session_id)
+         if (
+             body.type == "message"
+             and body.data.get("role") == "user"
+diff --git a/omnigent/server/schemas.py b/omnigent/server/schemas.py
+index 6fb41be..31da47a 100644
+--- a/omnigent/server/schemas.py
++++ b/omnigent/server/schemas.py
+@@ -2252,6 +2252,11 @@ class SessionResponse(BaseModel):
+     # UI's startup card (omnigent_startup.snapshot). ``None`` until the
+     # session starts a sandbox while this server runs.
+     startup: dict[str, Any] | None = None
++    # The progress bars the agent set with sys_session_progress, oldest
++    # first (omnigent_progress.snapshot): each with ``id``, ``label``,
++    # ``percent`` (``None`` when it can't tell), its times, ``outcome`` once
++    # its turn ended, and whether it has a log. ``None`` without any.
++    progress: list[dict[str, Any]] | None = None
+     # Per-MCP-server startup state for native harness sessions
+     # (codex-native), present while the harness boots its MCP servers or
+     # when servers were cancelled/failed. ``None`` otherwise. Sourced from
+@@ -3196,6 +3201,22 @@ class SessionUsageEvent(_SSEEventBase):
+     subscription: str | None = None
+ 
+ 
++class SessionProgressEvent(_SSEEventBase):
++    """
++    A progress bar the agent set (``sys_session_progress``) changed: the agent
++    updated it, its turn ended, or its log got its first lines.
++
++    :param type: Always ``"session.progress"``.
++    :param conversation_id: Session identifier.
++    :param progress: The session's bars, oldest first, as the snapshot's
++        ``progress`` field has them.
++    """
++
++    type: Literal["session.progress"]
++    conversation_id: str
++    progress: list[dict[str, Any]]
++
++
+ class SessionStartupEvent(_SSEEventBase):
+     """
+     A managed session's sandbox start moved on: a step started, finished or
+@@ -4799,6 +4820,7 @@ ServerStreamEvent = Annotated[
+     | SessionTerminalPendingEvent
+     | SessionSandboxStatusEvent
+     | SessionStartupEvent
++    | SessionProgressEvent
+     | SessionTailscaleEvent
+     | SessionMcpStartupEvent
+     | SessionModelOptionsEvent
+diff --git a/tests/server/test_agent_progress.py b/tests/server/test_agent_progress.py
+new file mode 100644
+index 0000000..51c6152
+--- /dev/null
++++ b/tests/server/test_agent_progress.py
+@@ -0,0 +1,237 @@
++"""The server side of agents' progress bars and their logs (this deployment).
++
++Runs the real app with header auth: the progress routes it mounts, the
++``session.progress`` event, the snapshot's ``progress`` field, a message from
++the user starting a new bar, and the session status ending one. The bars
++themselves are tested in the deployment repo (tests/test_agent_progress.py).
++"""
++
++from __future__ import annotations
++
++from collections.abc import AsyncIterator, Iterator
++from pathlib import Path
++from typing import Any
++
++import httpx
++import omnigent_progress as progress
++import pytest
++import pytest_asyncio
++from fastapi import FastAPI
++from pydantic import TypeAdapter
++
++from omnigent.entities import Conversation
++from omnigent.runtime.agent_cache import AgentCache
++from omnigent.server.app import create_app
++from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ, UnifiedAuthProvider
++from omnigent.server.routes._sessions import helpers
++from omnigent.server.schemas import ServerStreamEvent, SessionProgressEvent
++from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
++from omnigent.stores.artifact_store.local import LocalArtifactStore
++from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
++from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
++from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
++from tests.server.helpers import create_test_agent
++
++OWNER = "owner@example.test"
++READER = "reader@example.test"
++_STATUS_SESSION = "5" * 32
++
++
++@pytest.fixture(autouse=True)
++def _fresh() -> Iterator[None]:
++    progress._sessions.clear()
++    progress._logs.clear()
++    yield
++    progress._sessions.clear()
++    progress._logs.clear()
++
++
++@pytest.fixture
++def app(runtime_init: None, db_uri: str, tmp_path: Path) -> FastAPI:
++    artifact_store = LocalArtifactStore(str(tmp_path / "artifacts"))
++    return create_app(
++        agent_store=SqlAlchemyAgentStore(db_uri),
++        file_store=SqlAlchemyFileStore(db_uri),
++        conversation_store=SqlAlchemyConversationStore(db_uri),
++        artifact_store=artifact_store,
++        agent_cache=AgentCache(artifact_store=artifact_store, cache_dir=tmp_path / "cache"),
++        permission_store=SqlAlchemyPermissionStore(db_uri),
++        auth_provider=UnifiedAuthProvider(source="header", local_single_user=False),
++    )
++
++
++@pytest_asyncio.fixture
++async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
++    async with httpx.AsyncClient(
++        transport=httpx.ASGITransport(app=app),
++        base_url="http://test",
++        headers={"X-Forwarded-Email": OWNER},
++    ) as client:
++        yield client
++    await app.state.background_title_coordinator.shutdown()
++
++
++@pytest_asyncio.fixture
++async def session(db_uri: str, client: httpx.AsyncClient) -> Conversation:
++    agent = await create_test_agent(client)
++    session = SqlAlchemyConversationStore(db_uri).create_conversation(
++        kind="default", title="Progress", agent_id=agent["id"]
++    )
++    permissions = SqlAlchemyPermissionStore(db_uri)
++    permissions.grant(OWNER, session.id, LEVEL_OWNER)
++    permissions.grant(READER, session.id, LEVEL_READ)
++    return session
++
++
++async def test_a_bar_is_published_and_in_the_snapshot(
++    client: httpx.AsyncClient, session: Conversation, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    from omnigent.server.routes._sessions import common
++
++    events: list[dict[str, Any]] = []
++    real_publish = common.session_stream.publish
++    monkeypatch.setattr(
++        common.session_stream,
++        "publish",
++        lambda sid, event: (events.append(event), real_publish(sid, event))[1],
++    )
++
++    response = await client.post(
++        f"/v1/sessions/{session.id}/progress", json={"label": "Running tests", "percent": 40}
++    )
++
++    assert response.status_code == 200, response.text
++    bar = response.json()["progress"]
++    assert bar["label"] == "Running tests"
++    assert bar["percent"] == 40.0
++    assert bar["id"].startswith("bar_")
++    progress_events = [e for e in events if e["type"] == "session.progress"]
++    assert progress_events[-1]["progress"] == [bar]
++    snapshot = (await client.get(f"/v1/sessions/{session.id}?include_items=false")).json()
++    assert snapshot["progress"] == [bar]
++
++
++async def test_a_reader_can_read_a_log_but_not_set_a_bar(
++    app: FastAPI, client: httpx.AsyncClient, session: Conversation
++) -> None:
++    bar = (
++        await client.post(
++            f"/v1/sessions/{session.id}/progress",
++            json={"label": "Dev server on :5173", "log_file": "/home/omnigent/dev.log"},
++        )
++    ).json()["progress"]
++    added = await client.post(
++        f"/v1/sessions/{session.id}/progress/{bar['id']}/log",
++        json={"lines": ["VITE v6 ready in 312 ms", "➜  Local: http://localhost:5173/"]},
++    )
++    assert added.json() == {"kept": True}
++
++    async with httpx.AsyncClient(
++        transport=httpx.ASGITransport(app=app),
++        base_url="http://test",
++        headers={"X-Forwarded-Email": READER},
++    ) as reader:
++        page = (await reader.get(f"/v1/sessions/{session.id}/progress/{bar['id']}/log")).json()
++        later = (
++            await reader.get(f"/v1/sessions/{session.id}/progress/{bar['id']}/log?after=1")
++        ).json()
++        refused = await reader.post(
++            f"/v1/sessions/{session.id}/progress", json={"label": "Not mine"}
++        )
++
++    assert [line["text"] for line in page["lines"]] == [
++        "VITE v6 ready in 312 ms",
++        "➜  Local: http://localhost:5173/",
++    ]
++    assert page["log_files"] == ["/home/omnigent/dev.log"]
++    assert [line["seq"] for line in later["lines"]] == [2]
++    assert refused.status_code == 403
++    snapshot = (await client.get(f"/v1/sessions/{session.id}?include_items=false")).json()
++    assert snapshot["progress"][0]["has_log"] is True
++
++
++async def test_lines_for_a_bar_that_is_gone_say_so(
++    client: httpx.AsyncClient, session: Conversation
++) -> None:
++    added = await client.post(
++        f"/v1/sessions/{session.id}/progress/bar_gone/log", json={"lines": ["x"]}
++    )
++    missing = await client.get(f"/v1/sessions/{session.id}/progress/bar_gone/log")
++
++    assert added.json() == {"kept": False}
++    assert missing.status_code == 404
++
++
++@pytest.mark.parametrize(
++    "body",
++    [
++        {"percent": 10},
++        {"label": "  "},
++        {"label": "Building", "percent": 101},
++        {"label": "Building", "percent": "half"},
++        {"label": "Building", "clear": "yes"},
++        {"label": "Building", "log_file": "dev.log"},
++        [1, 2],
++    ],
++)
++async def test_a_malformed_update_is_refused_with_why(
++    client: httpx.AsyncClient, session: Conversation, body: Any
++) -> None:
++    response = await client.post(f"/v1/sessions/{session.id}/progress", json=body)
++
++    assert response.status_code == 422
++    assert response.json()["detail"]
++    assert progress.snapshot(session.id) is None
++
++
++async def test_malformed_log_lines_are_refused(
++    client: httpx.AsyncClient, session: Conversation
++) -> None:
++    response = await client.post(
++        f"/v1/sessions/{session.id}/progress/bar_x/log", json={"lines": "one line"}
++    )
++    assert response.status_code == 422
++
++
++async def test_a_message_from_the_user_starts_a_new_bar(
++    client: httpx.AsyncClient, session: Conversation
++) -> None:
++    await client.post(f"/v1/sessions/{session.id}/progress", json={"label": "Migrating (3/10)"})
++    # No runner serves this session, so the message itself goes nowhere; the
++    # server has seen it by then.
++    await client.post(
++        f"/v1/sessions/{session.id}/events",
++        json={
++            "type": "message",
++            "data": {"role": "user", "content": [{"type": "input_text", "text": "Also docs"}]},
++        },
++    )
++    await client.post(f"/v1/sessions/{session.id}/progress", json={"label": "Writing docs"})
++
++    bars = progress.snapshot(session.id)
++    assert bars is not None
++    assert [bar["label"] for bar in bars] == ["Migrating (3/10)", "Writing docs"]
++
++
++def test_the_session_status_ends_a_bar(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setattr(helpers.session_live_state, "persist_live_status", lambda *_a: None)
++    monkeypatch.setattr(
++        helpers.session_live_state, "persist_scheduled_run_completion", lambda *_a, **_k: None
++    )
++    monkeypatch.setattr(helpers.session_stream, "publish", lambda *_a: None)
++    progress.update(_STATUS_SESSION, {"label": "Migrating", "percent": 50})
++
++    helpers._publish_status(_STATUS_SESSION, "idle")
++
++    bars = progress.snapshot(_STATUS_SESSION)
++    assert bars is not None
++    assert bars[-1]["outcome"] == "done"
++    assert bars[-1]["ended_at"] is not None
++
++
++def test_the_event_validates() -> None:
++    bar = {"id": "bar_1", "label": "Running tests", "percent": None}
++    event = SessionProgressEvent(type="session.progress", conversation_id="c", progress=[bar])
++    adapter: TypeAdapter[ServerStreamEvent] = TypeAdapter(ServerStreamEvent)
++
++    assert isinstance(adapter.validate_python(event.model_dump()), SessionProgressEvent)

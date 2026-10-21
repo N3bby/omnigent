@@ -20,6 +20,7 @@ What you see and choose while talking to an agent.
 | [Start without a message](start-without-message.md) | Start a session from the New session screen with an empty composer, so its sandbox and @ file search are ready before you ask anything | Nothing to turn off |
 | [Your first message survives closing the app](first-message-while-starting.md) | Send a new session's first message and close the app while the sandbox starts: the agent still gets it | Nothing to turn off |
 | [Images, video and audio in the chat](inline-media.md) | An agent's screenshots show in the chat, side by side in a grid, and open full screen to pinch-zoom and swipe through; videos and audio play in place; in the desktop app, right-click one to copy it | No |
+| [Progress bars from the agent](agent-progress.md) | During long work, the agent shows what it's doing and how far along it is, in a one-line bar above Working…, with the work's log, such as a test run's or a dev server's, a click away; once it's done, the bar stays at the end of its reply with its log | Nothing to turn off: the agent shows one only for long work |
 
 ## Subscriptions
 

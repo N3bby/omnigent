@@ -1,0 +1,1278 @@
+The progress bars agents show in the chat, and their logs.
+
+With this deployment's server (images/server/patches/0022-agent-progress.patch)
+and runner (images/runner/patches/0014-agent-progress.patch), an agent can
+call sys_session_progress with a label, a percentage when it can tell, and a
+log file. The session snapshot's `progress` field and session.progress events
+carry the session's bars into the chat store as agentProgress.
+
+The newest bar shows above Working… while the agent works on the turn that
+set it (lib/agentProgress.ts liveProgress), as one compact row: the label,
+with a trailing count kept in view, the percentage, a thin line along the
+bottom that fills to it or sweeps without one, and Log. Every other bar is
+finished, and AssistantBubble shows it as one line at the end of the reply
+that ends its turn (placeFinishedProgress, by time against the user's
+messages): ✓ or ✗, its last label and how long it ran. Log opens the bar's
+lines, polled every 1.5 seconds from GET /v1/sessions/{id}/progress/{bar}/log
+while open; they keep coming after the turn, e.g. from a dev server. The
+tool's calls are titled "Progress: <label>".
+
+diff --git a/web/src/components/chat/AgentProgressCard.test.tsx b/web/src/components/chat/AgentProgressCard.test.tsx
+new file mode 100644
+index 0000000..6196a74
+--- /dev/null
++++ b/web/src/components/chat/AgentProgressCard.test.tsx
+@@ -0,0 +1,147 @@
++import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import type { AgentProgress } from "@/lib/agentProgress";
++import { useChatStore } from "@/store/chatStore";
++
++const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
++vi.mock("@/lib/identity", () => ({ authenticatedFetch: (url: string) => mocks.fetch(url) }));
++
++import { AgentProgressCard, FinishedProgress, SessionAgentProgress } from "./AgentProgressCard";
++
++function bar(extra: Partial<AgentProgress> = {}): AgentProgress {
++  return {
++    id: "bar_1",
++    label: "Migrating settings pages (12/40)",
++    percent: 30,
++    startedAt: 100,
++    updatedAt: 160,
++    endedAt: null,
++    outcome: null,
++    logFiles: [],
++    hasLog: false,
++    ...extra,
++  };
++}
++
++function logPage(lines: string[], from = 1) {
++  return {
++    ok: true,
++    status: 200,
++    json: () =>
++      Promise.resolve({
++        lines: lines.map((text, i) => ({ seq: from + i, t: 0, text })),
++        next: from + lines.length - 1,
++        dropped: false,
++      }),
++  };
++}
++
++beforeEach(() => {
++  useChatStore.setState({ conversationId: "conv_1" });
++  mocks.fetch.mockReset();
++});
++
++afterEach(() => {
++  cleanup();
++  vi.useRealTimers();
++  useChatStore.setState({ conversationId: null, agentProgress: [] });
++});
++
++describe("AgentProgressCard", () => {
++  it("shows what's in progress, its count, how far along, and a bar", () => {
++    render(<AgentProgressCard progress={bar()} sessionId="conv_1" />);
++
++    expect(screen.getByText("Migrating settings pages")).toBeTruthy();
++    expect(screen.getByText("(12/40)")).toBeTruthy();
++    expect(screen.getByText("30%")).toBeTruthy();
++    const progressbar = screen.getByRole("progressbar", {
++      name: "Migrating settings pages (12/40)",
++    });
++    expect(progressbar.getAttribute("aria-valuenow")).toBe("30");
++    expect(screen.queryByRole("button", { name: /log/i })).toBeNull();
++  });
++
++  it("without a percentage only shows the agent is busy", () => {
++    render(<AgentProgressCard progress={bar({ percent: null })} sessionId="conv_1" />);
++
++    expect(screen.queryByText(/%$/)).toBeNull();
++    expect(screen.getByRole("progressbar").hasAttribute("aria-valuenow")).toBe(false);
++  });
++
++  it("opens the log, which follows new lines", async () => {
++    vi.useFakeTimers();
++    mocks.fetch
++      .mockResolvedValueOnce(logPage(["VITE v6 ready in 312 ms"]))
++      .mockResolvedValueOnce(logPage(["GET / 200"], 2))
++      .mockResolvedValue(logPage([], 3));
++    render(
++      <AgentProgressCard
++        progress={bar({ id: "bar_dev", label: "Dev server on :5173", percent: null, hasLog: true })}
++        sessionId="conv_1"
++      />,
++    );
++
++    fireEvent.click(screen.getByRole("button", { name: /log/i }));
++    await act(() => vi.advanceTimersByTimeAsync(0));
++    expect(screen.getByTestId("agent-progress-log").textContent).toContain("VITE v6 ready");
++    await act(() => vi.advanceTimersByTimeAsync(1600));
++    expect(screen.getByTestId("agent-progress-log").textContent).toBe(
++      "VITE v6 ready in 312 ms\nGET / 200",
++    );
++    expect(mocks.fetch.mock.calls.map(([url]) => url)).toEqual([
++      "/v1/sessions/conv_1/progress/bar_dev/log?after=0",
++      "/v1/sessions/conv_1/progress/bar_dev/log?after=1",
++    ]);
++  });
++
++  it("says when the server no longer keeps the log", async () => {
++    mocks.fetch.mockResolvedValue({ ok: false, status: 404, statusText: "Not Found" });
++    render(
++      <AgentProgressCard progress={bar({ id: "bar_gone", hasLog: true })} sessionId="conv_1" />,
++    );
++
++    fireEvent.click(screen.getByRole("button", { name: /log/i }));
++    expect(await screen.findByText("This log is no longer kept.")).toBeTruthy();
++  });
++});
++
++describe("SessionAgentProgress", () => {
++  it("shows the live bar, and nothing without one", () => {
++    const { rerender } = render(<SessionAgentProgress bar={null} />);
++    expect(screen.queryByTestId("agent-progress")).toBeNull();
++
++    rerender(<SessionAgentProgress bar={bar({ percent: 75 })} />);
++    expect(screen.getByTestId("agent-progress").textContent).toContain("75%");
++  });
++});
++
++describe("FinishedProgress", () => {
++  it("shows each finished bar as one line with how long it ran", () => {
++    render(
++      <FinishedProgress
++        bars={[
++          bar({ id: "a", label: "Migrated all 40 pages", endedAt: 352 }),
++          bar({ id: "b", label: "Running the suite", endedAt: 130, outcome: "failed" }),
++        ]}
++      />,
++    );
++
++    const lines = screen.getAllByTestId("agent-progress-finished");
++    expect(lines.map((line) => line.textContent)).toEqual([
++      "Migrated all 40 pages· 4m 12s",
++      "Running the suite· 30s",
++    ]);
++    expect(screen.getByLabelText("Stopped")).toBeTruthy();
++    // Without a log there's nothing to open.
++    expect(screen.queryByRole("button")).toBeNull();
++  });
++
++  it("opens a finished bar's log", async () => {
++    mocks.fetch.mockResolvedValue(logPage(["12 passed"]));
++    render(<FinishedProgress bars={[bar({ id: "bar_done", hasLog: true, endedAt: 200 })]} />);
++
++    fireEvent.click(screen.getByRole("button"));
++    expect((await screen.findByTestId("agent-progress-log")).textContent).toContain("12 passed");
++  });
++});
+diff --git a/web/src/components/chat/AgentProgressCard.tsx b/web/src/components/chat/AgentProgressCard.tsx
+new file mode 100644
+index 0000000..7e3dca0
+--- /dev/null
++++ b/web/src/components/chat/AgentProgressCard.tsx
+@@ -0,0 +1,284 @@
++import { CheckIcon, ChevronRightIcon, CircleXIcon, Loader2Icon } from "lucide-react";
++import { useEffect, useLayoutEffect, useRef, useState } from "react";
++
++import {
++  fetchProgressLog,
++  formatProgressDuration,
++  formatProgressPercent,
++  splitProgressLabel,
++  type AgentProgress,
++  type ProgressLogLine,
++} from "@/lib/agentProgress";
++import { cn } from "@/lib/utils";
++import { useChatStore } from "@/store/chatStore";
++
++const POLL_MS = 1500;
++const MAX_SHOWN_LINES = 2000;
++
++/** Bars whose log is open, so it stays open when the bar finishes and moves. */
++const openLogs = new Set<string>();
++
++function useLogOpen(barId: string): [boolean, () => void] {
++  const [open, setOpen] = useState(() => openLogs.has(barId));
++  const toggle = () => {
++    setOpen((value) => {
++      if (value) openLogs.delete(barId);
++      else openLogs.add(barId);
++      return !value;
++    });
++  };
++  return [open, toggle];
++}
++
++const hasLogOf = (bar: AgentProgress): boolean => bar.hasLog || bar.logFiles.length > 0;
++
++/**
++ * A bar's log, polled while it's open. It keeps coming after the agent's turn
++ * while the file grows, e.g. from a dev server.
++ */
++export function ProgressLog({
++  sessionId,
++  barId,
++  className,
++}: {
++  sessionId: string;
++  barId: string;
++  className?: string;
++}) {
++  const [lines, setLines] = useState<ProgressLogLine[]>([]);
++  const [state, setState] = useState<"loading" | "ready" | "gone">("loading");
++  const [dropped, setDropped] = useState(false);
++  const scrollRef = useRef<HTMLPreElement>(null);
++  const atBottom = useRef(true);
++
++  useEffect(() => {
++    let cancelled = false;
++    let next = 0;
++    let timer: ReturnType<typeof setTimeout> | undefined;
++    const tick = async () => {
++      try {
++        const page = await fetchProgressLog(sessionId, barId, next);
++        if (cancelled) return;
++        if (page === null) {
++          setState("gone");
++          return;
++        }
++        if (page.lines.length > 0) {
++          setLines((prev) => [...prev, ...page.lines].slice(-MAX_SHOWN_LINES));
++        }
++        next = page.next;
++        setDropped(page.dropped);
++        setState("ready");
++      } catch {
++        // The next poll tries again.
++      }
++      if (!cancelled) timer = setTimeout(() => void tick(), POLL_MS);
++    };
++    void tick();
++    return () => {
++      cancelled = true;
++      clearTimeout(timer);
++    };
++  }, [sessionId, barId]);
++
++  // Follow new lines, unless the reader scrolled up.
++  useLayoutEffect(() => {
++    const el = scrollRef.current;
++    if (el && atBottom.current) el.scrollTop = el.scrollHeight;
++  }, [lines]);
++
++  const note =
++    state === "loading"
++      ? "Loading…"
++      : state === "gone"
++        ? "This log is no longer kept."
++        : lines.length === 0
++          ? "No output yet."
++          : null;
++  return (
++    <div data-testid="agent-progress-log" className={cn("bg-muted/40", className)}>
++      <pre
++        ref={scrollRef}
++        onScroll={(event) => {
++          const el = event.currentTarget;
++          atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
++        }}
++        className="max-h-56 overflow-auto px-2.5 py-2 font-mono text-[11px] leading-[1.5] break-all whitespace-pre-wrap text-foreground"
++      >
++        {dropped && lines.length > 0 && (
++          <span className="text-muted-foreground">{"Earlier lines aren't kept.\n"}</span>
++        )}
++        {lines.map((line) => line.text).join("\n")}
++        {note && <span className="text-muted-foreground">{note}</span>}
++      </pre>
++    </div>
++  );
++}
++
++function Label({ label, className }: { label: string; className?: string }) {
++  const [text, count] = splitProgressLabel(label);
++  return (
++    <span className={cn("flex min-w-0 items-baseline gap-1", className)} title={label}>
++      <span className="truncate">{text}</span>
++      {count && <span className="shrink-0 tabular-nums">{count}</span>}
++    </span>
++  );
++}
++
++/**
++ * The bar the agent shows while it works: what's in progress, how far along,
++ * and a thin bar along the bottom, which sweeps without a percentage. "Log"
++ * opens the lines of the file the agent named.
++ */
++export function AgentProgressCard({
++  progress,
++  sessionId,
++  className,
++}: {
++  progress: AgentProgress;
++  sessionId: string | null;
++  className?: string;
++}) {
++  const [open, toggle] = useLogOpen(progress.id);
++  const percent = formatProgressPercent(progress.percent);
++  const hasLog = hasLogOf(progress) && sessionId !== null;
++  return (
++    <div
++      data-testid="agent-progress"
++      className={cn(
++        "w-full overflow-hidden rounded-lg border border-border bg-card text-card-foreground",
++        className,
++      )}
++    >
++      <div className="relative flex items-center gap-2 px-2.5 py-1.5">
++        <Loader2Icon aria-hidden className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
++        <Label label={progress.label} className="flex-1 text-xs font-medium" />
++        {percent !== null && (
++          <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
++            {percent}
++          </span>
++        )}
++        {hasLog && (
++          <button
++            type="button"
++            aria-expanded={open}
++            onClick={toggle}
++            className="-my-1 flex shrink-0 items-center gap-0.5 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
++          >
++            Log
++            <ChevronRightIcon
++              aria-hidden
++              className={cn("size-3 transition-transform", open && "rotate-90")}
++            />
++          </button>
++        )}
++        <div
++          role="progressbar"
++          aria-label={progress.label}
++          aria-valuemin={0}
++          aria-valuemax={100}
++          aria-valuenow={progress.percent === null ? undefined : Math.round(progress.percent)}
++          className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-muted"
++        >
++          {progress.percent === null ? (
++            <div
++              className="absolute inset-y-0 w-1/3 bg-primary"
++              style={{ animation: "compaction-slide 1.5s ease-in-out infinite alternate" }}
++            />
++          ) : (
++            <div
++              className="h-full bg-primary transition-[width] duration-500 ease-out"
++              style={{ width: `${progress.percent}%` }}
++            />
++          )}
++        </div>
++      </div>
++      {open && hasLog && sessionId !== null && (
++        <ProgressLog sessionId={sessionId} barId={progress.id} className="border-t border-border" />
++      )}
++    </div>
++  );
++}
++
++/** The current session's live bar, or nothing. */
++export function SessionAgentProgress({
++  bar,
++  className,
++}: {
++  bar: AgentProgress | null;
++  className?: string;
++}) {
++  const sessionId = useChatStore((s) => s.conversationId);
++  if (bar === null) return null;
++  return <AgentProgressCard progress={bar} sessionId={sessionId} className={className} />;
++}
++
++function FinishedProgressLine({
++  bar,
++  sessionId,
++}: {
++  bar: AgentProgress;
++  sessionId: string | null;
++}) {
++  const [open, toggle] = useLogOpen(bar.id);
++  const hasLog = hasLogOf(bar) && sessionId !== null;
++  const content = (
++    <>
++      {bar.outcome === "failed" ? (
++        <CircleXIcon aria-label="Stopped" className="size-3.5 shrink-0 text-destructive" />
++      ) : (
++        <CheckIcon aria-hidden className="size-3.5 shrink-0 text-success" />
++      )}
++      <Label label={bar.label} />
++      <span className="shrink-0">· {formatProgressDuration(bar)}</span>
++      {hasLog && (
++        <ChevronRightIcon
++          aria-hidden
++          className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
++        />
++      )}
++    </>
++  );
++  return (
++    <div data-testid="agent-progress-finished" className="text-chat text-muted-foreground">
++      {hasLog ? (
++        <button
++          type="button"
++          aria-expanded={open}
++          onClick={toggle}
++          className="flex max-w-full cursor-pointer items-center gap-1.5 py-0.5 text-left transition-colors hover:text-foreground"
++        >
++          {content}
++        </button>
++      ) : (
++        <div className="flex max-w-full items-center gap-1.5 py-0.5">{content}</div>
++      )}
++      {open && hasLog && sessionId !== null && (
++        <ProgressLog
++          sessionId={sessionId}
++          barId={bar.id}
++          className="mt-1 overflow-hidden rounded-lg border border-border"
++        />
++      )}
++    </div>
++  );
++}
++
++/** Finished bars at the end of their turn, one line each, their log a click away. */
++export function FinishedProgress({
++  bars,
++  className,
++}: {
++  bars: readonly AgentProgress[];
++  className?: string;
++}) {
++  const sessionId = useChatStore((s) => s.conversationId);
++  if (bars.length === 0) return null;
++  return (
++    <div className={cn("flex flex-col", className)}>
++      {bars.map((bar) => (
++        <FinishedProgressLine key={bar.id} bar={bar} sessionId={sessionId} />
++      ))}
++    </div>
++  );
++}
+diff --git a/web/src/components/chat/Transcript.tsx b/web/src/components/chat/Transcript.tsx
+index 88d902e..6fa862f 100644
+--- a/web/src/components/chat/Transcript.tsx
++++ b/web/src/components/chat/Transcript.tsx
+@@ -35,6 +35,13 @@ import { useUserMessageNav } from "@/hooks/useUserMessageNav";
+ import { ChatPlanAccordion } from "@/shell/ChatPlanAccordion";
+ import { RunnerStartingIndicator, McpStartupIndicator } from "@/pages/ChatIndicators";
+ import { SessionStartupCard } from "@/components/chat/SandboxStartupCard";
++import { FinishedProgress, SessionAgentProgress } from "@/components/chat/AgentProgressCard";
++import {
++  liveProgress,
++  placeFinishedProgress,
++  type AgentProgress,
++  type ProgressRow,
++} from "@/lib/agentProgress";
+ import { CHAT_COLUMN_WIDTH } from "@/pages/chatLayout";
+ import {
+   type ConversationScroller,
+@@ -320,6 +327,28 @@ function TranscriptImpl({
+   // The sandbox startup card (this deployment) replaces "Working…" while the
+   // sandbox starts, and stays until the thread moves on.
+   const startupRunning = useChatStore((s) => s.sandboxStartup?.outcome === "running");
++  // The agent's progress bars (sys_session_progress, this deployment): the
++  // live one above Working…, the finished ones at the end of their turns.
++  const progressBars = useChatStore((s) => s.agentProgress);
++  const progressRows = useMemo(
++    (): ProgressRow[] =>
++      display.streamBubbles.map((b) => ({
++        key: bubbleKey(b),
++        kind:
++          b.kind === "assistant"
++            ? "assistant"
++            : b.kind === "user" && !isSystemBubble(b) && display.committedUserIds.has(b.itemId)
++              ? "turn"
++              : "other",
++        createdAtS: "createdAtS" in b ? b.createdAtS : undefined,
++      })),
++    [display.streamBubbles, display.committedUserIds],
++  );
++  const liveBar = liveProgress(progressBars, progressRows, showWorkingIndicator && !startupRunning);
++  const finishedBars = useMemo(
++    () => placeFinishedProgress(progressBars, progressRows, liveBar),
++    [progressBars, progressRows, liveBar],
++  );
+   const startupFailed = useChatStore((s) => s.sandboxStartup?.outcome === "failed");
+   // When the thread last moved, a message or the agent's work: a finished start
+   // shows until it moves on after it.
+@@ -404,7 +433,10 @@ function TranscriptImpl({
+                   disableVirtualization={disableVirtualization}
+                   messageId={messageId}
+                   onGeometryChange={onGeometryChange}
++                  finishedProgress={finishedBars}
+                 />
++                {/* A finished progress bar of a last turn with no reply yet. */}
++                <FinishedProgress bars={finishedBars.get("end") ?? []} className="px-0.5" />
+                 {/* How the sandbox start is going, step by step (this deployment).
+                 The start comes before the reply, so it's above Working…. */}
+                 <SessionStartupCard lastActivityAt={lastActivityAt} />
+@@ -423,6 +455,9 @@ function TranscriptImpl({
+                     </MessageContent>
+                   </Message>
+                 ))}
++                {/* The agent's progress bar (sys_session_progress, this
++                deployment), only while its turn runs. */}
++                <SessionAgentProgress bar={liveBar} />
+                 {/* Working… shimmer, lit for the whole busy turn. */}
+                 {showWorkingIndicator && !startupRunning && <WorkingIndicator />}
+                 {/* Managed-sandbox stage cue; only when Working is absent. */}
+@@ -587,6 +622,7 @@ export function VirtualBubbleList({
+   disableVirtualization,
+   messageId,
+   onGeometryChange,
++  finishedProgress,
+ }: {
+   bubbles: Bubble[];
+   scrollEl: HTMLElement | null;
+@@ -599,6 +635,8 @@ export function VirtualBubbleList({
+   messageId?: string | null;
+   /** Publishes virtualizer-derived geometry up to the rail/spacer. */
+   onGeometryChange: (geometry: TranscriptGeometry) => void;
++  /** Finished progress bars, by the key of the reply that ends their turn. */
++  finishedProgress?: ReadonlyMap<string, AgentProgress[]>;
+ }) {
+   const ctx = useStickToBottomContext() as ReturnType<typeof useStickToBottomContext> & {
+     stopScroll: () => void;
+@@ -1038,6 +1076,7 @@ export function VirtualBubbleList({
+           <BubbleView
+             key={rowKey(bubble)}
+             bubble={bubble}
++            progressBars={finishedProgress?.get(bubbleKey(bubble))}
+             isLastAssistant={index === lastAssistantIndex}
+             showsWorking={showsWorking && index === lastAssistantIndex}
+             actionsPersistent={
+@@ -1065,6 +1104,7 @@ export function VirtualBubbleList({
+           >
+             <BubbleView
+               bubble={bubble}
++              progressBars={finishedProgress?.get(bubbleKey(bubble))}
+               isLastAssistant={item.index === lastAssistantIndex}
+               showsWorking={showsWorking && item.index === lastAssistantIndex}
+               actionsPersistent={
+diff --git a/web/src/components/chat/chatBubbleParts.tsx b/web/src/components/chat/chatBubbleParts.tsx
+index 22f0c5f..79de6ed 100644
+--- a/web/src/components/chat/chatBubbleParts.tsx
++++ b/web/src/components/chat/chatBubbleParts.tsx
+@@ -2,6 +2,8 @@
+ // chat transcript. Extracted from ChatPage.tsx so <Transcript> can import them
+ // without the ChatPage ↔ Transcript module cycle. ChatPage re-exports these for
+ // existing importers (tests + components) and imports back the few it renders.
++import type { AgentProgress } from "@/lib/agentProgress";
++import { FinishedProgress } from "@/components/chat/AgentProgressCard";
+ import {
+   createContext,
+   memo,
+@@ -557,6 +559,7 @@ export const BubbleView = memo(
+     showsWorking = false,
+     actionsPersistent = false,
+     recoveryDisabled = false,
++    progressBars,
+   }: {
+     bubble: Bubble;
+     isLastAssistant?: boolean;
+@@ -564,6 +567,8 @@ export const BubbleView = memo(
+     actionsPersistent?: boolean;
+     /** Hide retry/recovery controls when the surrounding session is sealed. */
+     recoveryDisabled?: boolean;
++    /** Finished progress bars of the turn this reply ends (this deployment). */
++    progressBars?: readonly AgentProgress[];
+   }) {
+     if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
+     if (bubble.kind === "compaction_loading") {
+@@ -591,10 +596,12 @@ export const BubbleView = memo(
+         showsWorking={showsWorking}
+         actionsPersistent={actionsPersistent}
+         recoveryDisabled={recoveryDisabled}
++        progressBars={progressBars}
+       />
+     );
+   },
+   (prev, next) =>
++    sameProgressBars(prev.progressBars, next.progressBars) &&
+     (prev.isLastAssistant ?? false) === (next.isLastAssistant ?? false) &&
+     (prev.showsWorking ?? false) === (next.showsWorking ?? false) &&
+     (prev.actionsPersistent ?? false) === (next.actionsPersistent ?? false) &&
+@@ -946,18 +953,28 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
+   );
+ }
+ 
++function sameProgressBars(
++  a: readonly AgentProgress[] | undefined,
++  b: readonly AgentProgress[] | undefined,
++): boolean {
++  if ((a?.length ?? 0) !== (b?.length ?? 0)) return false;
++  return (a ?? []).every((bar, i) => bar === b![i]);
++}
++
+ function AssistantBubble({
+   bubble,
+   isLastAssistant = false,
+   showsWorking = false,
+   actionsPersistent = false,
+   recoveryDisabled = false,
++  progressBars,
+ }: {
+   bubble: Extract<Bubble, { kind: "assistant" }>;
+   isLastAssistant?: boolean;
+   showsWorking?: boolean;
+   actionsPersistent?: boolean;
+   recoveryDisabled?: boolean;
++  progressBars?: readonly AgentProgress[];
+ }) {
+   // The walker only emits an assistant bubble when at least one assistant-side
+   // block exists. The "Working…" shimmer for the empty-items / streaming gap
+@@ -1108,6 +1125,7 @@ function AssistantBubble({
+             <span>Interrupted</span>
+           </p>
+         )}
++        {progressBars && <FinishedProgress bars={progressBars} className="mt-1" />}
+         {/* Skip fold-only and error-only bubbles. Order: actions, then timestamp. */}
+         {!foldOnly && !errorOnly && (
+           <div
+diff --git a/web/src/lib/agentProgress.test.ts b/web/src/lib/agentProgress.test.ts
+new file mode 100644
+index 0000000..ffcfdb0
+--- /dev/null
++++ b/web/src/lib/agentProgress.test.ts
+@@ -0,0 +1,172 @@
++import { afterEach, describe, expect, it } from "vitest";
++
++import { parseEvent } from "@/lib/sse";
++import { formatToolTitle } from "@/lib/toolTitle";
++import { handleSessionEvent, useChatStore } from "@/store/chatStore";
++import {
++  formatProgressDuration,
++  formatProgressPercent,
++  liveProgress,
++  parseAgentProgress,
++  parseAgentProgressList,
++  placeFinishedProgress,
++  splitProgressLabel,
++  type AgentProgress,
++  type ProgressRow,
++} from "./agentProgress";
++
++const WIRE = {
++  id: "bar_1",
++  label: "Running tests",
++  percent: 40,
++  started_at: 100,
++  updated_at: 130,
++  ended_at: null,
++  outcome: null,
++  log_files: ["/home/omnigent/logs/tests.log"],
++  has_log: true,
++};
++
++function bar(id: string, startedAt: number, extra: Partial<AgentProgress> = {}): AgentProgress {
++  return {
++    id,
++    label: id,
++    percent: null,
++    startedAt,
++    updatedAt: startedAt,
++    endedAt: null,
++    outcome: null,
++    logFiles: [],
++    hasLog: false,
++    ...extra,
++  };
++}
++
++describe("parseAgentProgress", () => {
++  it("reads a bar from the wire", () => {
++    expect(parseAgentProgress(WIRE)).toEqual({
++      id: "bar_1",
++      label: "Running tests",
++      percent: 40,
++      startedAt: 100,
++      updatedAt: 130,
++      endedAt: null,
++      outcome: null,
++      logFiles: ["/home/omnigent/logs/tests.log"],
++      hasLog: true,
++    });
++  });
++
++  it("keeps a percentage between 0 and 100, and a bar without one", () => {
++    expect(parseAgentProgress({ ...WIRE, percent: 140 })?.percent).toBe(100);
++    expect(parseAgentProgress({ ...WIRE, percent: null })?.percent).toBeNull();
++  });
++
++  it("drops anything without an id, a label or a start", () => {
++    expect(parseAgentProgress(null)).toBeNull();
++    expect(parseAgentProgress({ ...WIRE, id: "" })).toBeNull();
++    expect(parseAgentProgress({ ...WIRE, label: " " })).toBeNull();
++    expect(parseAgentProgress({ ...WIRE, started_at: "now" })).toBeNull();
++    expect(parseAgentProgressList([WIRE, { label: "x" }]).map((b) => b.id)).toEqual(["bar_1"]);
++    expect(parseAgentProgressList(null)).toEqual([]);
++  });
++});
++
++describe("formatting", () => {
++  it("rounds a percentage, but only says 100% when it's done", () => {
++    expect(formatProgressPercent(41.6)).toBe("42%");
++    expect(formatProgressPercent(99.6)).toBe("99%");
++    expect(formatProgressPercent(100)).toBe("100%");
++    expect(formatProgressPercent(null)).toBeNull();
++  });
++
++  it("keeps a trailing count apart, to keep it in view", () => {
++    expect(splitProgressLabel("Migrating settings pages (12/40)")).toEqual([
++      "Migrating settings pages",
++      "(12/40)",
++    ]);
++    expect(splitProgressLabel("Running the test suite")).toEqual(["Running the test suite", null]);
++  });
++
++  it("says how long a bar ran", () => {
++    expect(formatProgressDuration(bar("a", 100, { endedAt: 142 }))).toBe("42s");
++    expect(formatProgressDuration(bar("a", 100, { endedAt: 352 }))).toBe("4m 12s");
++    expect(formatProgressDuration(bar("a", 0, { updatedAt: 3900 }))).toBe("1h 05m");
++  });
++});
++
++// A transcript: a scheduled run's reply, then two messages from the user, each
++// with a reply; the second reply has a hidden system message before it.
++const ROWS: ProgressRow[] = [
++  { key: "assistant:r0", kind: "assistant" },
++  { key: "user:u1", kind: "turn", createdAtS: 200 },
++  { key: "assistant:r1", kind: "assistant" },
++  { key: "user:u2", kind: "turn", createdAtS: 300 },
++  { key: "user:system", kind: "other", createdAtS: 320 },
++  { key: "assistant:r2a", kind: "assistant" },
++  { key: "assistant:r2b", kind: "assistant" },
++];
++
++describe("placing bars", () => {
++  it("shows the newest bar live while the agent works on its turn", () => {
++    const bars = [bar("first", 210), bar("second", 305)];
++    expect(liveProgress(bars, ROWS, true)?.id).toBe("second");
++    expect(liveProgress(bars, ROWS, false)).toBeNull();
++    // A message from the user starts a turn without a bar.
++    expect(liveProgress([bar("first", 210)], ROWS, true)).toBeNull();
++    // A bar set in the same second as the message is the message's.
++    expect(liveProgress([bar("same", 300.4)], ROWS, true)?.id).toBe("same");
++  });
++
++  it("puts each finished bar at the end of its turn", () => {
++    const bars = [bar("scheduled", 50), bar("first", 210), bar("again", 250), bar("second", 330)];
++    const placed = placeFinishedProgress(bars, ROWS, null);
++    expect([...placed.entries()].map(([key, list]) => [key, list.map((b) => b.id)])).toEqual([
++      ["assistant:r0", ["scheduled"]],
++      ["assistant:r1", ["first", "again"]],
++      ["assistant:r2b", ["second"]],
++    ]);
++  });
++
++  it("leaves the live bar out, and puts a bar of a last turn without a reply at the end", () => {
++    const rows: ProgressRow[] = [...ROWS, { key: "user:u3", kind: "turn", createdAtS: 400 }];
++    const bars = [bar("first", 210), bar("third", 405)];
++    expect(placeFinishedProgress(bars, rows, bars[1]!).get("end")).toBeUndefined();
++    expect(
++      placeFinishedProgress(bars, rows, null)
++        .get("end")
++        ?.map((b) => b.id),
++    ).toEqual(["third"]);
++  });
++});
++
++describe("session.progress events", () => {
++  afterEach(() => useChatStore.setState({ conversationId: null, agentProgress: [] }));
++
++  it("replace the open session's bars", () => {
++    useChatStore.setState({ conversationId: "conv_1", agentProgress: [] });
++    const event = parseEvent("session.progress", { conversation_id: "conv_1", progress: [WIRE] });
++    expect(event?.type).toBe("session_progress");
++    handleSessionEvent(event!, "conv_1");
++    expect(useChatStore.getState().agentProgress.map((b) => b.label)).toEqual(["Running tests"]);
++  });
++
++  it("without a session are dropped", () => {
++    expect(parseEvent("session.progress", { progress: [] })).toBeNull();
++  });
++});
++
++describe("the tool call's title", () => {
++  it("reads as the bar's label, whichever name the agent calls it by", () => {
++    for (const name of ["sys_session_progress", "mcp__omnigent__sys_session_progress"]) {
++      expect(formatToolTitle(name, { label: "Running the test suite", log_file: "/x" })).toEqual({
++        verb: "Progress:",
++        body: "Running the test suite",
++      });
++      expect(formatToolTitle(name, { clear: true })).toEqual({
++        verb: "End progress bar",
++        body: "",
++      });
++    }
++  });
++});
+diff --git a/web/src/lib/agentProgress.ts b/web/src/lib/agentProgress.ts
+new file mode 100644
+index 0000000..3c00306
+--- /dev/null
++++ b/web/src/lib/agentProgress.ts
+@@ -0,0 +1,195 @@
++/**
++ * The progress bars an agent shows in the chat, and the logs under them.
++ *
++ * The agent sets a bar with its `sys_session_progress` tool, optionally naming
++ * a log file the runner follows. This deployment's server (`omnigent_progress`
++ * in the server image) keeps a short history of the session's bars, sends it as
++ * the session snapshot's `progress` field and as `session.progress` events, and
++ * serves each bar's log from `GET /v1/sessions/{id}/progress/{bar}/log`.
++ *
++ * The newest bar shows above Working… while the agent works on the turn that
++ * set it. Every other bar is finished, and shows as a line at the end of its
++ * turn, where its log can still be opened.
++ */
++
++import { authenticatedFetch } from "@/lib/identity";
++
++export interface AgentProgress {
++  id: string;
++  /** What's in progress, e.g. `"Migrating components (12/40)"`. */
++  label: string;
++  /** How far along, 0–100, or `null` when the agent can't tell. */
++  percent: number | null;
++  /** When the agent set it first and last, in Unix seconds. */
++  startedAt: number;
++  updatedAt: number;
++  /** When its turn ended, or `null` while the agent works. */
++  endedAt: number | null;
++  outcome: "done" | "failed" | null;
++  /** The files the runner follows for it. */
++  logFiles: string[];
++  hasLog: boolean;
++}
++
++export interface ProgressLogLine {
++  seq: number;
++  t: number;
++  text: string;
++}
++
++export interface ProgressLogPage {
++  lines: ProgressLogLine[];
++  /** The last line's number, to ask for the lines after it. */
++  next: number;
++  /** Whether older lines were dropped. */
++  dropped: boolean;
++}
++
++const num = (value: unknown): number | null =>
++  typeof value === "number" && Number.isFinite(value) ? value : null;
++
++/** Read one bar from the wire; `null` for anything malformed. */
++export function parseAgentProgress(raw: unknown): AgentProgress | null {
++  if (raw === null || typeof raw !== "object") return null;
++  const get = (key: string): unknown => Reflect.get(raw, key);
++  const id = get("id");
++  const label = get("label");
++  const startedAt = num(get("started_at"));
++  if (typeof id !== "string" || !id || typeof label !== "string" || !label.trim()) return null;
++  if (startedAt === null) return null;
++  const percent = num(get("percent"));
++  const outcome = get("outcome");
++  const logFiles = get("log_files");
++  return {
++    id,
++    label,
++    percent: percent === null ? null : Math.min(100, Math.max(0, percent)),
++    startedAt,
++    updatedAt: num(get("updated_at")) ?? startedAt,
++    endedAt: num(get("ended_at")),
++    outcome: outcome === "done" || outcome === "failed" ? outcome : null,
++    logFiles: Array.isArray(logFiles)
++      ? logFiles.filter((f): f is string => typeof f === "string")
++      : [],
++    hasLog: get("has_log") === true,
++  };
++}
++
++/** Read a session's bars from the wire, oldest first; `[]` for none. */
++export function parseAgentProgressList(raw: unknown): AgentProgress[] {
++  if (!Array.isArray(raw)) return [];
++  return raw.map(parseAgentProgress).filter((bar): bar is AgentProgress => bar !== null);
++}
++
++/** The percentage as the bar shows it, e.g. `"42%"`; `null` without one. */
++export function formatProgressPercent(percent: number | null): string | null {
++  if (percent === null) return null;
++  // 99.6 isn't done yet, so it doesn't round up to 100%.
++  const shown = percent < 100 ? Math.min(99, Math.round(percent)) : 100;
++  return `${shown}%`;
++}
++
++/** A label's trailing count, kept in view when the rest is cut: `["Migrating", "(12/40)"]`. */
++export function splitProgressLabel(label: string): [string, string | null] {
++  const match = /^(.*?)\s*(\(\s*\d+\s*\/\s*\d+\s*\))\s*$/.exec(label);
++  return match && match[1] ? [match[1], match[2]!] : [label, null];
++}
++
++/** How long a bar ran, e.g. `"4m 12s"`. */
++export function formatProgressDuration(bar: AgentProgress): string {
++  const seconds = Math.max(0, Math.round((bar.endedAt ?? bar.updatedAt) - bar.startedAt));
++  if (seconds < 60) return `${seconds}s`;
++  if (seconds < 3600)
++    return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
++  return `${Math.floor(seconds / 3600)}h ${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}m`;
++}
++
++/**
++ * A row of the transcript, as placing bars needs it: where a turn starts (a
++ * message from the user), and where an assistant reply can carry a bar.
++ */
++export interface ProgressRow {
++  key: string;
++  kind: "turn" | "assistant" | "other";
++  /** When it was sent, in Unix seconds; turns without one are skipped. */
++  createdAtS?: number;
++}
++
++/**
++ * The bar above Working…: the newest bar, while the agent works on the turn
++ * that set it. A message from the user starts a turn without one.
++ */
++export function liveProgress(
++  bars: readonly AgentProgress[],
++  rows: readonly ProgressRow[],
++  working: boolean,
++): AgentProgress | null {
++  const newest = bars.at(-1);
++  if (!working || !newest) return null;
++  const turnStart = rows.findLast((row) => row.kind === "turn" && row.createdAtS !== undefined);
++  // Message times are whole seconds, rounded down, so they're never late.
++  if (turnStart && newest.startedAt < turnStart.createdAtS!) return null;
++  return newest;
++}
++
++/**
++ * Where each finished bar shows: the last assistant reply of the turn it was
++ * set in, keyed by that reply's row. A bar of a turn without a reply shows at
++ * the end, under the `"end"` key, if its turn is the last one; bars of turns
++ * that aren't loaded don't show.
++ */
++export function placeFinishedProgress(
++  bars: readonly AgentProgress[],
++  rows: readonly ProgressRow[],
++  live: AgentProgress | null,
++): Map<string, AgentProgress[]> {
++  // Each turn: when it started, and its last reply. The first turn may have no
++  // message, e.g. a scheduled run.
++  const turns: { start: number; reply: string | null }[] = [{ start: -Infinity, reply: null }];
++  for (const row of rows) {
++    if (row.kind === "turn" && row.createdAtS !== undefined) {
++      turns.push({ start: row.createdAtS, reply: null });
++    } else if (row.kind === "assistant") {
++      turns.at(-1)!.reply = row.key;
++    }
++  }
++  const placed = new Map<string, AgentProgress[]>();
++  for (const bar of bars) {
++    if (bar.id === live?.id) continue;
++    const index = turns.findLastIndex((turn) => turn.start <= bar.startedAt);
++    const turn = turns[index]!;
++    const key = turn.reply ?? (index === turns.length - 1 ? "end" : null);
++    if (key === null) continue;
++    placed.set(key, [...(placed.get(key) ?? []), bar]);
++  }
++  return placed;
++}
++
++/** A bar's log after line `after`; `null` once the server no longer has the bar. */
++export async function fetchProgressLog(
++  sessionId: string,
++  barId: string,
++  after: number,
++): Promise<ProgressLogPage | null> {
++  const res = await authenticatedFetch(
++    `/v1/sessions/${encodeURIComponent(sessionId)}/progress/${encodeURIComponent(barId)}/log?after=${after}`,
++  );
++  if (res.status === 404) return null;
++  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
++  const data: unknown = await res.json();
++  const raw = data !== null && typeof data === "object" ? data : {};
++  const lines = Reflect.get(raw, "lines");
++  return {
++    lines: Array.isArray(lines)
++      ? lines.flatMap((line: unknown) => {
++          if (line === null || typeof line !== "object") return [];
++          const seq = num(Reflect.get(line, "seq"));
++          const text = Reflect.get(line, "text");
++          if (seq === null || typeof text !== "string") return [];
++          return [{ seq, t: num(Reflect.get(line, "t")) ?? 0, text }];
++        })
++      : [],
++    next: num(Reflect.get(raw, "next")) ?? after,
++    dropped: Reflect.get(raw, "dropped") === true,
++  };
++}
+diff --git a/web/src/lib/events.ts b/web/src/lib/events.ts
+index d46dd45..c4ded98 100644
+--- a/web/src/lib/events.ts
++++ b/web/src/lib/events.ts
+@@ -10,6 +10,7 @@
+ 
+ import type { RateLimits } from "./rateLimits";
+ import type { SandboxStartup } from "./sandboxStartup";
++import type { AgentProgress } from "./agentProgress";
+ import type { RoutingDecisionExtras } from "./routingDecision";
+ import type {
+   BackgroundTaskInfo,
+@@ -722,6 +723,17 @@ export interface SessionStartupEvent {
+   startup: SandboxStartup;
+ }
+ 
++/**
++ * `session.progress` — one of the agent's progress bars changed
++ * (`sys_session_progress`, see `lib/agentProgress.ts`). Carries all the
++ * session's bars, oldest first.
++ */
++export interface SessionProgressEvent {
++  type: "session_progress";
++  conversationId: string;
++  progress: AgentProgress[];
++}
++
+ /**
+  * `session.tailscale` — the tailnet name of the session's managed runner
+  * Pod, e.g. `omnigent-e1dcab9b.tail1234.ts.net`, recorded by a launch or wake.
+@@ -1051,6 +1063,7 @@ export type StreamEvent =
+   | SessionTerminalPendingEvent
+   | SessionSandboxStatusEvent
+   | SessionStartupEvent
++  | SessionProgressEvent
+   | SessionTailscaleEvent
+   | SessionMcpStartupEvent
+   | SessionInputConsumedEvent
+diff --git a/web/src/lib/sessionsApi.test.ts b/web/src/lib/sessionsApi.test.ts
+index 4978d94..0181a55 100644
+--- a/web/src/lib/sessionsApi.test.ts
++++ b/web/src/lib/sessionsApi.test.ts
+@@ -176,6 +176,7 @@ describe("createSession", () => {
+       terminalPending: false,
+       sandboxStatus: null,
+       sandboxStartup: null,
++      agentProgress: [],
+       mcpStartup: null,
+       activeResponseId: null,
+       workspace: null,
+diff --git a/web/src/lib/sessionsApi.ts b/web/src/lib/sessionsApi.ts
+index 55a46a6..ab78c80 100644
+--- a/web/src/lib/sessionsApi.ts
++++ b/web/src/lib/sessionsApi.ts
+@@ -19,6 +19,7 @@ import { setSessionHost, setSessionParent } from "./sessionHost";
+ import { backgroundSessionTitlesRequestHeaders } from "./backgroundSessionTitlesPreferences";
+ import { parseBackgroundTasks } from "./sse";
+ import { parseSandboxStartup } from "./sandboxStartup";
++import { parseAgentProgressList } from "./agentProgress";
+ import type {
+   BackgroundTaskInfo,
+   ModelUsage,
+@@ -263,6 +264,8 @@ interface SessionResponseWire {
+   sandbox_status?: SandboxStatus | null;
+   /** The session's current or last sandbox start, step by step (this deployment). */
+   startup?: unknown;
++  /** The agent's progress bars (this deployment). */
++  progress?: unknown;
+   mcp_startup?: Record<string, McpServerStartup> | null;
+   /**
+    * Response id of the turn currently in flight, or absent/null when
+@@ -376,6 +379,7 @@ function sessionFromWire(wire: SessionResponseWire): Session {
+     terminalPending: wire.terminal_pending ?? false,
+     sandboxStatus: wire.sandbox_status ?? null,
+     sandboxStartup: parseSandboxStartup(wire.startup),
++    agentProgress: parseAgentProgressList(wire.progress),
+     mcpStartup: wire.mcp_startup ?? null,
+     activeResponseId: wire.active_response_id ?? null,
+   };
+diff --git a/web/src/lib/sse.ts b/web/src/lib/sse.ts
+index 246bc3c..7566955 100644
+--- a/web/src/lib/sse.ts
++++ b/web/src/lib/sse.ts
+@@ -60,6 +60,7 @@ import type {
+   SessionSandboxStatusEvent,
+   SessionTailscaleEvent,
+   SessionStartupEvent,
++  SessionProgressEvent,
+   McpServerStartup,
+   SessionMcpStartupEvent,
+   SessionTerminalPendingEvent,
+@@ -79,6 +80,7 @@ import { parseFastMode } from "./fastMode";
+ import { parseSubscription } from "./subscriptions";
+ import { parseTailscaleHost } from "./tailscale";
+ import { parseSandboxStartup } from "./sandboxStartup";
++import { parseAgentProgressList } from "./agentProgress";
+ import { routingExtrasFromWire } from "./routingDecision";
+ import type {
+   BackgroundTaskInfo,
+@@ -797,6 +799,15 @@ export function parseEvent(rawType: string, data: Record<string, unknown>): Stre
+       startup,
+     } satisfies SessionStartupEvent;
+   }
++  if (eventType === "session.progress") {
++    const conversationId = data.conversation_id;
++    if (typeof conversationId !== "string" || !conversationId) return null;
++    return {
++      type: "session_progress",
++      conversationId,
++      progress: parseAgentProgressList(data.progress),
++    } satisfies SessionProgressEvent;
++  }
+   if (eventType === "session.tailscale") {
+     const conversationId = data.conversation_id;
+     if (typeof conversationId !== "string" || !conversationId) return null;
+diff --git a/web/src/lib/toolTitle.ts b/web/src/lib/toolTitle.ts
+index 97c4d0d..caa6267 100644
+--- a/web/src/lib/toolTitle.ts
++++ b/web/src/lib/toolTitle.ts
+@@ -74,6 +74,10 @@ const FORMATTERS: Record<string, ArgFormatter> = {
+     return id === null ? verbOnly("Get session info") : { verb: "Get session info:", body: id };
+   },
+ 
++  // The chat's progress bar (this deployment); Claude Code calls it by its MCP name.
++  sys_session_progress: progressTitle,
++  mcp__omnigent__sys_session_progress: progressTitle,
++
+   // Agent-management tools.
+   sys_agent_get: (args) => {
+     const id = asString(args.session_id);
+@@ -356,6 +360,12 @@ function asNumber(v: unknown): number | null {
+   return typeof v === "number" && Number.isFinite(v) ? v : null;
+ }
+ 
++function progressTitle(args: Record<string, unknown>): ToolTitle {
++  if (args.clear === true) return verbOnly("End progress bar");
++  const label = asString(args.label);
++  return label === null ? verbOnly("Progress") : { verb: "Progress:", body: label };
++}
++
+ function verbOnly(verb: string): ToolTitle {
+   return { verb, body: "" };
+ }
+diff --git a/web/src/lib/types.ts b/web/src/lib/types.ts
+index a00800d..4e9247f 100644
+--- a/web/src/lib/types.ts
++++ b/web/src/lib/types.ts
+@@ -13,6 +13,7 @@
+ import type { ConversationItem } from "./conversationItems";
+ import type { McpServerStartup } from "./events";
+ import type { SandboxStartup } from "./sandboxStartup";
++import type { AgentProgress } from "./agentProgress";
+ import type { MessageContentBlock } from "./blocks";
+ 
+ /** Reference to a conversation, as returned on response objects. */
+@@ -516,6 +517,11 @@ export interface Session {
+    * starts a sandbox while the server runs.
+    */
+   sandboxStartup?: SandboxStartup | null;
++  /**
++   * The progress bars the agent set with `sys_session_progress`, oldest
++   * first, from this deployment's server (`omnigent_progress`).
++   */
++  agentProgress?: AgentProgress[];
+   /**
+    * Per-MCP-server startup state for native harness sessions
+    * (codex-native). Present while the harness boots its MCP servers or
+diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
+index 85fb7b9..3de5a39 100644
+--- a/web/src/store/chatStore.ts
++++ b/web/src/store/chatStore.ts
+@@ -158,6 +158,7 @@ import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
+ import { fastModeFromLabels, isFastModeCommand } from "@/lib/fastMode";
+ import { tailscaleHostFromLabels } from "@/lib/tailscale";
+ import type { SandboxStartup } from "@/lib/sandboxStartup";
++import type { AgentProgress } from "@/lib/agentProgress";
+ import { subscriptionFromLabels } from "@/lib/subscriptions";
+ 
+ export interface SendOptions {
+@@ -1045,6 +1046,13 @@ export interface ConversationState {
+    * replaced by `session.startup` events; kept after the start finishes.
+    */
+   sandboxStartup: SandboxStartup | null;
++  /**
++   * The progress bars the agent set (`sys_session_progress`), oldest first:
++   * the newest above Working… while its turn runs, the others at the end of
++   * their turns. Seeded from the snapshot's `progress` field on bind and
++   * replaced by `session.progress` events.
++   */
++  agentProgress: AgentProgress[];
+   /**
+    * Native MCP startup progress, cleared when startup settles or live
+    * assistant text arrives. Failures/cancellations stay in host diagnostics,
+@@ -1984,6 +1992,7 @@ export const useChatStore = create<ChatState>((_rootSet, get) => ({
+   viewers: [],
+   sandboxStatus: null,
+   sandboxStartup: null,
++  agentProgress: [],
+   mcpStartup: null,
+   mcpStartupLaunch: { pending: false, dismissed: false },
+   abortController: null,
+@@ -4245,6 +4254,7 @@ function sessionBindingPatch(
+   | "terminalPending"
+   | "sandboxStatus"
+   | "sandboxStartup"
++  | "agentProgress"
+   | "mcpStartup"
+   | "mcpStartupLaunch"
+ > {
+@@ -4281,6 +4291,7 @@ function sessionBindingPatch(
+     terminalPending: session.terminalPending ?? false,
+     sandboxStatus: session.sandboxStatus ?? null,
+     sandboxStartup: session.sandboxStartup ?? null,
++    agentProgress: session.agentProgress ?? [],
+     ...mcpStartupSnapshotPatch(session, state, launchBeforeFetch),
+   };
+ }
+@@ -4867,6 +4878,8 @@ function reconnectStatusPatch(
+   const subscription = subscriptionFromLabels(session.labels);
+   if (subscription !== null) patch.subscription = subscription;
+   if (session.sandboxStartup != null) patch.sandboxStartup = session.sandboxStartup;
++  // Bars that changed while the stream was down.
++  patch.agentProgress = session.agentProgress ?? [];
+   const tailscaleHost = tailscaleHostFromLabels(session.labels);
+   if (tailscaleHost !== null) patch.tailscaleHost = tailscaleHost;
+   // `waiting` is a TURN-END snapshot (the turn finished; only background work
+@@ -7260,6 +7273,9 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+     case "session_startup":
+       applyToConversation({ sandboxStartup: event.startup });
+       return;
++    case "session_progress":
++      applyToConversation({ agentProgress: event.progress });
++      return;
+     case "session_sandbox_status":
+       // Advance the managed-sandbox provisioning indicator. `ready`
+       // clears it — from then on the session looks like any
+diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
+index 157b7a2..87244f9 100644
+--- a/web/src/store/conversationState.ts
++++ b/web/src/store/conversationState.ts
+@@ -60,6 +60,7 @@ const CONVERSATION_STATE_KEY_MAP: Record<keyof ConversationState, true> = {
+   viewers: true,
+   sandboxStatus: true,
+   sandboxStartup: true,
++  agentProgress: true,
+   mcpStartup: true,
+   mcpStartupLaunch: true,
+   btwSidechat: true,
+@@ -133,6 +134,7 @@ export function createInitialConversationState(): ConversationState {
+     viewers: [],
+     sandboxStatus: null,
+     sandboxStartup: null,
++    agentProgress: [],
+     mcpStartup: null,
+     mcpStartupLaunch: { pending: false, dismissed: false },
+     btwSidechat: null,

@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, and Claude's questions reaching the web UI however long it has run. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, and progress bars from the agent. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -76,6 +76,7 @@ PASS  images/runner/patches/0010-subscription-in-use.patch
 PASS  images/runner/patches/0011-environment-menu.patch
 PASS  images/runner/patches/0012-environment-exit-node.patch
 PASS  images/runner/patches/0013-permission-hook-auth-refresh.patch
+PASS  images/runner/patches/0014-agent-progress.patch
 PASS  images/runner/patches: patched Python compiles
 PASS  images/server/patches/0001-sandbox-model-catalog-fallback.patch
 PASS  images/server/patches/0002-rate-limits.patch
@@ -98,6 +99,7 @@ PASS  images/server/patches/0018-binary-preview-gzip.patch
 PASS  images/server/patches/0019-mcp-servers.patch
 PASS  images/server/patches/0020-stop-message-waiting-for-sandbox.patch
 PASS  images/server/patches/0021-environment-exit-node.patch
+PASS  images/server/patches/0022-agent-progress.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -137,6 +139,7 @@ PASS  images/server/web-patches/0035-remove-voice-dictation.patch
 PASS  images/server/web-patches/0036-repo-exit-node.patch
 PASS  images/server/web-patches/0037-environment-exit-node.patch
 PASS  images/server/web-patches/0038-repo-exit-node-git-only.patch
+PASS  images/server/web-patches/0039-agent-progress.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -196,7 +199,7 @@ compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
 `@` file search, a project's repositories, the environment menu, the
-startup card, the New session screen, MCP servers, a first message waiting for its sandbox, the repository picker's tabs or images in the chat, or changing their native message, composer, file-index, project
+startup card, the New session screen, MCP servers, a first message waiting for its sandbox, the repository picker's tabs, images in the chat or agents' progress bars, or changing their native message, composer, file-index, project
 settings, Stop, sandbox lifecycle, sandbox start, chat stream reconnect, chat markdown, image viewer or runner idle paths:
 
 ```bash
@@ -208,8 +211,8 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx` | 2438 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py`, `tests/harnesses/claude_native/test_permission_hook_auth_refresh.py` | 381 passed, 1 skipped |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx`, `web/src/lib/agentProgress.test.ts`, `web/src/components/chat/AgentProgressCard.test.tsx`, `web/src/lib/sessionsApi.test.ts`, `web/src/lib/toolTitle.test.ts` | 2573 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py`, `tests/harnesses/claude_native/test_permission_hook_auth_refresh.py`, `tests/server/test_agent_progress.py`, `tests/runner/test_session_progress_dispatch.py`, `tests/runner/test_progress_log.py` | 408 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
@@ -247,7 +250,16 @@ repository's exit node (`0036-repo-exit-node.patch`) adds 4 cases to
 server (`0038-repo-exit-node-git-only.patch`) adds 1 case to
 `RepoVariablesPage.test.tsx` and 1 to `RepoEnvBadge.test.tsx`. Refreshing
 Claude's permission-hook bearer (`0013-permission-hook-auth-refresh.patch`)
-adds the last backend file (4 cases), with a stubbed server. These are
+adds `test_permission_hook_auth_refresh.py` (4 cases), with a stubbed server.
+Agents' progress bars
+(`0039-agent-progress.patch`) add `agentProgress.test.ts` and
+`AgentProgressCard.test.tsx` (19 cases: placing bars by turn, the live bar,
+the log polling), the progress field to `sessionsApi.test.ts` (95 cases, all
+but that one upstream's), and run upstream's `toolTitle.test.ts` (21 cases)
+beside their tool title. Their server patch adds `test_agent_progress.py`
+(14 cases, on the real app with header auth), and the runner patch
+`test_session_progress_dispatch.py` (7 cases) and `test_progress_log.py`
+(6 cases, following real files). These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -502,12 +514,13 @@ their processes and files directly. They don't start a new Pod.
 
    ```
    Answer from what you already know about this environment, one short line
-   each. Don't run commands or read files for questions 1-3 and 5.
+   each. Don't run commands or read files for questions 1-3, 5 and 6.
    1. Which directory survives this Pod stopping?
    2. How would you install a CLI tool that this project doesn't pin?
    3. If you wrote report.md in /home/omnigent/workspace, how would you point me to it?
    4. What URL would I use to reach a dev server you start here on port 3000?
    5. If you took a screenshot to /home/omnigent/workspace/shot.png, how would you show it to me?
+   6. If you were migrating 40 files one by one, how would you show me how far along you are?
    ```
 
 **Expected:** each replies `created`, `/tmp/feature-check-<agent>` exists in
@@ -531,10 +544,24 @@ The answers to those questions come from
 5. Image syntax with the absolute path and a description as its alt text,
    such as `![The screenshot](/home/omnigent/workspace/shot.png)`, not a
    plain link.
+6. The `sys_session_progress` tool, updated as it goes, with a count in the
+   label (such as `12/40`) and a percentage. An answer that only offers to
+   post updates in its replies didn't get the "Showing progress" section.
 
-An agent that runs commands or reads its instructions file to answer 1–3 or 5, or
+An agent that runs commands or reads its instructions file to answer 1–3, 5 or 6, or
 that answers them generically, didn't get the file: FAIL, and check the
 agent-instructions lines from `check-runner`. Record one result per agent.
+
+**Progress bars.** Then `sys_session_send` each session:
+`Run: mkdir -p /home/omnigent/logs && echo feature-check-log > /home/omnigent/logs/feature-check.log. Then call the sys_session_progress tool with label "feature-check", percent 50 and log_file /home/omnigent/logs/feature-check.log, then call it again with clear set to true, and reply with the two tool results only.`
+**Expected:** each replies with `{"shown": true, "label": "feature-check", "percent": 50.0, "log_file": "/home/omnigent/logs/feature-check.log"}`
+and `{"shown": false}`, without an approval prompt. In 5b, that session shows
+`✓ feature-check` at the end of the reply; clicking it opens a log reading
+`feature-check-log`. An agent that says it has
+no such tool didn't get the runner patch (`0014-agent-progress.patch`): check
+that its session started after the deploy. An error like
+`sys_session_progress returned 404` means the server lacks
+`0022-agent-progress.patch`.
 
 ### 5b. In the web UI
 
@@ -839,6 +866,19 @@ after the next message it names `feature-check`. Switch back, then remove
     `· Git server only`, `curl https://ifconfig.me` prints the cluster's own
     address, `git fetch` in the checkout works, and `check-runner` passes
     `only <Git server> goes through the exit node`. Switch it off again.
+
+21. **Progress bars from the agent:** a live bar needs an agent at work, so
+    watch one. In a session on a repository with a dev server, ask the agent
+    to start it and check the home page loads. Without being told, it shows a
+    one-line bar above **Working…**, such as `Starting the dev server`, with
+    **Log**: click it, and the server's output comes in. Reload halfway: the
+    bar comes back as it was. When the agent replies, the bar folds into one
+    line at the end of its reply, such as `✓ Dev server running on port 5173
+    · 31s`. Open the app at the address it gives and click it once more:
+    your requests come into that log. Then ask it to run the test suite
+    (about a minute or more): its bar sweeps without a percentage, a new one,
+    and the suite's output streams under Log. On a phone, a long label is cut
+    with its count, such as `(12/40)`, still in view.
 
 ## 7. Clean up
 
