@@ -1,0 +1,24 @@
+[project]
+name = "omnigent-hermes-remote"
+version = "0.1.0"
+description = "Omnigent harness that hands each turn to an existing Hermes Agent through its API"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  # Tested with v0.18, the version this deployment pins. The community
+  # harness interface is young, so widen this only after testing a newer one.
+  "omnigent>=0.18,<0.19",
+  "httpx>=0.27,<1",
+]
+
+[project.entry-points."omnigent.community.harness"]
+hermes-remote = "omnigent.community.harness.hermes_remote.plugin:get_contribution"
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+# Ship only this harness: omnigent, omnigent.community and
+# omnigent.community.harness belong to the core package.
+[tool.hatch.build.targets.wheel]
+only-include = ["omnigent/community/harness/hermes_remote"]

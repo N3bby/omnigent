@@ -65,6 +65,15 @@ RUN set -eu; \
     python -m compileall -q -f "$site/omnigent/server" "$site/omnigent/onboarding/sandboxes" "$purelib/omnigent_repo_env.py" "$purelib/omnigent_repo_env_api.py" "$purelib/omnigent_startup.py" "$purelib/omnigent_startup_api.py" "$purelib/omnigent_mcp_servers.py" "$purelib/omnigent_mcp_servers_api.py" "$purelib/omnigent_progress.py" "$purelib/omnigent_progress_api.py"; \
     python -c 'import omnigent.server.sandbox_catalog_fallback, omnigent.server.routes.sessions, omnigent.onboarding.sandboxes.agent_sandbox, omnigent.server.app'
 
+# The hermes-remote harness, from packages/omnigent-hermes-remote (the build's
+# hermes-remote context). The server checks harness names against its own
+# plugins, so it needs the package to accept the harness and list it in the
+# agent picker; runner Pods run it. --no-deps keeps Omnigent as patched above.
+COPY --from=hermes-remote . /tmp/omnigent-hermes-remote/
+RUN python -m pip install --no-cache-dir --no-deps /tmp/omnigent-hermes-remote \
+    && rm -rf /tmp/omnigent-hermes-remote \
+    && python -c 'from omnigent.harness_plugins import harness_catalog, plugin_state; assert any(row["id"] == "hermes-remote" for row in harness_catalog()), plugin_state().load_errors'
+
 # The server serves the SPA from OMNIGENT_WEB_UI_DIST instead of its package data.
 COPY --from=web /src/omnigent/server/static/web-ui /opt/omnigent-web-ui
 ENV OMNIGENT_WEB_UI_DIST=/opt/omnigent-web-ui

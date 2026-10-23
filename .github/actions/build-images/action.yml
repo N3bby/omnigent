@@ -55,6 +55,9 @@ runs:
       id: runner_build
       with:
         context: images/runner
+        # The hermes-remote harness, which both images install.
+        build-contexts: |
+          hermes-remote=packages/omnigent-hermes-remote
         platforms: linux/amd64
         push: true
         tags: ${{ steps.image.outputs.runner }}:sha-${{ github.sha }}
@@ -72,6 +75,9 @@ runs:
       id: server_build
       with:
         context: images/server
+        # The hermes-remote harness, which both images install.
+        build-contexts: |
+          hermes-remote=packages/omnigent-hermes-remote
         platforms: linux/amd64
         push: true
         tags: ${{ steps.image.outputs.server }}:sha-${{ github.sha }}

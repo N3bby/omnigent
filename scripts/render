@@ -83,6 +83,24 @@ def main() -> None:
         "limit_storage": as_mi(binary_mi(cfg["runner_ephemeral_limit"]) * concurrency + 1024),
     }
 
+    # The hermes-remote harness reads its SSH target from these, in runner Pods
+    # (sandbox env below). Omnigent's runner hands harnesses only allowlisted
+    # variables, so the passthrough names them, and the key, which reaches the
+    # Pods from omnigent-creds.
+    hermes_remote = {
+        name: str(cfg[key])
+        for name, key in (
+            ("HERMES_REMOTE_SSH_HOST", "hermes_remote_ssh_host"),
+            ("HERMES_REMOTE_SSH_USER", "hermes_remote_ssh_user"),
+            ("HERMES_REMOTE_SSH_PORT", "hermes_remote_ssh_port"),
+        )
+        if key in cfg
+    }
+    if hermes_remote:
+        hermes_remote["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
+            [*hermes_remote, "HERMES_REMOTE_SSH_KEY"]
+        )
+
     (generated / "omnigent-config.env").write_text(
         "\n".join([
             "HOST=0.0.0.0",
@@ -110,6 +128,7 @@ def main() -> None:
             # shows each session's name in this tailnet. Empty turns it off.
             f"OMNIGENT_TAILSCALE_TAILNET={cfg.get('tailscale_tailnet', '')}",
             f"OMNIGENT_TAILSCALE_TAGS={cfg['tailscale_tags']}",
+            *(f"{name}={value}" for name, value in hermes_remote.items()),
             "",
         ])
     )
@@ -154,6 +173,7 @@ def main() -> None:
             "      - OMNIGENT_CODEX_BYPASS_APPROVALS",
             "      - OMNIGENT_CLAUDE_BYPASS_PERMISSIONS",
             "      - OMNIGENT_TAILSCALE_TAGS",
+            *(f"      - {name}" for name in hermes_remote),
             "    resources:",
             "      requests:",
             f"        cpu: {yaml_string(str(cfg['runner_cpu_request']))}",

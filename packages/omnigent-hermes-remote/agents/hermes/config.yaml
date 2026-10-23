@@ -1,0 +1,14 @@
+spec_version: 1
+name: hermes
+description: >-
+  Your own Hermes Agent, reached over SSH. Each conversation is a session in
+  that Hermes, sharing its history, memory, skills and model login with its
+  desktop app, terminal and chat platforms.
+
+# Hand every turn to Hermes through the hermes-remote harness. Hermes keeps
+# its own personality and instructions (SOUL.md) and picks its own model, so
+# this agent sets neither.
+executor:
+  type: omnigent
+  config:
+    harness: hermes-remote
