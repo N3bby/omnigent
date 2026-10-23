@@ -107,6 +107,15 @@ RUN set -eu; \
 RUN /opt/venv/bin/python3 -m pip install --no-cache-dir "pyte==0.8.2"
 RUN /opt/venv/bin/python3 -c 'import omnigent.host, yaml'
 
+# The hermes-remote harness, from packages/omnigent-hermes-remote (the build's
+# hermes-remote context): sessions hand their turns to your own Hermes Agent
+# over SSH (docs/features/hermes-remote.md). Omnigent and httpx are already
+# installed, so --no-deps leaves them as they are.
+COPY --from=hermes-remote . /tmp/omnigent-hermes-remote/
+RUN /opt/venv/bin/python3 -m pip install --no-cache-dir --no-deps /tmp/omnigent-hermes-remote \
+    && rm -rf /tmp/omnigent-hermes-remote \
+    && /opt/venv/bin/python3 -c 'from omnigent.harness_plugins import plugin_state, valid_harnesses; assert "hermes-remote" in valid_harnesses(), plugin_state().load_errors; import omnigent.community.harness.hermes_remote.harness'
+
 # Shell setup for Tailscale SSH logins. It's personal taste: change
 # images/runner/shell/ to make it your own (see docs/features/tailscale.md).
 COPY shell/ /tmp/omnigent-shell/

@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, and progress bars from the agent. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, progress bars from the agent, and your own Hermes as an agent. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -879,6 +879,16 @@ after the next message it names `feature-check`. Switch back, then remove
     (about a minute or more): its bar sweeps without a percentage, a new one,
     and the suite's output streams under Log. On a phone, a long label is cut
     with its count, such as `(12/40)`, still in view.
+
+22. **Your own Hermes as an agent:** only with `hermes_remote_ssh_host` set
+    and the key stored. In a runner, `python3 -c 'from omnigent.harness_plugins
+    import valid_harnesses; print("hermes-remote" in valid_harnesses())'`
+    prints `True`. Start a session with the **hermes** agent and ask it to run
+    `hostname`: a `terminal` card shows `hostname`, and the answer names the
+    Hermes machine. Ask "what did you just run?": it remembers. Ask it to run
+    `sleep 60` and press **Stop**: the turn stops within seconds. In Hermes's
+    desktop app or `hermes sessions list`, the session is there as
+    `omnigent-<session id>`; delete it there when you're done.
 
 ## 7. Clean up
 

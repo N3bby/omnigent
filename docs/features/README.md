@@ -41,6 +41,14 @@ What agents can do in their session, and what happens to it when you leave.
 | [Agents know where they're running](runner-instructions.md) | Agents know what the session can do, link files you can open, show screenshots in the chat, and give tailnet addresses | You can change the text |
 | [MCP servers in Settings](mcp-servers.md) | Give sessions' Claude Code and Codex MCP servers, such as Figma, with their keys: for every session or for some repositories, which you can add to later | Nothing to turn off until you add a server |
 
+## Agents
+
+Agents you can pick for a session beyond upstream's.
+
+| Feature | What you get | Can you turn it off? |
+| --- | --- | --- |
+| [Your own Hermes as an agent](hermes-remote.md) | A session talks to your own Hermes Agent on its own machine, over SSH, sharing its history, memory and skills with its desktop app and chat platforms | Optional setup step |
+
 ## Repositories
 
 Getting your repositories into a session, with what they need to build.

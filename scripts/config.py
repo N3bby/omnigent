@@ -147,6 +147,18 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
         require_string(data, "tailscale_tailnet", r"(?=.{1,200}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+")
     data.setdefault("tailscale_tags", "tag:omnigent-runner")
     require_string(data, "tailscale_tags", r"tag:[A-Za-z0-9-]+(?:,tag:[A-Za-z0-9-]+)*")
+    # The hermes-remote harness's SSH target (docs/features/hermes-remote.md);
+    # its key is a secret, stored by `mise run setup-hermes-ssh-key`.
+    if "hermes_remote_ssh_host" in data:
+        require_string(data, "hermes_remote_ssh_host", r"(?=.{1,253}$)[A-Za-z0-9][A-Za-z0-9.-]*")
+        if "hermes_remote_ssh_user" in data:
+            require_string(data, "hermes_remote_ssh_user", r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,31}")
+        if "hermes_remote_ssh_port" in data:
+            port = data["hermes_remote_ssh_port"]
+            if type(port) is not int or not 0 < port < 65536:
+                raise ConfigError("hermes_remote_ssh_port must be a port number")
+    elif "hermes_remote_ssh_user" in data or "hermes_remote_ssh_port" in data:
+        raise ConfigError("hermes_remote_ssh_user and hermes_remote_ssh_port need hermes_remote_ssh_host")
     if "deploy_github_repository_id" in data:
         require_string(data, "deploy_github_repository_id", r"[1-9][0-9]*")
         data.setdefault("deploy_github_environment", "production")
