@@ -9,7 +9,8 @@ turn: Hermes loads the rest of the conversation from its own history.
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Mapping
+import secrets
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any
 
 from omnigent.inner.executor import (
@@ -26,6 +27,8 @@ from omnigent.inner.executor import (
     TurnCancelled,
     TurnComplete,
 )
+from omnigent.runtime.harnesses._scaffold import TurnContext
+from omnigent.server.schemas import ElicitationRequestParams, ElicitationResolvedEvent
 
 from . import turns
 from .client import HermesError, HermesRunsClient, session_id_for
@@ -33,12 +36,29 @@ from .connection import HermesConnection, Settings
 
 _logger = logging.getLogger(__name__)
 
+# The buttons for Hermes's approval answers, in the order the card shows them.
+CHOICE_LABELS = {
+    "once": "Allow once",
+    "session": "Allow for this session",
+    "always": "Always allow",
+    "deny": "Deny",
+}
+
 
 class HermesRemoteExecutor(Executor):
     def __init__(
-        self, *, conversation_id: str, environ: Mapping[str, str] | None = None
+        self,
+        *,
+        conversation_id: str,
+        environ: Mapping[str, str] | None = None,
+        turn_context: Callable[[], TurnContext | None] | None = None,
     ) -> None:
+        """
+        :param turn_context: Returns the running turn's context, which shows
+            Hermes's approval prompts in the chat. Without it they're denied.
+        """
         self._session_id = session_id_for(conversation_id)
+        self._turn_context = turn_context
         self._connection: HermesConnection | None = None
         # A missing setting fails each turn with how to fix it, rather than
         # the harness process.
@@ -87,12 +107,57 @@ class HermesRemoteExecutor(Executor):
         _logger.info("Hermes run %s started in session %s", run_id, self._session_id)
         self._run = (client, run_id)
         try:
-            async for update in turns.follow_run(client, run_id):
+            ask = self._ask if self._turn_context is not None else None
+            async for update in turns.follow_run(client, run_id, ask=ask):
                 event = _to_executor_event(update)
                 if event is not None:
                     yield event
         finally:
             self._run = None
+
+    async def _ask(self, prompt: turns.ApprovalPrompt) -> str | None:
+        """Show Hermes's approval prompt as an approval card and return the choice.
+
+        Cancelled when Hermes stops waiting, which takes the card down too.
+        """
+        ctx = self._turn_context() if self._turn_context is not None else None
+        if ctx is None:
+            return None
+        order = list(CHOICE_LABELS)
+        choices = sorted(prompt.choices, key=lambda c: order.index(c) if c in order else len(order))
+        labels = {CHOICE_LABELS.get(choice, choice): choice for choice in choices}
+        elicitation_id = f"elicit_{secrets.token_hex(16)}"
+        params = ElicitationRequestParams(
+            mode="form",
+            message=_approval_message(prompt),
+            # An enum named "answer" is shown as one button per choice.
+            requestedSchema={
+                "type": "object",
+                "properties": {"answer": {"type": "string", "enum": list(labels)}},
+                "required": ["answer"],
+            },
+            phase="tool_call",
+            policy_name="hermes_approval",
+            content_preview=prompt.command[:300],
+        )
+        answered = False
+        try:
+            result = await ctx.elicit(elicitation_id, params)
+            answered = True
+        finally:
+            if not answered:
+                # Omnigent leaves an unanswered card up unless it's told.
+                ctx.emit(
+                    ElicitationResolvedEvent(
+                        type="response.elicitation_resolved",
+                        elicitation_id=elicitation_id,
+                        reason="unanswered",
+                    )
+                )
+        if result.action != "accept":
+            return None
+        answer = (result.content or {}).get("answer")
+        return labels.get(answer) if isinstance(answer, str) else None
 
     async def interrupt_session(self, session_key: str) -> bool:  # noqa: ARG002
         """Stop the running Hermes run; its stream then ends with ``run.cancelled``."""
@@ -137,6 +202,15 @@ def _to_executor_event(update: turns.Update) -> ExecutorEvent | None:
     if isinstance(update, turns.Failed):
         return ExecutorError(message=update.message, title="Hermes", preserve_session=True)
     return None
+
+
+def _approval_message(prompt: turns.ApprovalPrompt) -> str:
+    command = " ".join(prompt.command.split())
+    if len(command) > 200:
+        command = command[:199] + "…"
+    reason = f" ({prompt.description})" if prompt.description else ""
+    # The card shows the message as plain text.
+    return f"Hermes wants to run: {command}{reason}"
 
 
 def _tool_args(preview: str) -> dict[str, Any]:

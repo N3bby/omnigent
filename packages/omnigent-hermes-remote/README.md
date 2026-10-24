@@ -24,9 +24,10 @@ On each turn the harness:
 4. Streams the run's text and tool calls into the chat. Stop in Omnigent stops
    the run.
 
-Hermes's approval prompts can't be answered from Omnigent yet, so the harness
-denies them straight away and says so in the chat, rather than leaving the run
-waiting until Hermes gives up.
+When Hermes asks to approve a command, the harness shows an approval card with
+Hermes's own choices and sends back the one picked. The card goes away if
+Hermes stops waiting first: after its approval timeout, or when its desktop app
+or terminal answers.
 
 ## Settings
 

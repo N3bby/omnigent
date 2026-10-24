@@ -33,8 +33,9 @@ def get_contribution() -> HarnessContribution:
             HARNESS: HarnessCapabilities(
                 # Hermes runs its own agent loop behind its API server.
                 IntegrationMode.SDK_IN_PROCESS,
-                # Hermes asks for approvals itself; see executor.py.
-                Elicitation.NONE,
+                # Hermes's approval prompts come over its run's events and
+                # are shown as approval cards; see executor.py.
+                Elicitation.SSE_PERMISSION,
                 # The conversation lives in a Hermes session that outlasts
                 # the harness process.
                 Resume.WARM_REATTACH,

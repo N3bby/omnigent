@@ -66,7 +66,7 @@ class ExecutorTest(unittest.TestCase):
         if executor._connection is not None:
             executor._connection.client = mock.AsyncMock(return_value=client)
 
-        async def follow(_client, _run_id):
+        async def follow(_client, _run_id, **_kwargs):
             for update in updates:
                 yield update
 
@@ -144,6 +144,92 @@ class ExecutorTest(unittest.TestCase):
 
         executor._run = None
         self.assertFalse(asyncio.run(executor.interrupt_session("any")))
+
+
+@unittest.skipUnless(HAS_OMNIGENT, "needs Omnigent installed")
+class ApprovalCardTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.executor_module, _, self.turns = load_package()
+        self.ctx = mock.Mock()
+        self.executor = self.executor_module.HermesRemoteExecutor(
+            conversation_id="conv1",
+            environ={"HERMES_REMOTE_SSH_HOST": "home-hermes"},
+            turn_context=lambda: self.ctx,
+        )
+        self.prompt = self.turns.ApprovalPrompt(
+            # As Hermes sometimes lists them.
+            "rm -rf build", "recursive delete", ("once", "deny", "session", "always")
+        )
+
+    def test_the_card_offers_hermes_choices_and_returns_the_one_picked(self) -> None:
+        from omnigent.server.schemas import ElicitationResult
+
+        self.ctx.elicit = mock.AsyncMock(
+            return_value=ElicitationResult(
+                action="accept", content={"answer": "Allow for this session"}
+            )
+        )
+
+        self.assertEqual(asyncio.run(self.executor._ask(self.prompt)), "session")
+
+        _, params = self.ctx.elicit.await_args.args
+        self.assertEqual(params.message, "Hermes wants to run: rm -rf build (recursive delete)")
+        self.assertEqual(params.content_preview, "rm -rf build")
+        self.assertEqual(
+            params.requestedSchema["properties"]["answer"]["enum"],
+            ["Allow once", "Allow for this session", "Always allow", "Deny"],
+        )
+        self.ctx.emit.assert_not_called()
+
+    def test_a_dismissed_card_is_no_answer(self) -> None:
+        from omnigent.server.schemas import ElicitationResult
+
+        self.ctx.elicit = mock.AsyncMock(return_value=ElicitationResult(action="decline"))
+
+        self.assertIsNone(asyncio.run(self.executor._ask(self.prompt)))
+
+    def test_a_withdrawn_question_takes_the_card_down(self) -> None:
+        from omnigent.server.schemas import ElicitationResolvedEvent
+
+        async def never_answered(*_args):
+            await asyncio.Event().wait()
+
+        self.ctx.elicit = never_answered
+
+        async def go() -> None:
+            task = asyncio.ensure_future(self.executor._ask(self.prompt))
+            await asyncio.sleep(0)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(go())
+
+        [event] = [call.args[0] for call in self.ctx.emit.call_args_list]
+        self.assertIsInstance(event, ElicitationResolvedEvent)
+        self.assertEqual(event.reason, "unanswered")
+
+    def test_the_harness_lends_the_executor_the_running_turn(self) -> None:
+        from omnigent.community.harness.hermes_remote import harness
+
+        adapter = harness.HermesAdapter()
+        adapter.app = adapter.build()
+        adapter.app.state.conversation_id = "conv1"
+        executor = adapter._build_executor()
+        ctx = object()
+
+        async def go() -> object:
+            seen = []
+
+            async def run_turn(_self, _request, _ctx):
+                seen.append(executor._turn_context())
+
+            with mock.patch.object(harness.ExecutorAdapter, "run_turn", run_turn):
+                await adapter.run_turn(mock.Mock(), ctx)
+            return seen[0]
+
+        self.assertIs(asyncio.run(go()), ctx)
+        self.assertIsNone(executor._turn_context())
 
 
 if __name__ == "__main__":

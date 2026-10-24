@@ -123,9 +123,16 @@ The **hermes** agent then shows in the new-session picker on every device.
 - **In Hermes's desktop app and `hermes sessions`**, each Omnigent session is
   a session named `omnigent-<session id>`, with the title Hermes gives it.
   Continue it there, and the next Omnigent message picks up from there too.
-- **When Hermes asks to approve a command**, the chat says Hermes asked to run
-  it and that it was denied, because Omnigent can't answer Hermes's approval
-  prompts yet. Run it from the desktop app or terminal if it's needed.
+- **When Hermes asks to approve a command**, the chat shows an approval card
+  with the command and Hermes's own choices: **Allow once**, **Allow for this
+  session**, **Always allow** and **Deny**, or only some of them, as Hermes
+  offers. The session shows **Needs response** in the sidebar until you
+  answer. Hermes gives up on the question after its approval timeout (5
+  minutes by default), and its desktop app or terminal can answer it too;
+  then the card goes away and the chat says Hermes stopped waiting. Commands
+  Hermes's smart approvals allow or block on their own never reach you.
+
+  ![An approval card in the chat: Hermes wants to run chmod 777 on a file in ~/.ssh, with Allow once and Deny buttons](../images/hermes-approval-card.webp)
 - **When it can't reach Hermes**, the turn fails with what went wrong, such as
   `SSH to n3bby@home-hermes.taild5bc1b.ts.net failed: Permission denied
   (publickey).`
@@ -144,6 +151,11 @@ the tunnel for the session's later turns. Each turn is a run on Hermes's
 message: Hermes loads the rest of the conversation from its own history.
 Hermes picks its own model and keeps its own instructions (`SOUL.md`), so the
 agent sets neither.
+
+An approval Hermes asks for arrives as an `approval.request` event. The
+harness shows it as an approval card, and while it waits it checks the run
+every few seconds: once the run no longer lists the prompt, it takes the card
+down. Your answer goes to `POST /v1/runs/{id}/approval` with the prompt's id.
 
 The settings reach the harness as `HERMES_REMOTE_SSH_HOST`, `_USER`, `_PORT`
 and `_KEY`. Omnigent's runner hands harnesses only the environment variables
