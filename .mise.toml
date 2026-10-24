@@ -69,6 +69,10 @@ run = './scripts/setup-cloudflare-token'
 description = "Store or rotate the Tailscale key runner Pods join the tailnet with"
 run = './scripts/setup-tailscale'
 
+[tasks.setup-hermes-ssh-key]
+description = "Store or rotate the SSH key the hermes-remote harness reaches Hermes with"
+run = './scripts/setup-hermes-ssh-key'
+
 [tasks.setup-github-app]
 description = "Initialize local credential encryption and configure the GitHub App"
 run = './scripts/setup-github-app'
@@ -77,5 +81,5 @@ run = './scripts/setup-github-app'
 description = "Run repository validation and tests"
 run = [
   { task = "check" },
-  "uv run --no-project --with pyte==0.8.2 python -m unittest discover -s tests -v",
+  "uv run --no-project --with pyte==0.8.2 --with httpx==0.28.1 python -m unittest discover -s tests -v",
 ]

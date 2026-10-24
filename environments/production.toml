@@ -20,6 +20,13 @@ kubernetes_api_host = "home-omnigent.taild5bc1b.ts.net"
 # setup-tailscale` stores a key. Remove it to hide the names.
 tailscale_tailnet = "taild5bc1b.ts.net"
 
+# Sessions with the Hermes agent hand their turns to the Hermes Agent on this
+# machine, over SSH as this user (docs/features/hermes-remote.md). Store the
+# key with `mise run setup-hermes-ssh-key`. Remove all three to turn it off.
+hermes_remote_ssh_host = "home-hermes.taild5bc1b.ts.net"
+hermes_remote_ssh_user = "n3bby"
+hermes_remote_ssh_port = 2222
+
 # The GitHub repository (by numeric ID) and Environment whose Actions runs may
 # deploy. Remove both to turn off deploying from GitHub Actions.
 deploy_github_repository_id = "1386328125"

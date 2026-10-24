@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Store the SSH key the hermes-remote harness reaches your Hermes Agent with
+# (docs/features/hermes-remote.md). Without an argument it makes a new
+# ed25519 key; with one, it stores that private key file, which must have no
+# passphrase. Either way it prints the authorized_keys line for the Hermes
+# machine, which limits the key to what the harness needs.
+set -euo pipefail
+
+KUBECTL=("$(dirname "${BASH_SOURCE[0]}")/kube")
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+key_file="${1:-}"
+if [[ -z "$key_file" ]]; then
+  ssh-keygen -q -t ed25519 -N "" -C "omnigent-hermes-remote" -f "$tmp/id"
+  key_file="$tmp/id"
+fi
+[[ -r "$key_file" ]] || { echo "can't read $key_file" >&2; exit 1; }
+public="$(ssh-keygen -y -P "" -f "$key_file" 2>/dev/null)" \
+  || { echo "$key_file isn't a private key without a passphrase" >&2; exit 1; }
+
+patch="$(jq -nc --rawfile value "$key_file" '{stringData:{HERMES_REMOTE_SSH_KEY:$value}}')"
+"${KUBECTL[@]}" patch secret omnigent-creds -n omnigent-sandboxes --type=merge -p "$patch" >/dev/null
+unset patch
+echo "Hermes SSH key stored. Runner Pods receive it when they next start."
+echo
+echo "Add this line to ~/.ssh/authorized_keys of the user Hermes runs as, on the"
+echo "Hermes machine. Change 8642 if Hermes's API server uses another port."
+echo
+printf 'restrict,port-forwarding,permitopen="127.0.0.1:8642",command="cat ~/.config/hermes/api-server.env" %s\n' "$public"

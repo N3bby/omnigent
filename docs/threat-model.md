@@ -21,6 +21,9 @@ A compromised runner **can**:
   of the servers of the repositories its session started with, and use them
 - use the GitHub access of the person who started the session, for as long
   as its short-lived token is valid
+- use [your own Hermes](features/hermes-remote.md), if you set it up: its SSH
+  key may only read Hermes's API key and forward to its API, but Hermes can
+  run commands as its user on its machine
 - reach anything on the network: the internet, and other services in the
   cluster (which still need their own credentials)
 - use all of the VM's spare CPU and memory, which slows down other sessions
