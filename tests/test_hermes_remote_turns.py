@@ -29,30 +29,42 @@ def sse(*events: dict) -> bytes:
 class FakeRun:
     """One Hermes run: its events, its status, and the answers it got."""
 
-    def __init__(self, *events: dict, status: dict | None = None) -> None:
+    def __init__(self, *events: dict, status: dict | list[dict] | None = None) -> None:
         self.events = events
-        self.status = status or {"status": "running"}
+        # A list is the status for each check in turn, the last one repeating.
+        self.statuses = status if isinstance(status, list) else [status or {"status": "running"}]
         self.answers: list[dict] = []
+        self.prompts: list[turns.ApprovalPrompt] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/v1/runs/run_1/events":
             return httpx.Response(200, content=sse(*self.events))
         if path == "/v1/runs/run_1" and request.method == "GET":
-            return httpx.Response(200, json=self.status)
+            status = self.statuses[0] if len(self.statuses) == 1 else self.statuses.pop(0)
+            return httpx.Response(200, json=status)
         if path == "/v1/runs/run_1/approval":
             self.answers.append(json.loads(request.content))
             return httpx.Response(200, json={"resolved": 1})
         return httpx.Response(404, json={"error": {"message": "Run not found"}})
 
-    def follow(self, approvals: turns.ApprovalChoice = "deny") -> list[turns.Update]:
+    def follow(self, answer: object = ...) -> list[turns.Update]:
+        """Follow the run; *answer* is the user's answer to approvals, ``...`` for never."""
         runs = client.HermesRunsClient(
             client.HermesConfig(url="http://hermes", api_key="key"),
             transport=httpx.MockTransport(self.handle),
         )
 
+        async def ask(prompt: turns.ApprovalPrompt) -> str | None:
+            self.prompts.append(prompt)
+            if answer is ...:
+                await asyncio.Event().wait()
+            return answer  # type: ignore[return-value]
+
         async def go() -> list[turns.Update]:
-            return [u async for u in turns.follow_run(runs, "run_1", approvals=approvals)]
+            return [
+                u async for u in turns.follow_run(runs, "run_1", ask=ask, poll_seconds=0.01)
+            ]
 
         return asyncio.run(go())
 
@@ -139,7 +151,61 @@ class FollowRunTest(unittest.TestCase):
         self.assertIsInstance(update, turns.Failed)
         self.assertIn("run_1", update.message)
 
-    def test_an_approval_is_denied_with_the_pending_prompt_and_said_in_the_chat(self) -> None:
+    def test_an_approval_is_put_to_the_user_and_their_answer_sent(self) -> None:
+        run = FakeRun(
+            {"event": "approval.request", "command": "rm -rf build",
+             "description": "recursive delete", "choices": ["once", "session", "deny"]},
+            {"event": "run.completed", "output": "Deleted."},
+            status={
+                "status": "waiting_for_approval",
+                "execution_generation": 4,
+                "pending_controls": [{"kind": "approval", "prompt_id": "prompt_9"}],
+            },
+        )
+
+        updates = run.follow("session")
+
+        self.assertEqual(
+            run.prompts,
+            [turns.ApprovalPrompt("rm -rf build", "recursive delete", ("once", "session", "deny"))],
+        )
+        self.assertEqual(
+            run.answers,
+            [{"choice": "session", "request_id": "prompt_9", "execution_generation": 4}],
+        )
+        # The card shows the answer, so the chat doesn't repeat it.
+        self.assertEqual(updates, [turns.Text("Deleted."), turns.Finished("Deleted.")])
+
+    def test_a_dismissed_approval_is_denied(self) -> None:
+        run = FakeRun(
+            {"event": "approval.request", "command": "make deploy"},
+            {"event": "run.completed", "output": "Not deployed."},
+        )
+
+        run.follow(None)
+
+        self.assertEqual(run.answers, [{"choice": "deny"}])
+        self.assertEqual(run.prompts[0].choices, ("once", "deny"))
+
+    def test_the_question_is_withdrawn_when_hermes_stops_waiting(self) -> None:
+        waiting = {
+            "status": "waiting_for_approval",
+            "pending_controls": [{"kind": "approval", "prompt_id": "prompt_9"}],
+        }
+        run = FakeRun(
+            {"event": "approval.request", "command": "rm -rf build"},
+            {"event": "run.completed", "output": "It timed out."},
+            # Hermes timed out, or its desktop app answered.
+            status=[waiting, waiting, {"status": "running", "pending_controls": []}],
+        )
+
+        updates = run.follow()
+
+        self.assertEqual(run.answers, [])
+        self.assertIn("stopped waiting for an answer about `rm -rf build`", updates[0].text)
+        self.assertEqual(updates[-1], turns.Finished("It timed out."))
+
+    def test_without_anyone_to_ask_an_approval_is_denied_and_said_in_the_chat(self) -> None:
         run = FakeRun(
             {"event": "approval.request", "command": "rm -rf build", "choices": ["once", "deny"]},
             {"event": "run.completed", "output": "It was denied."},
@@ -149,25 +215,21 @@ class FollowRunTest(unittest.TestCase):
                 "pending_controls": [{"kind": "approval", "prompt_id": "prompt_9"}],
             },
         )
+        runs = client.HermesRunsClient(
+            client.HermesConfig(url="http://hermes", api_key="key"),
+            transport=httpx.MockTransport(run.handle),
+        )
 
-        updates = run.follow()
+        async def go() -> list[turns.Update]:
+            return [u async for u in turns.follow_run(runs, "run_1")]
+
+        updates = asyncio.run(go())
 
         self.assertEqual(
             run.answers, [{"choice": "deny", "request_id": "prompt_9", "execution_generation": 4}]
         )
         self.assertIn("`rm -rf build`; denied automatically", updates[0].text)
         self.assertEqual(updates[-1], turns.Finished("It was denied."))
-
-    def test_approvals_can_be_set_to_approve(self) -> None:
-        run = FakeRun(
-            {"event": "approval.request", "command": "make deploy"},
-            {"event": "run.completed", "output": "Deployed."},
-        )
-
-        updates = run.follow(approvals="once")
-
-        self.assertEqual(run.answers, [{"choice": "once"}])
-        self.assertIn("approved automatically", updates[0].text)
 
 
 class RunInputTest(unittest.TestCase):

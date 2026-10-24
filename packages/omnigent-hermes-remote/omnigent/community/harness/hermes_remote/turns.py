@@ -6,13 +6,30 @@ client.py, it imports nothing from Omnigent.
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from .client import HermesError, HermesRunsClient
 
-ApprovalChoice = Literal["once", "deny"]
+# How often to check that Hermes still waits for an answer while it's asked.
+APPROVAL_POLL_SECONDS = 3.0
+
+
+@dataclass(frozen=True)
+class ApprovalPrompt:
+    """A command Hermes wants approved, and the answers it accepts."""
+
+    command: str
+    description: str
+    choices: tuple[str, ...]
+
+
+# Asks the user and returns one of the prompt's choices, or None when they
+# dismissed it. It's cancelled once Hermes stops waiting for the answer.
+Ask = Callable[[ApprovalPrompt], Awaitable[str | None]]
 
 
 @dataclass(frozen=True)
@@ -96,13 +113,17 @@ def last_user_content(messages: list[dict[str, Any]]) -> Any:
 
 
 async def follow_run(
-    client: HermesRunsClient, run_id: str, *, approvals: ApprovalChoice = "deny"
+    client: HermesRunsClient,
+    run_id: str,
+    *,
+    ask: Ask | None = None,
+    poll_seconds: float = APPROVAL_POLL_SECONDS,
 ) -> AsyncIterator[Update]:
     """Yield a run's updates, ending with exactly one Finished, Failed or Cancelled.
 
-    Nobody watches an Omnigent chat for Hermes's approval prompts, so a
-    pending approval is answered with *approvals* straight away and the
-    chat says so, rather than leaving the run waiting until Hermes times out.
+    A command Hermes wants approved is put to the user with *ask*. Without
+    one, it's denied straight away and the chat says so, rather than leaving
+    the run waiting until Hermes times out.
     """
     streamed: list[str] = []
     try:
@@ -135,7 +156,8 @@ async def follow_run(
                     duration_s=float(duration) if isinstance(duration, (int, float)) else None,
                 )
             elif name == "approval.request":
-                yield Text(await _answer_approval(client, run_id, event, approvals))
+                if notice := await _approval(client, run_id, event, ask, poll_seconds):
+                    yield Text(notice)
             elif name == "run.completed":
                 output = event.get("output") if isinstance(event.get("output"), str) else ""
                 if output and not streamed:
@@ -175,16 +197,21 @@ def _call_id(event: dict[str, Any]) -> str:
     return f"hermes_{event.get('run_id', 'run')}_{event.get('seq', 0)}"
 
 
-async def _answer_approval(
-    client: HermesRunsClient, run_id: str, event: dict[str, Any], choice: ApprovalChoice
+async def _approval(
+    client: HermesRunsClient,
+    run_id: str,
+    event: dict[str, Any],
+    ask: Ask | None,
+    poll_seconds: float,
 ) -> str:
-    """Answer a pending approval and return the line the chat shows about it.
+    """Get a pending approval answered; return what the chat should say about it, if anything.
 
     With a session authority (Hermes's default) the answer must name the
     pending prompt and the run's execution generation, which the run's
     status lists; without one, the choice alone resolves it.
     """
-    command = event.get("command") or event.get("description") or "a command"
+    command = str(event.get("command") or event.get("description") or "a command")
+    choices = tuple(c for c in event.get("choices") or () if isinstance(c, str)) or ("once", "deny")
     request_id = event.get("request_id") if isinstance(event.get("request_id"), str) else None
     generation = event.get("execution_generation")
     try:
@@ -194,6 +221,16 @@ async def _answer_approval(
             request_id = pending[0]["prompt_id"]
         if isinstance(status.get("execution_generation"), int):
             generation = status["execution_generation"]
+    except HermesError as exc:
+        return f"\n\n> Hermes asked to run `{command}` and the approval couldn't be answered: {exc}\n\n"
+    if ask is None:
+        choice: str | None = "deny"
+    else:
+        prompt = ApprovalPrompt(command, str(event.get("description") or ""), choices)
+        choice = await _ask_while_pending(client, run_id, request_id, ask(prompt), poll_seconds)
+        if choice is None:
+            return f"\n\n> Hermes stopped waiting for an answer about `{command}`.\n\n"
+    try:
         await client.answer_approval(
             run_id,
             choice=choice,
@@ -202,10 +239,56 @@ async def _answer_approval(
         )
     except HermesError as exc:
         return f"\n\n> Hermes asked to run `{command}` and the approval couldn't be answered: {exc}\n\n"
-    if choice == "once":
-        return f"\n\n> Hermes asked to run `{command}`; approved automatically.\n\n"
-    return (
-        f"\n\n> Hermes asked to run `{command}`; denied automatically, because approvals "
-        "can't be answered from Omnigent. Run it from the Hermes desktop app or terminal "
-        "if it's needed.\n\n"
+    if ask is None:
+        return (
+            f"\n\n> Hermes asked to run `{command}`; denied automatically. Run it from the "
+            "Hermes desktop app or terminal if it's needed.\n\n"
+        )
+    # The card shows the answer.
+    return ""
+
+
+async def _ask_while_pending(
+    client: HermesRunsClient,
+    run_id: str,
+    request_id: str | None,
+    asking: Awaitable[str | None],
+    poll_seconds: float,
+) -> str | None:
+    """The user's choice, ``deny`` if they dismissed it, or None once Hermes stopped waiting.
+
+    Hermes gives up on a prompt after its own timeout, and its desktop app
+    or terminal can answer it too, so the question is withdrawn as soon as
+    the run no longer lists it.
+    """
+    task = asyncio.ensure_future(asking)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=poll_seconds)
+            if done:
+                # Cancelled means the turn is stopping; Stop also stops the run.
+                if task.cancelled() or task.exception() is not None:
+                    return "deny"
+                return task.result() or "deny"
+            if not await _still_waiting(client, run_id, request_id):
+                return None
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+async def _still_waiting(client: HermesRunsClient, run_id: str, request_id: str | None) -> bool:
+    try:
+        status = await client.status(run_id)
+    except HermesError:
+        # Keep asking: a lost connection also ends the run's event stream.
+        return True
+    if request_id is None:
+        return status.get("status") == "waiting_for_approval"
+    return any(
+        p.get("prompt_id") == request_id
+        for p in status.get("pending_controls") or []
+        if isinstance(p, dict)
     )
