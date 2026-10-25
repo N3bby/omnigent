@@ -99,5 +99,5 @@ To deploy another environment from the same workflow, such as
 
 - `mise run bootstrap`
 - the credential setup tasks: `setup-codex`, `setup-claude`,
-  `setup-git-token`, `setup-github-app`, `setup-cloudflare-token` and
-  `setup-hermes-ssh-key`
+  `setup-git-token`, `setup-github-app`, `setup-cloudflare-token`,
+  `setup-hermes-ssh-key` and `setup-hermes-host`

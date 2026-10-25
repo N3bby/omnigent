@@ -54,6 +54,8 @@ COPY --chmod=0755 tailscale/via-exit-node.sh /usr/local/bin/omnigent-via-exit-no
 COPY --chmod=0755 tailscale/exit-node-routes.sh /usr/local/bin/omnigent-exit-node-routes
 COPY tailscale/tailscale-service-profile.sh /etc/profile.d/omnigent-tailscale.sh
 COPY tailscale/ssh-tailnet.conf /etc/ssh/ssh_config.d/50-omnigent-tailnet.conf
+# The always-on host Hermes sessions start on (docs/features/hermes-host.md).
+COPY --chmod=0755 hermes-host.sh /usr/local/bin/omnigent-hermes-host
 COPY mise/mise-profile.sh /etc/profile.d/zz-omnigent-mise.sh
 COPY repo-env/repo-env.sh /usr/local/lib/omnigent/repo-env.sh
 COPY repo-env/repo-env.sh /etc/profile.d/omnigent-repo-env.sh

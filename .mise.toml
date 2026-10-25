@@ -73,6 +73,10 @@ run = './scripts/setup-tailscale'
 description = "Store or rotate the SSH key the hermes-remote harness reaches Hermes with"
 run = './scripts/setup-hermes-ssh-key'
 
+[tasks.setup-hermes-host]
+description = "Sign the always-on Hermes host in as you, so Hermes sessions skip the sandbox"
+run = './scripts/setup-hermes-host'
+
 [tasks.setup-github-app]
 description = "Initialize local credential encryption and configure the GitHub App"
 run = './scripts/setup-github-app'

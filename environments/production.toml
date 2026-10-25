@@ -26,6 +26,10 @@ tailscale_tailnet = "taild5bc1b.ts.net"
 hermes_remote_ssh_host = "home-hermes.taild5bc1b.ts.net"
 hermes_remote_ssh_user = "n3bby"
 hermes_remote_ssh_port = 2222
+# Hermes sessions start on an always-on host instead of a sandbox each
+# (docs/features/hermes-host.md), once `mise run setup-hermes-host` signs it
+# in. Set to false to give them sandboxes again.
+# hermes_host = true
 
 # Origins allowed to call the API from another site, comma-separated, or "*".
 # The Even G2 glasses app runs in the Even app's WebView and needs this; see

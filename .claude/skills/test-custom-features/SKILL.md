@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, progress bars from the agent, a session still showing Working… when Claude goes straight on after a reply or its background agent works on, your own Hermes as an agent with its approval prompts, Omnigent's sessions as MCP tools for your Hermes, and CORS for the Even G2 glasses app. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, progress bars from the agent, a session still showing Working… when Claude goes straight on after a reply or its background agent works on, your own Hermes as an agent with its approval prompts, Hermes sessions on the always-on Hermes host instead of a sandbox, Omnigent's sessions as MCP tools for your Hermes, and CORS for the Even G2 glasses app. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -102,6 +102,7 @@ PASS  images/server/patches/0020-stop-message-waiting-for-sandbox.patch
 PASS  images/server/patches/0021-environment-exit-node.patch
 PASS  images/server/patches/0022-agent-progress.patch
 PASS  images/server/patches/0023-cors-origins.patch
+PASS  images/server/patches/0024-hermes-host.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -142,6 +143,7 @@ PASS  images/server/web-patches/0036-repo-exit-node.patch
 PASS  images/server/web-patches/0037-environment-exit-node.patch
 PASS  images/server/web-patches/0038-repo-exit-node-git-only.patch
 PASS  images/server/web-patches/0039-agent-progress.patch
+PASS  images/server/web-patches/0040-hide-hermes-host.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -201,7 +203,7 @@ compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
 `@` file search, a project's repositories, the environment menu, the
-startup card, the New session screen, MCP servers, a first message waiting for its sandbox, the repository picker's tabs, images in the chat, agents' progress bars or CORS, or changing their native message, composer, file-index, project
+startup card, the New session screen, MCP servers, a first message waiting for its sandbox, the repository picker's tabs, images in the chat, agents' progress bars, CORS or the Hermes host, or changing their native message, composer, file-index, project
 settings, Stop, sandbox lifecycle, sandbox start, chat stream reconnect, chat markdown, image viewer or runner idle paths:
 
 ```bash
@@ -213,8 +215,8 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx`, `web/src/lib/agentProgress.test.ts`, `web/src/components/chat/AgentProgressCard.test.tsx`, `web/src/lib/sessionsApi.test.ts`, `web/src/lib/toolTitle.test.ts` | 2574 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py`, `tests/harnesses/claude_native/test_permission_hook_auth_refresh.py`, `tests/server/test_agent_progress.py`, `tests/runner/test_session_progress_dispatch.py`, `tests/runner/test_progress_log.py`, `tests/runner/test_claude_native_turn_end_recheck.py`, `tests/runner/test_resource_registry.py`, `tests/server/test_cors_origins.py` | 491 passed, 1 skipped |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx`, `web/src/lib/agentProgress.test.ts`, `web/src/components/chat/AgentProgressCard.test.tsx`, `web/src/lib/sessionsApi.test.ts`, `web/src/lib/toolTitle.test.ts`, `web/src/hooks/useHosts.hermes.test.tsx` | 2576 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py`, `tests/harnesses/claude_native/test_permission_hook_auth_refresh.py`, `tests/server/test_agent_progress.py`, `tests/runner/test_session_progress_dispatch.py`, `tests/runner/test_progress_log.py`, `tests/runner/test_claude_native_turn_end_recheck.py`, `tests/runner/test_resource_registry.py`, `tests/server/test_cors_origins.py`, `tests/server/integration/test_hermes_host.py` | 497 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
@@ -267,7 +269,14 @@ beside their tool title. Their server patch adds `test_agent_progress.py`
 poller), and runs upstream's `test_resource_registry.py` (74 cases) beside it.
 CORS for the glasses app (`0023-cors-origins.patch`) adds
 `test_cors_origins.py` (4 cases: preflights, a Bearer-token sign-in, a listed
-origin, and nothing when unset). These are
+origin, and nothing when unset). The Hermes host
+(`0024-hermes-host.patch`) adds `test_hermes_host.py` (6 cases, on the real
+app with a fake host on a real tunnel: a Hermes session starts on the host
+without a sandbox, gets one while the host is offline, other agents keep
+theirs, the host refuses them, the host list marks it, and an automation
+without a pinned host skips it), and
+`0040-hide-hermes-host.patch` adds `useHosts.hermes.test.tsx` (2 cases: the
+pickers leave the host out, the session's own host label keeps it). These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -943,6 +952,16 @@ after the next message it names `feature-check`. Switch back, then remove
     because the file doesn't exist. In Hermes's desktop app or `hermes
     sessions list`, the session is there as `omnigent-<session id>`; delete
     it there when you're done.
+
+    With `hermes_host` on, `mise run credential-status` says `Hermes host
+    sign-in: present`, and `./scripts/kube get pods -n omnigent-sandboxes -l
+    app.kubernetes.io/name=omnigent-hermes-host` shows one Pod `Running`.
+    Then the hermes session above, started with **Agent Sandbox** picked,
+    ran on the host: its composer has a host chip whose menu shows
+    **Hermes**, online, instead of the environment menu, and no sandbox
+    started for it. On the **New session** screen, the host chip's menu
+    doesn't list **Hermes**. A sandbox for a new Hermes session means the
+    host is offline, not signed in, or `0024-hermes-host.patch` is missing.
 
 23. **Omnigent as tools for your Hermes:** only once `omnigent-mcp` is set up
     on the Hermes machine. There, `omnigent-mcp status` prints `Signed in to

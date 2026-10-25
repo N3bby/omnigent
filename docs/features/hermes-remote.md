@@ -6,7 +6,9 @@ instead of starting an agent in the session's Pod. It's the same Hermes as in
 its desktop app, terminal and chat platforms: each Omnigent session is a
 session in that Hermes's history, with its memory, skills and model login.
 
-Nothing about Omnigent runs on the Hermes machine. The session's Pod reaches
+Nothing about Omnigent runs on the Hermes machine. Hermes sessions run on
+an always-on host in the cluster instead of a sandbox each
+([Hermes answers without starting a sandbox](hermes-host.md)), which reaches
 Hermes's API server over SSH, through your tailnet, with a key that may do
 nothing else.
 
@@ -118,6 +120,16 @@ omnigent agent add packages/omnigent-hermes-remote/agents/hermes --server https:
 
 The **hermes** agent then shows in the new-session picker on every device.
 
+### 6. Sign the Hermes host in
+
+```bash
+mise run setup-hermes-host
+```
+
+Hermes sessions then start on the always-on Hermes host instead of a
+sandbox each. Until you do, they still work, each in a sandbox of its own.
+See [Hermes answers without starting a sandbox](hermes-host.md).
+
 ## What you'll see
 
 - **In a session with the hermes agent**, Hermes's answer streams into the
@@ -152,8 +164,9 @@ that both images install. The server needs it to accept the harness name and
 list it, and runner Pods run it.
 
 On a session's first turn, the harness reads the API server's port and key
-over SSH, then forwards a Unix socket in the Pod to the API server and keeps
-the tunnel for the session's later turns. Each turn is a run on Hermes's
+over SSH, then forwards a Unix socket on the session's host (the Hermes host,
+or the session's sandbox) to the API server and keeps the tunnel for the
+session's later turns. Each turn is a run on Hermes's
 `/v1/runs` API in the session's Hermes session, carrying only the new
 message: Hermes loads the rest of the conversation from its own history.
 Hermes picks its own model and keeps its own instructions (`SOUL.md`), so the
@@ -170,8 +183,10 @@ it allows, so the render names them in `OMNIGENT_RUNNER_ENV_PASSTHROUGH`.
 
 ## Turn it off
 
-Remove the three `hermes_remote_*` settings and deploy, and remove the agent
-with `omnigent agent remove hermes`. Remove the key's line from
+Remove the three `hermes_remote_*` settings, run `mise run bootstrap` and
+deploy, and remove the agent with `omnigent agent remove hermes`. The deploy
+also removes the [Hermes host](hermes-host.md#turn-it-off); delete its
+sign-in as that page says. Remove the key's line from
 `authorized_keys` on the Hermes machine, and the key from the Secret with
 `./scripts/kube patch secret omnigent-creds -n omnigent-sandboxes --type=json
 -p '[{"op":"remove","path":"/data/HERMES_REMOTE_SSH_KEY"}]'`.
