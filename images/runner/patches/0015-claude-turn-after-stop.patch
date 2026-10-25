@@ -1,39 +1,42 @@
-Show a turn Claude starts straight after Stop as working.
+Show Claude as working while it is, after its Stop hook.
 
-When a message from the user, or a background task's notification, reaches
-Claude while it writes its last reply, Claude fires its Stop hook and goes
-straight on with it. Its sessions/<pid>.json reads "busy" throughout, so it
-is never rewritten. The forwarder posts Stop as "idle", which the runner also
-adopts as its dedup baseline, and the status-file poller only speaks when the
-file changes, so nothing said "running" again: the web UI showed the turn as
-done, with no Working... and no stop button, while Claude worked on, for as
-long as that next turn ran. The same happens when Claude goes idle and busy
-again within one tick of the file's mtime, which the poller can't tell apart.
-The runner now re-reads the file 2 seconds after a hook's idle or failed edge
-and publishes what it says: an idle that agrees is deduped, a busy is
-published as running. At a real turn end the file reads idle within
-milliseconds of Stop, so this never flickers.
+Claude's sessions/<pid>.json can read "busy" after its Stop hook: when a
+message from the user, or a background task's notification, reached Claude
+while it wrote its last reply, it goes straight on with it, and while a
+background agent it started works on. The file isn't rewritten then. The
+forwarder posts Stop as "idle", which the runner also adopts as its dedup
+baseline, and the status-file poller only speaks when the file changes, so
+nothing said "running" again: the web UI showed the turn as done, with no
+Working... and no stop button, while Claude or its background agent worked
+on. The same happens when Claude goes idle and busy again within one tick of
+the file's mtime, which the poller can't tell apart.
+The runner now re-reads the file 2 seconds after a hook's idle edge and
+publishes what it says: an idle that agrees is deduped, a busy is published
+as running. At a real turn end the file reads idle within milliseconds of
+Stop, so this never flickers. A failed turn isn't re-read, so its error
+stays.
 Upstream fix to backport; delete this patch once upstream re-asserts the
 status file after the Stop hook's edge.
 Base: omnigent v0.18.0 (a8676d23e88d), after 0014-agent-progress.patch.
 
 diff --git a/omnigent/runner/resource_registry.py b/omnigent/runner/resource_registry.py
-index f8d807a..334855b 100644
+index f8d807a..25c8ad2 100644
 --- a/omnigent/runner/resource_registry.py
 +++ b/omnigent/runner/resource_registry.py
-@@ -134,6 +134,11 @@ _CLAUDE_NATIVE_STATUS_IDLE_THRESHOLD_SECONDS = 1.0
+@@ -134,6 +134,12 @@ _CLAUDE_NATIVE_STATUS_IDLE_THRESHOLD_SECONDS = 1.0
  # don't 5x the capture-pane subprocess load on every terminal.
  _CLAUDE_NATIVE_STATUS_POLL_INTERVAL_SECONDS = 0.2
  
-+# Seconds after a hook's turn-end edge before Claude's status file is read
++# Seconds after a hook's ``idle`` edge before Claude's status file is read
 +# again. At a real turn end the file reads ``idle`` within milliseconds; still
-+# busy by then, Claude has gone on with a message that reached it as it ended.
++# busy by then, Claude has gone on with a message that reached it as it ended,
++# or a background agent it started is still working.
 +_CLAUDE_NATIVE_TURN_END_RECHECK_SECONDS = 2.0
 +
  # Minimum wall-clock interval (seconds) between consecutive
  # ``session.terminal.activity`` emissions for a single terminal. The
  # claude-native agent terminal polls its pane every 200ms
-@@ -513,6 +518,9 @@ class SessionResourceRegistry:
+@@ -513,6 +519,9 @@ class SessionResourceRegistry:
          # poller keeps its own edge/mtime baselines on the watcher thread, and
          # clearing the registry's baseline alone would leave those intact.
          self._status_pollers: dict[str, SessionStatusPoller] = {}
@@ -43,7 +46,7 @@ index f8d807a..334855b 100644
          # Optional callback invoked on the event loop when a watched terminal
          # disappears unexpectedly. The callback receives the terminal's
          # lifecycle relationship so the runner can decide whether the owning
-@@ -614,6 +622,7 @@ class SessionResourceRegistry:
+@@ -614,6 +623,7 @@ class SessionResourceRegistry:
              self._active_session_turns.discard(session_id)
              self._published_session_status.pop(session_id, None)
              self._status_pollers.pop(session_id, None)
@@ -51,19 +54,23 @@ index f8d807a..334855b 100644
              return self._last_session_status.pop(session_id, None)
  
      def _claim_status_edge(self, session_id: str, status: str, blocked_on: str | None) -> bool:
-@@ -719,11 +728,34 @@ class SessionResourceRegistry:
+@@ -719,11 +729,38 @@ class SessionResourceRegistry:
          """
          if status in {"idle", "failed"}:
              self._set_session_status_memo(session_id, status)
-+            # Claude fires ``Stop`` and goes straight on when a message or a
-+            # finished background task reached it as it wrote its reply. Its
-+            # file stays ``busy`` throughout, so it is never rewritten, and this
-+            # ``idle`` would stand for the whole next turn: read it again soon.
++            # Claude's file stays ``busy`` after ``Stop`` when Claude goes
++            # straight on with a message or a finished background task that
++            # reached it as it wrote its reply, and while a background agent it
++            # started works on. The file is never rewritten then, and this
++            # ``idle`` would stand until it is: read it again soon. Not after a
++            # failed turn, whose error a ``running`` would clear.
 +            with self._lock:
-+                if session_id in self._status_pollers:
++                if status == "idle" and session_id in self._status_pollers:
 +                    self._turn_end_rechecks[session_id] = (
 +                        time.monotonic() + _CLAUDE_NATIVE_TURN_END_RECHECK_SECONDS
 +                    )
++                else:
++                    self._turn_end_rechecks.pop(session_id, None)
          elif status in {"running", "waiting"}:
              self._set_session_status_memo(session_id, "running")
          self._sync_status_edge(session_id, status)
@@ -73,8 +80,8 @@ index f8d807a..334855b 100644
 +        """Whether to re-read the session's status file after a turn-end edge.
 +
 +        :param session_id: Session/conversation identifier, e.g. ``"conv_abc"``.
-+        :returns: ``True`` once, when the recheck a hook's ``idle`` or
-+            ``failed`` scheduled is due.
++        :returns: ``True`` once, when the recheck a hook's ``idle``
++            scheduled is due.
 +        """
 +        with self._lock:
 +            due = self._turn_end_rechecks.get(session_id)
@@ -86,7 +93,7 @@ index f8d807a..334855b 100644
      def _note_terminal_status(self, session_id: str, status: str, source: str) -> None:
          """Attach external status edges to the owning Claude terminal's history."""
          if self._terminal_registry is None:
-@@ -1520,6 +1552,10 @@ class SessionResourceRegistry:
+@@ -1520,6 +1557,10 @@ class SessionResourceRegistry:
          def _on_tick() -> None:
              nonlocal native_input_ready
              if status_poller is not None:
@@ -99,17 +106,18 @@ index f8d807a..334855b 100644
                  try:
 diff --git a/tests/runner/test_claude_native_turn_end_recheck.py b/tests/runner/test_claude_native_turn_end_recheck.py
 new file mode 100644
-index 0000000..77e3909
+index 0000000..0ba0eeb
 --- /dev/null
 +++ b/tests/runner/test_claude_native_turn_end_recheck.py
-@@ -0,0 +1,136 @@
-+"""A turn Claude starts straight after ``Stop`` shows as working (this deployment).
+@@ -0,0 +1,174 @@
++"""Claude still at work after ``Stop`` shows as working (this deployment).
 +
 +When a message, or a background task's notification, reaches Claude while it
-+writes its last reply, Claude fires ``Stop`` and goes straight on with it. Its
-+``sessions/<pid>.json`` reads ``busy`` throughout, so it is never rewritten, and
-+the forwarder's ``Stop`` → ``idle`` used to stand for the whole next turn. The
-+registry now re-reads the file shortly after a hook's turn-end edge.
++writes its last reply, Claude fires ``Stop`` and goes straight on with it. While
++a background agent it started works on, Claude also reads as busy after
++``Stop``. Its ``sessions/<pid>.json`` says ``busy`` throughout, so it is never
++rewritten, and the forwarder's ``Stop`` → ``idle`` used to stand until it was.
++The registry now re-reads the file shortly after a hook's ``idle`` edge.
 +"""
 +
 +from __future__ import annotations
@@ -182,7 +190,11 @@ index 0000000..77e3909
 +async def test_a_turn_after_stop_is_published_as_running(
 +    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 +) -> None:
-+    """Claude still busy after ``Stop``: the session works again."""
++    """Claude still busy after ``Stop``: the session works again.
++
++    The file reads the same whether Claude went on with a queued message or a
++    background agent it started is still working.
++    """
 +    monkeypatch.setattr(resource_registry, "_CLAUDE_NATIVE_TURN_END_RECHECK_SECONDS", 0.05)
 +    registry, statuses, tick = await _observe(tmp_path, "conv_next_turn")
 +    _write_status(tmp_path, "busy")
@@ -236,6 +248,39 @@ index 0000000..77e3909
 +    _write_status(tmp_path, "busy")
 +    tick()  # type: ignore[operator]
 +    registry.note_external_session_status("conv_not_due", "idle")
++    tick()  # type: ignore[operator]
++    await asyncio.sleep(0)
++    assert statuses == ["running"]
++
++
++@pytest.mark.asyncio
++async def test_a_failed_turn_keeps_its_error(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """No recheck after ``StopFailure``: a ``running`` would clear its error."""
++    monkeypatch.setattr(resource_registry, "_CLAUDE_NATIVE_TURN_END_RECHECK_SECONDS", 0.05)
++    registry, statuses, tick = await _observe(tmp_path, "conv_failed")
++    _write_status(tmp_path, "busy")
++    tick()  # type: ignore[operator]
++    registry.note_external_session_status("conv_failed", "failed")
++    await asyncio.sleep(0.06)
++    tick()  # type: ignore[operator]
++    await asyncio.sleep(0)
++    assert statuses == ["running"]
++
++
++@pytest.mark.asyncio
++async def test_a_failure_cancels_a_pending_recheck(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """A ``failed`` just after an ``idle`` stands too."""
++    monkeypatch.setattr(resource_registry, "_CLAUDE_NATIVE_TURN_END_RECHECK_SECONDS", 0.05)
++    registry, statuses, tick = await _observe(tmp_path, "conv_idle_then_failed")
++    _write_status(tmp_path, "busy")
++    tick()  # type: ignore[operator]
++    registry.note_external_session_status("conv_idle_then_failed", "idle")
++    registry.note_external_session_status("conv_idle_then_failed", "failed")
++    await asyncio.sleep(0.06)
 +    tick()  # type: ignore[operator]
 +    await asyncio.sleep(0)
 +    assert statuses == ["running"]
