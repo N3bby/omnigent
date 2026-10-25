@@ -27,6 +27,12 @@ hermes_remote_ssh_host = "home-hermes.taild5bc1b.ts.net"
 hermes_remote_ssh_user = "n3bby"
 hermes_remote_ssh_port = 2222
 
+# Origins allowed to call the API from another site, comma-separated, or "*".
+# The Even G2 glasses app runs in the Even app's WebView and needs this; see
+# docs/features/even-g2.md. It signs in with a token, not a cookie, so "*"
+# doesn't let other sites act as you. Remove it to turn CORS off.
+cors_allowed_origins = "*"
+
 # The GitHub repository (by numeric ID) and Environment whose Actions runs may
 # deploy. Remove both to turn off deploying from GitHub Actions.
 deploy_github_repository_id = "1386328125"

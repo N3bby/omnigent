@@ -130,6 +130,9 @@ def main() -> None:
             f"OMNIGENT_TAILSCALE_TAILNET={cfg.get('tailscale_tailnet', '')}",
             f"OMNIGENT_TAILSCALE_TAGS={cfg['tailscale_tags']}",
             *(f"{name}={value}" for name, value in hermes_remote.items()),
+            # Browser clients on another origin, such as the Even G2 glasses
+            # app, get CORS headers. Empty turns it off.
+            f"OMNIGENT_CORS_ALLOWED_ORIGINS={cfg['cors_allowed_origins']}",
             "",
         ])
     )
