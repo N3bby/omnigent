@@ -211,7 +211,7 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx`, `web/src/lib/agentProgress.test.ts`, `web/src/components/chat/AgentProgressCard.test.tsx`, `web/src/lib/sessionsApi.test.ts`, `web/src/lib/toolTitle.test.ts` | 2573 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx`, `web/src/lib/agentProgress.test.ts`, `web/src/components/chat/AgentProgressCard.test.tsx`, `web/src/lib/sessionsApi.test.ts`, `web/src/lib/toolTitle.test.ts` | 2574 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py`, `tests/harnesses/claude_native/test_permission_hook_auth_refresh.py`, `tests/server/test_agent_progress.py`, `tests/runner/test_session_progress_dispatch.py`, `tests/runner/test_progress_log.py` | 408 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
@@ -253,8 +253,8 @@ Claude's permission-hook bearer (`0013-permission-hook-auth-refresh.patch`)
 adds `test_permission_hook_auth_refresh.py` (4 cases), with a stubbed server.
 Agents' progress bars
 (`0039-agent-progress.patch`) add `agentProgress.test.ts` and
-`AgentProgressCard.test.tsx` (19 cases: placing bars by turn, the live bar,
-the log polling), the progress field to `sessionsApi.test.ts` (95 cases, all
+`AgentProgressCard.test.tsx` (20 cases: placing bars by turn, the live bar,
+none while a message is on its way, the log polling), the progress field to `sessionsApi.test.ts` (95 cases, all
 but that one upstream's), and run upstream's `toolTitle.test.ts` (21 cases)
 beside their tool title. Their server patch adds `test_agent_progress.py`
 (14 cases, on the real app with header auth), and the runner patch
@@ -876,8 +876,10 @@ after the next message it names `feature-check`. Switch back, then remove
     line at the end of its reply, such as `✓ Dev server running on port 5173
     · 31s`. Open the app at the address it gives and click it once more:
     your requests come into that log. Then ask it to run the test suite
-    (about a minute or more): its bar sweeps without a percentage, a new one,
-    and the suite's output streams under Log. On a phone, a long label is cut
+    (about a minute or more): as you send, the finished line stays on the
+    last reply, and no bar shows above **Working…** until the agent sets
+    one. Its bar sweeps without a percentage, a new one, and the suite's
+    output streams under Log. On a phone, a long label is cut
     with its count, such as `(12/40)`, still in view.
 
 22. **Your own Hermes as an agent:** only with `hermes_remote_ssh_host` set

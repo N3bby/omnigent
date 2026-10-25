@@ -9,13 +9,16 @@ carry the session's bars into the chat store as agentProgress.
 The newest bar shows above Working… while the agent works on the turn that
 set it (lib/agentProgress.ts liveProgress), as one compact row: the label,
 with a trailing count kept in view, the percentage, a thin line along the
-bottom that fills to it or sweeps without one, and Log. Every other bar is
-finished, and AssistantBubble shows it as one line at the end of the reply
-that ends its turn (placeFinishedProgress, by time against the user's
-messages): ✓ or ✗, its last label and how long it ran. Log opens the bar's
-lines, polled every 1.5 seconds from GET /v1/sessions/{id}/progress/{bar}/log
-while open; they keep coming after the turn, e.g. from a dev server. The
-tool's calls are titled "Progress: <label>".
+bottom that fills to it or sweeps without one, and Log. A message from the
+user starts a turn without one, already while it's on its way to the server:
+otherwise the last turn's finished bar flashed above Working… right after
+sending. Every other bar is finished, and AssistantBubble shows it as one
+line at the end of the reply that ends its turn (placeFinishedProgress, by
+time against the user's messages): ✓ or ✗, its last label and how long it
+ran. Log opens the bar's lines, polled every 1.5 seconds from
+GET /v1/sessions/{id}/progress/{bar}/log while open; they keep coming after
+the turn, e.g. from a dev server. The tool's calls are titled
+"Progress: <label>".
 
 diff --git a/web/src/components/chat/AgentProgressCard.test.tsx b/web/src/components/chat/AgentProgressCard.test.tsx
 new file mode 100644
@@ -461,7 +464,7 @@ index 0000000..7e3dca0
 +  );
 +}
 diff --git a/web/src/components/chat/Transcript.tsx b/web/src/components/chat/Transcript.tsx
-index 88d902e..6fa862f 100644
+index 88d902e..a59c121 100644
 --- a/web/src/components/chat/Transcript.tsx
 +++ b/web/src/components/chat/Transcript.tsx
 @@ -35,6 +35,13 @@ import { useUserMessageNav } from "@/hooks/useUserMessageNav";
@@ -478,7 +481,7 @@ index 88d902e..6fa862f 100644
  import { CHAT_COLUMN_WIDTH } from "@/pages/chatLayout";
  import {
    type ConversationScroller,
-@@ -320,6 +327,28 @@ function TranscriptImpl({
+@@ -320,6 +327,30 @@ function TranscriptImpl({
    // The sandbox startup card (this deployment) replaces "Working…" while the
    // sandbox starts, and stays until the thread moves on.
    const startupRunning = useChatStore((s) => s.sandboxStartup?.outcome === "running");
@@ -494,7 +497,9 @@ index 88d902e..6fa862f 100644
 +            ? "assistant"
 +            : b.kind === "user" && !isSystemBubble(b) && display.committedUserIds.has(b.itemId)
 +              ? "turn"
-+              : "other",
++              : b.kind === "user" && b.pending && !isSystemBubble(b)
++                ? "pending"
++                : "other",
 +        createdAtS: "createdAtS" in b ? b.createdAtS : undefined,
 +      })),
 +    [display.streamBubbles, display.committedUserIds],
@@ -507,7 +512,7 @@ index 88d902e..6fa862f 100644
    const startupFailed = useChatStore((s) => s.sandboxStartup?.outcome === "failed");
    // When the thread last moved, a message or the agent's work: a finished start
    // shows until it moves on after it.
-@@ -404,7 +433,10 @@ function TranscriptImpl({
+@@ -404,7 +435,10 @@ function TranscriptImpl({
                    disableVirtualization={disableVirtualization}
                    messageId={messageId}
                    onGeometryChange={onGeometryChange}
@@ -518,7 +523,7 @@ index 88d902e..6fa862f 100644
                  {/* How the sandbox start is going, step by step (this deployment).
                  The start comes before the reply, so it's above Working…. */}
                  <SessionStartupCard lastActivityAt={lastActivityAt} />
-@@ -423,6 +455,9 @@ function TranscriptImpl({
+@@ -423,6 +457,9 @@ function TranscriptImpl({
                      </MessageContent>
                    </Message>
                  ))}
@@ -528,7 +533,7 @@ index 88d902e..6fa862f 100644
                  {/* Working… shimmer, lit for the whole busy turn. */}
                  {showWorkingIndicator && !startupRunning && <WorkingIndicator />}
                  {/* Managed-sandbox stage cue; only when Working is absent. */}
-@@ -587,6 +622,7 @@ export function VirtualBubbleList({
+@@ -587,6 +624,7 @@ export function VirtualBubbleList({
    disableVirtualization,
    messageId,
    onGeometryChange,
@@ -536,7 +541,7 @@ index 88d902e..6fa862f 100644
  }: {
    bubbles: Bubble[];
    scrollEl: HTMLElement | null;
-@@ -599,6 +635,8 @@ export function VirtualBubbleList({
+@@ -599,6 +637,8 @@ export function VirtualBubbleList({
    messageId?: string | null;
    /** Publishes virtualizer-derived geometry up to the rail/spacer. */
    onGeometryChange: (geometry: TranscriptGeometry) => void;
@@ -545,7 +550,7 @@ index 88d902e..6fa862f 100644
  }) {
    const ctx = useStickToBottomContext() as ReturnType<typeof useStickToBottomContext> & {
      stopScroll: () => void;
-@@ -1038,6 +1076,7 @@ export function VirtualBubbleList({
+@@ -1038,6 +1078,7 @@ export function VirtualBubbleList({
            <BubbleView
              key={rowKey(bubble)}
              bubble={bubble}
@@ -553,7 +558,7 @@ index 88d902e..6fa862f 100644
              isLastAssistant={index === lastAssistantIndex}
              showsWorking={showsWorking && index === lastAssistantIndex}
              actionsPersistent={
-@@ -1065,6 +1104,7 @@ export function VirtualBubbleList({
+@@ -1065,6 +1106,7 @@ export function VirtualBubbleList({
            >
              <BubbleView
                bubble={bubble}
@@ -643,10 +648,10 @@ index 22f0c5f..79de6ed 100644
            <div
 diff --git a/web/src/lib/agentProgress.test.ts b/web/src/lib/agentProgress.test.ts
 new file mode 100644
-index 0000000..ffcfdb0
+index 0000000..7376998
 --- /dev/null
 +++ b/web/src/lib/agentProgress.test.ts
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,186 @@
 +import { afterEach, describe, expect, it } from "vitest";
 +
 +import { parseEvent } from "@/lib/sse";
@@ -767,6 +772,20 @@ index 0000000..ffcfdb0
 +    expect(liveProgress([bar("same", 300.4)], ROWS, true)?.id).toBe("same");
 +  });
 +
++  it("shows no bar live while a message from the user is on its way", () => {
++    // The last turn's bar finished; the UI shows Working… as soon as the user
++    // sends, before the server has taken the message.
++    const rows: ProgressRow[] = [...ROWS, { key: "user:tmp_1", kind: "pending", createdAtS: 400 }];
++    const bars = [bar("second", 305, { endedAt: 330, outcome: "done" })];
++    expect(liveProgress(bars, rows, true)).toBeNull();
++    // It stays at the end of its own turn meanwhile.
++    expect(
++      placeFinishedProgress(bars, rows, null)
++        .get("assistant:r2b")
++        ?.map((b) => b.id),
++    ).toEqual(["second"]);
++  });
++
 +  it("puts each finished bar at the end of its turn", () => {
 +    const bars = [bar("scheduled", 50), bar("first", 210), bar("again", 250), bar("second", 330)];
 +    const placed = placeFinishedProgress(bars, ROWS, null);
@@ -821,10 +840,10 @@ index 0000000..ffcfdb0
 +});
 diff --git a/web/src/lib/agentProgress.ts b/web/src/lib/agentProgress.ts
 new file mode 100644
-index 0000000..3c00306
+index 0000000..5805e67
 --- /dev/null
 +++ b/web/src/lib/agentProgress.ts
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,199 @@
 +/**
 + * The progress bars an agent shows in the chat, and the logs under them.
 + *
@@ -933,18 +952,21 @@ index 0000000..3c00306
 +
 +/**
 + * A row of the transcript, as placing bars needs it: where a turn starts (a
-+ * message from the user), and where an assistant reply can carry a bar.
++ * message from the user), and where an assistant reply can carry a bar. A
++ * message the server hasn't taken yet is `"pending"`: it starts a turn too.
 + */
 +export interface ProgressRow {
 +  key: string;
-+  kind: "turn" | "assistant" | "other";
++  kind: "turn" | "pending" | "assistant" | "other";
 +  /** When it was sent, in Unix seconds; turns without one are skipped. */
 +  createdAtS?: number;
 +}
 +
 +/**
 + * The bar above Working…: the newest bar, while the agent works on the turn
-+ * that set it. A message from the user starts a turn without one.
++ * that set it. A message from the user starts a turn without one, also while
++ * it's still on its way: the UI shows Working… as soon as it's sent, and the
++ * last turn's finished bar mustn't show as live meanwhile.
 + */
 +export function liveProgress(
 +  bars: readonly AgentProgress[],
@@ -953,6 +975,7 @@ index 0000000..3c00306
 +): AgentProgress | null {
 +  const newest = bars.at(-1);
 +  if (!working || !newest) return null;
++  if (rows.some((row) => row.kind === "pending")) return null;
 +  const turnStart = rows.findLast((row) => row.kind === "turn" && row.createdAtS !== undefined);
 +  // Message times are whole seconds, rounded down, so they're never late.
 +  if (turnStart && newest.startedAt < turnStart.createdAtS!) return null;

@@ -61,7 +61,8 @@ You can still ask for one: "show a progress bar while you migrate these".
 | `clear` | `true` ends the bar now; it stays as a finished line. |
 
 Each call in a turn updates that turn's bar. A message from you starts a new
-one. A label that's empty, a percentage outside 0 to 100 or a log file
+one, and from the moment you send it, the last turn's bar stays a finished
+line at the end of its reply. A label that's empty, a percentage outside 0 to 100 or a log file
 that isn't an absolute path comes back to the agent as an error that says
 why.
 
@@ -121,6 +122,7 @@ There's nothing to turn off: an agent shows a bar only for long work.
   you.
 - **The bar:** `images/server/web-patches/0039-agent-progress.patch` keeps
   the bars in the chat store, shows the newest above **Working…** while its
-  turn runs, places each finished one at the end of the reply of the turn it
+  turn runs (a message you've sent but the server hasn't confirmed yet
+  already starts a new turn), places each finished one at the end of the reply of the turn it
   was set in, polls an open log every 1.5 seconds, and titles the tool's
   calls in the chat by the bar's label.
