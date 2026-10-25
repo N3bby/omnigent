@@ -172,6 +172,14 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
                 raise ConfigError("hermes_remote_ssh_port must be a port number")
     elif "hermes_remote_ssh_user" in data or "hermes_remote_ssh_port" in data:
         raise ConfigError("hermes_remote_ssh_user and hermes_remote_ssh_port need hermes_remote_ssh_host")
+    # The always-on host Hermes sessions start on (docs/features/hermes-host.md),
+    # on by default with Hermes; its sign-in is a secret, stored by
+    # `mise run setup-hermes-host`.
+    data.setdefault("hermes_host", "hermes_remote_ssh_host" in data)
+    if not isinstance(data["hermes_host"], bool):
+        raise ConfigError("hermes_host must be true or false")
+    if data["hermes_host"] and "hermes_remote_ssh_host" not in data:
+        raise ConfigError("hermes_host needs hermes_remote_ssh_host")
     if "deploy_github_repository_id" in data:
         require_string(data, "deploy_github_repository_id", r"[1-9][0-9]*")
         data.setdefault("deploy_github_environment", "production")

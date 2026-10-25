@@ -40,6 +40,105 @@ def as_mi(value: int) -> str:
     return f"{value // 1024}Gi" if value % 1024 == 0 else f"{value}Mi"
 
 
+# The always-on host Hermes sessions start on (docs/features/hermes-host.md).
+# Requests and limits as one map, so the runner quota can make room for them.
+HERMES_HOST_RESOURCES = {
+    "requests": {"cpu": "100m", "memory": "512Mi", "ephemeral-storage": "256Mi"},
+    "limits": {"cpu": "2", "memory": "4Gi", "ephemeral-storage": "2Gi"},
+}
+
+
+def hermes_host_manifest(
+    host_id: str, runner_ref: str, tailscale_tags: str, hermes_remote: dict[str, str]
+) -> str:
+    """The Deployment of the always-on host Hermes sessions start on."""
+    env = [
+        ("HOME", "/home/omnigent"),
+        ("OMNIGENT_SERVER_URL", "http://omnigent.omnigent.svc.cluster.local"),
+        ("OMNIGENT_HOST_ID", host_id),
+        ("OMNIGENT_HOST_NAME", "Hermes"),
+        ("OMNIGENT_TAILSCALE_TAGS", tailscale_tags),
+        *hermes_remote.items(),
+    ]
+    secret_env = [
+        # Joins the tailnet that leads to the Hermes machine, like runner Pods.
+        ("TAILSCALE_AUTHKEY", "omnigent-creds", "TAILSCALE_AUTHKEY"),
+        ("HERMES_REMOTE_SSH_KEY", "omnigent-creds", "HERMES_REMOTE_SSH_KEY"),
+        # Your sign-in, from `mise run setup-hermes-host`, in a Secret only this
+        # Pod gets: runner Pods share omnigent-creds.
+        ("OMNIGENT_REFRESH_TOKEN", "omnigent-hermes-host", "refresh-token"),
+        ("OMNIGENT_HERMES_HOST_USER", "omnigent-hermes-host", "user"),
+    ]
+    env_lines = [
+        *(line for name, value in env for line in (f"- name: {name}", f"  value: {yaml_string(value)}")),
+        *(
+            line
+            for name, secret, key in secret_env
+            for line in (
+                f"- name: {name}", "  valueFrom:", "    secretKeyRef:",
+                f"      name: {secret}", f"      key: {key}", "      optional: true",
+            )
+        ),
+    ]
+    resource_lines = [
+        line
+        for kind, values in HERMES_HOST_RESOURCES.items()
+        for line in (f"{kind}:", *(f"  {name}: {yaml_string(v)}" for name, v in values.items()))
+    ]
+    indent = " " * 12
+    env_yaml = "\n".join(indent + line for line in env_lines)
+    resources_yaml = "\n".join(indent + line for line in resource_lines)
+    return f"""---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omnigent-hermes-host
+  namespace: omnigent-sandboxes
+spec:
+  replicas: 1
+  # One host id: the old Pod stops before the new one connects.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent-hermes-host
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent-hermes-host
+        # Rewritten on admission like runner Pods
+        # (kubernetes/platform/runner-userns.yaml): root in its own user
+        # namespace, /dev/net/tun for Tailscale, and a tailnet logout on stop.
+        omnigent.ai/role: sandbox-host
+    spec:
+      serviceAccountName: omnigent-runner
+      automountServiceAccountToken: false
+      hostUsers: false
+      # The pause container is PID 1 and reaps the host's exited processes.
+      shareProcessNamespace: true
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+        - name: host
+          image: {yaml_string(runner_ref)}
+          workingDir: /home/omnigent
+          # A login shell, like runner Pods, starts Tailscale.
+          command: ["bash", "-lc", "exec omnigent-hermes-host"]
+          env:
+{env_yaml}
+          resources:
+{resources_yaml}
+          # Replaced on admission (runner-userns.yaml), which needs it present.
+          securityContext: {{}}
+          volumeMounts:
+            - name: home
+              mountPath: /home/omnigent
+      volumes:
+        - name: home
+          emptyDir: {{}}
+"""
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--environment", default="production")
@@ -74,13 +173,36 @@ def main() -> None:
         if dirty.stdout.strip():
             deployment_revision += "-dirty"
     concurrency = int(cfg["runner_max_concurrency"])
+    # The Hermes host runs beside the runners, in their namespace and quota.
+    def hermes_room(kind: str, name: str) -> int:
+        if not cfg["hermes_host"]:
+            return 0
+        value = HERMES_HOST_RESOURCES[kind][name]
+        return cpu_milli(value) if name == "cpu" else binary_mi(value)
+
     quota = {
-        "request_cpu": as_cpu(cpu_milli(cfg["runner_cpu_request"]) * concurrency + 500),
-        "request_memory": as_mi(binary_mi(cfg["runner_memory_request"]) * concurrency + 512),
-        "request_storage": as_mi(binary_mi(cfg["runner_ephemeral_request"]) * concurrency + 1024),
-        "limit_cpu": as_cpu(cpu_milli(cfg["runner_cpu_limit"]) * concurrency + 3000),
-        "limit_memory": as_mi(binary_mi(cfg["runner_memory_limit"]) * concurrency + 3072),
-        "limit_storage": as_mi(binary_mi(cfg["runner_ephemeral_limit"]) * concurrency + 1024),
+        "request_cpu": as_cpu(
+            cpu_milli(cfg["runner_cpu_request"]) * concurrency + 500 + hermes_room("requests", "cpu")
+        ),
+        "request_memory": as_mi(
+            binary_mi(cfg["runner_memory_request"]) * concurrency + 512
+            + hermes_room("requests", "memory")
+        ),
+        "request_storage": as_mi(
+            binary_mi(cfg["runner_ephemeral_request"]) * concurrency + 1024
+            + hermes_room("requests", "ephemeral-storage")
+        ),
+        "limit_cpu": as_cpu(
+            cpu_milli(cfg["runner_cpu_limit"]) * concurrency + 3000 + hermes_room("limits", "cpu")
+        ),
+        "limit_memory": as_mi(
+            binary_mi(cfg["runner_memory_limit"]) * concurrency + 3072
+            + hermes_room("limits", "memory")
+        ),
+        "limit_storage": as_mi(
+            binary_mi(cfg["runner_ephemeral_limit"]) * concurrency + 1024
+            + hermes_room("limits", "ephemeral-storage")
+        ),
     }
 
     # The hermes-remote harness reads its SSH target from these, in runner Pods
@@ -100,6 +222,13 @@ def main() -> None:
         hermes_remote["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] = ",".join(
             [*hermes_remote, "HERMES_REMOTE_SSH_KEY"]
         )
+    # Hermes sessions start on an always-on host instead of a sandbox each
+    # (docs/features/hermes-host.md). Its id is fixed, so the server knows it,
+    # and a restarted Pod is the same host.
+    hermes_host_id = (
+        uuid.uuid5(uuid.NAMESPACE_URL, f"https://{cfg['hostname']}/hermes-host").hex
+        if cfg["hermes_host"] else ""
+    )
 
     (generated / "omnigent-config.env").write_text(
         "\n".join([
@@ -130,6 +259,7 @@ def main() -> None:
             f"OMNIGENT_TAILSCALE_TAILNET={cfg.get('tailscale_tailnet', '')}",
             f"OMNIGENT_TAILSCALE_TAGS={cfg['tailscale_tags']}",
             *(f"{name}={value}" for name, value in hermes_remote.items()),
+            *([f"OMNIGENT_HERMES_HOST_ID={hermes_host_id}"] if hermes_host_id else []),
             # Browser clients on another origin, such as the Even G2 glasses
             # app, get CORS headers. Empty turns it off.
             f"OMNIGENT_CORS_ALLOWED_ORIGINS={cfg['cors_allowed_origins']}",
@@ -279,6 +409,10 @@ spec:
                 port:
                   name: http
 """
+    if hermes_host_id:
+        dynamic += hermes_host_manifest(
+            hermes_host_id, runner_ref, str(cfg["tailscale_tags"]), hermes_remote
+        )
     (generated / "dynamic.yaml").write_text(dynamic)
     deploy_repository_id = str(cfg.get("deploy_github_repository_id", ""))
     deployment_vars = f"""---

@@ -107,6 +107,14 @@ the runner namespace, which limits what a compromised server could do there.
   page on any site read API responses. It never allows credentials, so such
   a page can't use your browser's cookie; it needs a Bearer token, which
   takes your password. Empty the setting to turn it off.
+- **The Hermes host is signed in as you.** The
+  [always-on Hermes host](features/hermes-host.md) keeps a token that acts as
+  your Omnigent account until `grant_max_lifetime_days` after you signed it
+  in. It runs no agent tools, only the harness that talks to your Hermes,
+  and only its own Pod gets the token's Secret, but anyone who can sign in
+  to that Pod, such as over Tailscale SSH, or read the runner namespace's
+  Secrets, can use it. `mise run setup-hermes-host` signs the old token out
+  when you sign in again.
 - **Agent logins are shared.** Every runner uses the same Claude token and
   Codex login, so one compromised runner can use them.
 - **MCP servers' keys are shared too.** Every runner Pod mounts all the

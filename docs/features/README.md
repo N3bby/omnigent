@@ -48,6 +48,7 @@ Agents you can pick for a session beyond upstream's.
 | Feature | What you get | Can you turn it off? |
 | --- | --- | --- |
 | [Your own Hermes as an agent](hermes-remote.md) | A session talks to your own Hermes Agent on its own machine, over SSH, sharing its history, memory and skills with its desktop app and chat platforms | Optional setup step |
+| [Hermes answers without starting a sandbox](hermes-host.md) | Hermes sessions run on one always-on host instead of a sandbox each, so a new one doesn't wait about 8 seconds for its sandbox | Yes, `hermes_host = false` |
 | [Omnigent as tools for your Hermes](omnigent-mcp.md) | Your own Hermes Agent lists, searches and reads your sessions, archived ones too, starts sessions in a project or on their own, and talks to them, through an MCP server on its machine | Optional setup step |
 
 ## Repositories

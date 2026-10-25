@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Sign the always-on Hermes host in as you (docs/features/hermes-host.md).
+# Hermes sessions start on that host instead of a sandbox each; an Omnigent
+# host belongs to one user, so it runs only your Hermes sessions.
+#
+# Asks for your Omnigent username and password, signs in like
+# `omnigent login`, and keeps only the refresh token, in the
+# omnigent-hermes-host Secret that only the host's Pod gets. Your password
+# isn't kept. Run it again to sign in anew; that signs the old token out.
+set -euo pipefail
+
+KUBECTL=("$(dirname "${BASH_SOURCE[0]}")/kube")
+namespace=omnigent-sandboxes
+secret=omnigent-hermes-host
+
+hostname="$("${KUBECTL[@]}" get ingress omnigent-public -n omnigent -o jsonpath='{.spec.rules[0].host}')"
+[[ -n "$hostname" ]] || { echo "could not find the deployment's hostname; deploy first" >&2; exit 1; }
+server="https://${hostname}"
+
+read -rp "Omnigent username for ${server} (blank cancels): " username
+[[ -n "$username" ]] || exit 0
+read -rsp "Password: " password
+echo
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+status="$(
+  printf '%s' "$password" \
+    | jq -Rsc --arg username "$username" '{username: $username, password: ., issue_refresh: true}' \
+    | curl -sS -o "$tmp/login.json" -w '%{http_code}' -H 'Content-Type: application/json' \
+      --data-binary @- "${server}/auth/login"
+)"
+unset password
+if [[ "$status" != 200 ]]; then
+  echo "signing in to ${server} failed (HTTP ${status}): $(jq -r '.error.message? // .detail? // .' "$tmp/login.json" 2>/dev/null)" >&2
+  exit 1
+fi
+jq -e '.refresh_token | type == "string" and length > 0' "$tmp/login.json" >/dev/null \
+  || { echo "${server} signed you in but gave no refresh token to stay signed in" >&2; exit 1; }
+
+# Sign the previous token out, so only the new one works.
+"${KUBECTL[@]}" get secret "$secret" -n "$namespace" -o json --ignore-not-found \
+  | jq -j '.data["refresh-token"] // empty | @base64d' >"$tmp/old"
+if [[ -s "$tmp/old" ]]; then
+  curl -sS -o /dev/null --data-urlencode "refresh_token@$tmp/old" "${server}/oauth/revoke" || true
+fi
+
+jq -c --arg name "$secret" --arg namespace "$namespace" --arg fallback "$username" '{
+  apiVersion: "v1",
+  kind: "Secret",
+  metadata: {name: $name, namespace: $namespace},
+  type: "Opaque",
+  stringData: {"refresh-token": .refresh_token, user: (.user.id // $fallback)}
+}' "$tmp/login.json" | "${KUBECTL[@]}" apply -f - >/dev/null
+echo "Hermes host signed in as $(jq -r --arg fallback "$username" '.user.id // $fallback' "$tmp/login.json")."
+
+if "${KUBECTL[@]}" get deployment omnigent-hermes-host -n "$namespace" >/dev/null 2>&1; then
+  "${KUBECTL[@]}" rollout restart deployment/omnigent-hermes-host -n "$namespace" >/dev/null
+  echo "Restarting the Hermes host; new Hermes sessions start on it once it's up."
+else
+  echo "Deploy to start the Hermes host."
+fi

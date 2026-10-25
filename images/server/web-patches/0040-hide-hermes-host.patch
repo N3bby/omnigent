@@ -1,0 +1,105 @@
+Leave the Hermes host out of the host pickers.
+
+Hermes sessions start on the deployment's always-on Hermes host by
+themselves (server patch 0024-hermes-host.patch), and the host runs nothing
+else. GET /v1/hosts marks it hermes_only, and the host list every picker uses
+leaves it out, as it does sandbox hosts. The list that labels a session's own
+host keeps it, so a Hermes session's composer shows its host by name.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0039-agent-progress.patch.
+diff --git a/web/src/hooks/useHosts.hermes.test.tsx b/web/src/hooks/useHosts.hermes.test.tsx
+new file mode 100644
+index 000000000..730d50b62
+--- /dev/null
++++ b/web/src/hooks/useHosts.hermes.test.tsx
+@@ -0,0 +1,66 @@
++import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
++import { cleanup, renderHook, waitFor } from "@testing-library/react";
++import { useState, type ReactNode } from "react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import { useHosts } from "./useHosts";
++
++const fetchMock = vi.fn();
++
++const wrapper = function QueryWrapper({ children }: { children: ReactNode }) {
++  const [client] = useState(
++    () => new QueryClient({ defaultOptions: { queries: { retry: false } } }),
++  );
++  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
++};
++
++const hosts = [
++  {
++    host_id: "host_hermes",
++    name: "Hermes",
++    owner: "alice",
++    status: "online",
++    sandbox_provider: null,
++    hermes_only: true,
++  },
++  {
++    host_id: "host_laptop",
++    name: "Laptop",
++    owner: "alice",
++    status: "online",
++    sandbox_provider: null,
++    hermes_only: false,
++  },
++];
++
++beforeEach(() => {
++  fetchMock.mockReset();
++  fetchMock.mockResolvedValue({
++    ok: true,
++    status: 200,
++    statusText: "OK",
++    json: async () => ({ hosts }),
++  } as unknown as Response);
++  vi.stubGlobal("fetch", fetchMock);
++});
++
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++describe("useHosts and the Hermes host", () => {
++  it("leaves the Hermes host out of the host pickers", async () => {
++    const { result } = renderHook(() => useHosts(), { wrapper });
++    await waitFor(() => expect(result.current.isSuccess).toBe(true));
++
++    expect(result.current.data?.map((h) => h.host_id)).toEqual(["host_laptop"]);
++  });
++
++  it("keeps it for labelling a session that runs there", async () => {
++    const { result } = renderHook(() => useHosts({ includeSandbox: true }), { wrapper });
++    await waitFor(() => expect(result.current.isSuccess).toBe(true));
++
++    expect(result.current.data?.map((h) => h.host_id)).toEqual(["host_hermes", "host_laptop"]);
++  });
++});
+diff --git a/web/src/hooks/useHosts.ts b/web/src/hooks/useHosts.ts
+index 72483a6f9..52cf1280e 100644
+--- a/web/src/hooks/useHosts.ts
++++ b/web/src/hooks/useHosts.ts
+@@ -36,6 +36,11 @@ export interface Host {
+    * or server — and must not gate anything away; only an explicit `false` does.
+    */
+   gateway_inference?: Record<string, boolean> | null;
++  /**
++   * The deployment's always-on host that Hermes sessions start on by
++   * themselves. It runs nothing else, so host pickers leave it out.
++   */
++  hermes_only?: boolean;
+ }
+ 
+ interface HostsResponse {
+@@ -53,7 +58,7 @@ export async function fetchHosts(includeSandbox: boolean): Promise<Host[]> {
+   // field and are kept. `includeSandbox` opts a caller (the chat-header
+   // HostBadge) back into seeing them so it can label sandbox sessions.
+   if (includeSandbox) return body.hosts;
+-  return body.hosts.filter((h) => !h.sandbox_provider);
++  return body.hosts.filter((h) => !h.sandbox_provider && !h.hermes_only);
+ }
+ 
+ interface UseHostsOptions {

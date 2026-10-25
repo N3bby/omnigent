@@ -1,0 +1,332 @@
+Start Hermes sessions on the always-on Hermes host instead of a sandbox each.
+
+A session with the hermes agent only forwards its turns to the user's own
+Hermes over SSH, so a sandbox gives it nothing but a start of several seconds.
+The deployment runs one Omnigent host for these sessions in an always-on Pod,
+and POST /v1/sessions starts a Hermes session that would get a sandbox on that
+host instead, whichever client creates it. omnigent_hermes_host (ours, in
+images/server/) decides: only with OMNIGENT_HERMES_HOST_ID set, only for a
+top-level session whose harness is hermes-remote, and only while the host is
+online and the caller's; otherwise the session gets its sandbox as before. A
+create that names the host for another agent is refused, an automation
+without a pinned host never picks it, and GET /v1/hosts marks it hermes_only
+so the web UI's host pickers leave it out
+(web-patches/0040-hide-hermes-host.patch).
+Base: omnigent v0.18.0 (a8676d23e88d), after 0023-cors-origins.patch.
+diff --git a/omnigent/server/routes/hosts.py b/omnigent/server/routes/hosts.py
+index d48f16a61..6d3972b15 100644
+--- a/omnigent/server/routes/hosts.py
++++ b/omnigent/server/routes/hosts.py
+@@ -23,6 +23,7 @@ import secrets
+ import weakref
+ from typing import Any
+ 
++import omnigent_hermes_host as _hermes_host
+ from fastapi import APIRouter, HTTPException, Query, Request
+ from packaging.version import InvalidVersion, Version
+ from pydantic import BaseModel
+@@ -725,6 +726,9 @@ def create_hosts_router(
+                     # gateway-backed".
+                     "gateway_inference": host_registry.gateway_inference(host.host_id),
+                     "interactive_shells": host_registry.interactive_shells(host.host_id),
++                    # The always-on host Hermes sessions start on by themselves
++                    # (omnigent_hermes_host). Host pickers leave it out.
++                    "hermes_only": _hermes_host.is_hermes_host(host.host_id),
+                 }
+             )
+         return {"hosts": result}
+diff --git a/omnigent/server/routes/sessions/routes_core.py b/omnigent/server/routes/sessions/routes_core.py
+index a3d3044f1..05ca49820 100644
+--- a/omnigent/server/routes/sessions/routes_core.py
++++ b/omnigent/server/routes/sessions/routes_core.py
+@@ -12,6 +12,7 @@ from collections.abc import Callable
+ from typing import Any
+ 
+ import httpx
++import omnigent_hermes_host as _hermes_host
+ from fastapi import (
+     APIRouter,
+     Depends,
+@@ -778,6 +779,16 @@ def register_core_routes(
+             # message survives in each entry's `msg`.
+             raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+ 
++        # A Hermes session starts on the always-on Hermes host, when it's
++        # online, instead of in a sandbox of its own.
++        body = await _hermes_host.place_session(
++            request,
++            body,
++            user_id=user_id,
++            agent_store=agent_store,
++            agent_cache=agent_cache,
++            project_store=project_store,
++        )
+         creation_metadata(parent_session_id=body.parent_session_id, host_type=body.host_type)
+         resp, conv = await _create_session_from_existing_agent(
+             conversation_store,
+diff --git a/omnigent/server/scheduled/fire.py b/omnigent/server/scheduled/fire.py
+index 5370bcd47..c191c904a 100644
+--- a/omnigent/server/scheduled/fire.py
++++ b/omnigent/server/scheduled/fire.py
+@@ -54,6 +54,8 @@ from dataclasses import dataclass, replace
+ from enum import Enum
+ from typing import Any
+ 
++import omnigent_hermes_host as _hermes_host
++
+ from omnigent.db.account_authority import account_authority_scope
+ from omnigent.db.db_models import workspace_scope
+ from omnigent.entities import Conversation, ScheduledTask
+@@ -646,6 +648,9 @@ async def _resolve_owner_host(deps: FireDeps, task: ScheduledTask) -> str:
+             continue
+         if getattr(host, "sandbox_provider", None) is not None:
+             continue
++        # The always-on Hermes host runs Hermes sessions only.
++        if _hermes_host.is_hermes_host(host.host_id):
++            continue
+         if deps.host_registry.get(host.host_id) is not None:
+             return str(host.host_id)
+     raise _CannotLaunchScheduledFire(
+diff --git a/tests/server/integration/test_hermes_host.py b/tests/server/integration/test_hermes_host.py
+new file mode 100644
+index 000000000..5d1174a3e
+--- /dev/null
++++ b/tests/server/integration/test_hermes_host.py
+@@ -0,0 +1,237 @@
++"""Hermes sessions start on the always-on Hermes host instead of a sandbox.
++
++images/server/omnigent_hermes_host.py decides; this checks it through the real
++create route, tunnel and stores, with a fake host on the other end.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import contextlib
++
++import omnigent_hermes_host as hermes_host
++import pytest
++from asgiref.testing import ApplicationCommunicator
++
++from omnigent.host.frames import (
++    HostHelloFrame,
++    HostLaunchRunnerFrame,
++    HostLaunchRunnerResultFrame,
++    HostStatFrame,
++    HostStatResultFrame,
++    decode_host_frame,
++    encode_host_frame,
++)
++from omnigent.runner.identity import token_bound_runner_id
++from tests.server.helpers import (
++    FakeSandboxLauncher,
++    create_test_agent,
++    install_fake_modal_launcher,
++)
++from tests.server.helpers import websocket_scope as _websocket_scope
++from tests.server.integration.test_host_session_binding import (
++    ManagedSessionEnv,
++    managed_session_env,  # noqa: F401 - fixture
++)
++
++pytestmark = pytest.mark.asyncio
++
++_HERMES_HOST_ID = "6d1c8e0a4b2f4e8f9a7b3c5d2e1f0a9b"
++# The tests can't install the hermes-remote harness, so another agent harness
++# stands in for it.
++_HERMES_EXECUTOR = {"type": "omnigent", "config": {"harness": "codex"}}
++_OTHER_EXECUTOR = {"type": "omnigent", "config": {"harness": "openai-agents"}}
++
++
++@pytest.fixture(autouse=True)
++def _hermes_host_configured(monkeypatch: pytest.MonkeyPatch) -> None:
++    monkeypatch.setenv(hermes_host.HOST_ID_ENV_VAR, _HERMES_HOST_ID)
++    monkeypatch.setattr(hermes_host, "HARNESS", "codex")
++
++
++class _FakeHermesHost:
++    """The always-on host: answers stats and runner launches over a real tunnel."""
++
++    def __init__(self, comm: ApplicationCommunicator) -> None:
++        self.comm = comm
++        self.launches: list[HostLaunchRunnerFrame] = []
++        self._task = asyncio.create_task(self._serve())
++
++    async def _serve(self) -> None:
++        while True:
++            output = await self.comm.receive_output(timeout=30.0)
++            if output["type"] != "websocket.send":
++                continue
++            try:
++                frame = decode_host_frame(output["text"])
++            except ValueError:
++                continue
++            reply = None
++            if isinstance(frame, HostStatFrame):
++                reply = HostStatResultFrame(
++                    request_id=frame.request_id,
++                    status="ok",
++                    exists=True,
++                    type="directory",
++                    canonical_path=frame.path,
++                )
++            elif isinstance(frame, HostLaunchRunnerFrame):
++                self.launches.append(frame)
++                reply = HostLaunchRunnerResultFrame(
++                    request_id=frame.request_id,
++                    status="launched",
++                    runner_id=token_bound_runner_id(frame.binding_token),
++                )
++            if reply is not None:
++                await self.comm.send_input(
++                    {"type": "websocket.receive", "text": encode_host_frame(reply)}
++                )
++
++    async def close(self) -> None:
++        self._task.cancel()
++        with contextlib.suppress(asyncio.CancelledError, Exception):
++            await self._task
++
++
++async def _connect_hermes_host(env: ManagedSessionEnv) -> _FakeHermesHost:
++    comm = ApplicationCommunicator(
++        env.app, _websocket_scope(f"/v1/hosts/{_HERMES_HOST_ID}/tunnel")
++    )
++    await comm.send_input({"type": "websocket.connect"})
++    accepted = await comm.receive_output(timeout=5.0)
++    assert accepted["type"] == "websocket.accept", accepted
++    hello = HostHelloFrame(
++        version="0.1.0-test", frame_protocol_version=1, name="Hermes", runners=[]
++    )
++    await comm.send_input({"type": "websocket.receive", "text": encode_host_frame(hello)})
++    registry = env.app.state.host_registry
++    for _ in range(500):
++        if registry.get(_HERMES_HOST_ID) is not None:
++            break
++        await asyncio.sleep(0.01)
++    else:
++        raise AssertionError("the Hermes host never registered")
++    return _FakeHermesHost(comm)
++
++
++async def test_a_hermes_session_starts_on_the_hermes_host(
++    managed_session_env: ManagedSessionEnv,  # noqa: F811
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    env = managed_session_env
++    sandboxes = FakeSandboxLauncher()
++    install_fake_modal_launcher(monkeypatch, sandboxes)
++    host = await _connect_hermes_host(env)
++    try:
++        agent = await create_test_agent(env.client, name="hermes", executor=_HERMES_EXECUTOR)
++        resp = await env.client.post(
++            "/v1/sessions",
++            json={
++                "agent_id": agent["id"],
++                "host_type": "managed",
++                "workspace": "https://github.com/example/repo.git",
++            },
++        )
++        assert resp.status_code == 201, resp.text
++        body = resp.json()
++        assert body["host_id"] == _HERMES_HOST_ID
++        assert body["runner_id"] is not None
++        assert [launch.workspace for launch in host.launches] == [hermes_host.DEFAULT_WORKSPACE]
++        assert [launch.session_id for launch in host.launches] == [body["id"]]
++
++        conv = env.conv_store.get_conversation(body["id"])
++        assert conv is not None
++        assert conv.host_id == _HERMES_HOST_ID
++        assert conv.workspace == hermes_host.DEFAULT_WORKSPACE
++        # No sandbox was asked for.
++        assert sandboxes.provisioned_names == []
++    finally:
++        await host.close()
++
++
++async def test_a_hermes_session_gets_a_sandbox_while_the_host_is_offline(
++    managed_session_env: ManagedSessionEnv,  # noqa: F811
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    env = managed_session_env
++    install_fake_modal_launcher(monkeypatch, FakeSandboxLauncher(fail_on_host_start=True))
++    agent = await create_test_agent(env.client, name="hermes", executor=_HERMES_EXECUTOR)
++    resp = await env.client.post(
++        "/v1/sessions", json={"agent_id": agent["id"], "host_type": "managed"}
++    )
++    assert resp.status_code == 201, resp.text
++    assert resp.json()["host_id"] != _HERMES_HOST_ID
++    assert env.app.state.managed_launches.get(resp.json()["id"]) is not None
++
++
++async def test_other_agents_keep_their_sandbox(
++    managed_session_env: ManagedSessionEnv,  # noqa: F811
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    env = managed_session_env
++    install_fake_modal_launcher(monkeypatch, FakeSandboxLauncher(fail_on_host_start=True))
++    host = await _connect_hermes_host(env)
++    try:
++        agent = await create_test_agent(env.client, name="coder", executor=_OTHER_EXECUTOR)
++        resp = await env.client.post(
++            "/v1/sessions", json={"agent_id": agent["id"], "host_type": "managed"}
++        )
++        assert resp.status_code == 201, resp.text
++        assert resp.json()["host_id"] != _HERMES_HOST_ID
++        assert host.launches == []
++    finally:
++        await host.close()
++
++
++async def test_the_hermes_host_refuses_other_agents(
++    managed_session_env: ManagedSessionEnv,  # noqa: F811
++) -> None:
++    env = managed_session_env
++    host = await _connect_hermes_host(env)
++    try:
++        agent = await create_test_agent(env.client, name="coder", executor=_OTHER_EXECUTOR)
++        resp = await env.client.post(
++            "/v1/sessions",
++            json={"agent_id": agent["id"], "host_id": _HERMES_HOST_ID, "workspace": "/tmp"},
++        )
++        assert resp.status_code == 400, resp.text
++        assert "only runs Hermes sessions" in resp.text
++        assert host.launches == []
++    finally:
++        await host.close()
++
++
++async def test_the_host_list_marks_the_hermes_host(
++    managed_session_env: ManagedSessionEnv,  # noqa: F811
++) -> None:
++    env = managed_session_env
++    host = await _connect_hermes_host(env)
++    try:
++        resp = await env.client.get("/v1/hosts")
++        assert resp.status_code == 200, resp.text
++        hosts = {h["host_id"]: h for h in resp.json()["hosts"]}
++        assert hosts[_HERMES_HOST_ID]["hermes_only"] is True
++    finally:
++        await host.close()
++
++
++async def test_an_unpinned_automation_never_picks_the_hermes_host() -> None:
++    from types import SimpleNamespace
++
++    from omnigent.server.scheduled.fire import _CannotLaunchScheduledFire, _resolve_owner_host
++
++    def deps_with(*host_ids: str) -> SimpleNamespace:
++        hosts = [
++            SimpleNamespace(host_id=host_id, sandbox_provider=None, account_generation=0)
++            for host_id in host_ids
++        ]
++        return SimpleNamespace(
++            host_store=SimpleNamespace(list_hosts=lambda owner: hosts),
++            host_registry=SimpleNamespace(get=lambda host_id: object()),
++        )
++
++    task = SimpleNamespace(user_id=None, account_generation=0)
++    laptop = "0b6f2c1e9d8a4f3b8c7d6e5f4a3b2c1d"
++    assert await _resolve_owner_host(deps_with(_HERMES_HOST_ID, laptop), task) == laptop
++    with pytest.raises(_CannotLaunchScheduledFire):
++        await _resolve_owner_host(deps_with(_HERMES_HOST_ID), task)
