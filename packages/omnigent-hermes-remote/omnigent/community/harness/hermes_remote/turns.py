@@ -7,6 +7,8 @@ client.py, it imports nothing from Omnigent.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
@@ -16,6 +18,10 @@ from .client import HermesError, HermesRunsClient
 
 # How often to check that Hermes still waits for an answer while it's asked.
 APPROVAL_POLL_SECONDS = 3.0
+
+# A text file longer than this is named instead of sent, as it would crowd
+# Hermes's context (about 25,000 tokens).
+MAX_FILE_CHARS = 100_000
 
 
 @dataclass(frozen=True)
@@ -75,9 +81,10 @@ def run_input(content: Any) -> str | list[dict[str, Any]] | None:
     """The ``input`` for a run from an Omnigent user message's content.
 
     Text goes as a string. A message with images goes as one chat message
-    whose parts Hermes's agent understands; other attachments, which Hermes's
-    API doesn't take, are named in the text instead. ``None`` means there is
-    nothing to send.
+    whose parts Hermes's agent understands. Hermes's API refuses files, so a
+    text file's content goes in the text, between lines naming it; any other
+    attachment is named there with why Hermes can't see it. ``None`` means
+    there is nothing to send.
     """
     if isinstance(content, str):
         return content or None
@@ -96,12 +103,45 @@ def run_input(content: Any) -> str | list[dict[str, Any]] | None:
             has_image = True
         elif kind in ("input_file", "input_audio"):
             name = block.get("filename") or kind.removeprefix("input_")
-            parts.append({"type": "text", "text": f"[Attachment not sent to Hermes: {name}]"})
+            parts.append({"type": "text", "text": _attachment_text(name, block.get("file_data"))})
     if not parts:
         return None
     if has_image:
         return [{"role": "user", "content": parts}]
     return "\n".join(part["text"] for part in parts)
+
+
+def _attachment_text(name: str, file_data: Any) -> str:
+    """A file attachment as text for Hermes: its content, or why it isn't there."""
+    text = _decode_text(file_data)
+    if text is None:
+        return (
+            f"[The user attached {name}, but Omnigent can only pass text files and images "
+            "to Hermes, so its content isn't available here.]"
+        )
+    if len(text) > MAX_FILE_CHARS:
+        return (
+            f"[The user attached {name}, but at {len(text):,} characters it's too long "
+            f"to pass to Hermes (the limit is {MAX_FILE_CHARS:,}).]"
+        )
+    return f"--- attached file: {name} ---\n{text}\n--- end of {name} ---"
+
+
+def _decode_text(file_data: Any) -> str | None:
+    """A ``data:`` URI's content when it's UTF-8 text, else None.
+
+    The bytes decide, not the MIME type: a JSON or TOML file often arrives
+    as ``application/octet-stream``.
+    """
+    if not isinstance(file_data, str) or not file_data.startswith("data:") or "," not in file_data:
+        return None
+    meta, payload = file_data.split(",", 1)
+    try:
+        raw = base64.b64decode(payload, validate=True) if meta.endswith(";base64") else payload.encode()
+        text = raw.decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return None
+    return None if "\x00" in text else text
 
 
 def last_user_content(messages: list[dict[str, Any]]) -> Any:

@@ -123,6 +123,10 @@ The **hermes** agent then shows in the new-session picker on every device.
 - **In Hermes's desktop app and `hermes sessions`**, each Omnigent session is
   a session named `omnigent-<session id>`, with the title Hermes gives it.
   Continue it there, and the next Omnigent message picks up from there too.
+- **Attachments:** Hermes sees images, and the content of text files, such
+  as JSON, code or logs, up to 100,000 characters each. Its API takes no
+  other files, so for a PDF or a Word document it's only told the file's
+  name and that it couldn't be passed on.
 - **When Hermes asks to approve a command**, the chat shows an approval card
   with the command and Hermes's own choices: **Allow once**, **Allow for this
   session**, **Always allow** and **Deny**, or only some of them, as Hermes
