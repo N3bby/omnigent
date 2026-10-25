@@ -4,6 +4,7 @@ The harness itself is tested in test_hermes_remote_{client,turns,connection,exec
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import unittest
@@ -16,15 +17,24 @@ from config import ConfigError, load_environment, validate  # noqa: E402
 
 
 def render_ci() -> tuple[str, str]:
-    subprocess.run(
-        [str(ROOT / "scripts" / "render"), "--environment", "ci", "--prepare-only"],
-        check=True, capture_output=True,
-    )
-    generated = ROOT / ".generated" / "ci"
-    return (
-        (generated / "omnigent-config.env").read_text(),
-        (generated / "sandbox-config.yaml").read_text(),
-    )
+    # A copy of ci under its own name: a --prepare-only render of ci itself
+    # would delete the manifest.yaml that CI validates after the tests.
+    name = "ci-hermes-remote"
+    path = ROOT / "environments" / f"{name}.toml"
+    generated = ROOT / ".generated" / name
+    path.write_text((ROOT / "environments" / "ci.toml").read_text())
+    try:
+        subprocess.run(
+            [str(ROOT / "scripts" / "render"), "--environment", name, "--prepare-only"],
+            check=True, capture_output=True,
+        )
+        return (
+            (generated / "omnigent-config.env").read_text(),
+            (generated / "sandbox-config.yaml").read_text(),
+        )
+    finally:
+        path.unlink()
+        shutil.rmtree(generated, ignore_errors=True)
 
 
 class HermesRemoteDeploymentTests(unittest.TestCase):
