@@ -73,6 +73,7 @@ Working with a session from your own computer or phone, outside the web UI.
 | --- | --- | --- |
 | [Sessions on your tailnet](tailscale.md) | SSH into a session, or open its dev servers, from your own devices; in the session, tailnet names resolve and connect from any tool | Optional setup step |
 | [Open in JetBrains Gateway](jetbrains-gateway.md) | Open the session's repository in IntelliJ | Needs Tailscale |
+| [The Even G2 glasses app](even-g2.md) | Your sessions on Even Realities G2 glasses: alerts, replies, diagrams, screenshots and quick replies, with the phone in your pocket | Yes, `cors_allowed_origins` |
 
 ## Look and feel of the web UI
 

@@ -102,6 +102,11 @@ the runner namespace, which limits what a compromised server could do there.
   runner credentials there. It could already hand those to any runner Pod it
   starts, so a compromised server gains little. The page itself never sends a
   variable's value back to the browser, and only admins can change variables.
+- **The API answers other sites (CORS).** For the
+  [glasses app](features/even-g2.md), `cors_allowed_origins = "*"` lets a
+  page on any site read API responses. It never allows credentials, so such
+  a page can't use your browser's cookie; it needs a Bearer token, which
+  takes your password. Empty the setting to turn it off.
 - **Agent logins are shared.** Every runner uses the same Claude token and
   Codex login, so one compromised runner can use them.
 - **MCP servers' keys are shared too.** Every runner Pod mounts all the

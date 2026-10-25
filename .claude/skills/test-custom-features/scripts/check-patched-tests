@@ -8,9 +8,9 @@
 # repository picker's Custom tab, the chat stream's reconnect after a network
 # drop, inline media with the image lightbox and its Copy image menu, the
 # composers without a mic, the Claude permission hook's bearer refresh,
-# agents' progress bars, and a turn Claude starts straight after Stop showing
-# as working, against a fresh, fully patched upstream checkout.
-# Keep logs and JUnit reports.
+# agents' progress bars, a turn Claude starts straight after Stop showing as
+# working, and CORS for the glasses app, against a fresh, fully patched
+# upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -108,6 +108,7 @@ PY
       tests/server/test_agent_progress.py tests/runner/test_session_progress_dispatch.py \
       tests/runner/test_progress_log.py \
       tests/runner/test_claude_native_turn_end_recheck.py tests/runner/test_resource_registry.py \
+      tests/server/test_cors_origins.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \

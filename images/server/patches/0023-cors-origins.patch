@@ -1,0 +1,156 @@
+Send CORS headers to clients on other origins, when configured.
+
+The Even G2 glasses app is a web page in the Even app's WebView on the phone,
+so every API call it makes is cross-origin, and the WebView refuses to read a
+response without CORS headers. Upstream has no CORS middleware.
+
+OMNIGENT_CORS_ALLOWED_ORIGINS takes a comma-separated list of origins, or *.
+When it's unset, nothing changes. The middleware allows the Authorization and
+Content-Type headers but not credentials: such clients sign in with a Bearer
+token, and a page on another origin still can't send a request with the
+user's cookie, so "*" doesn't open cookie-authenticated requests to other
+sites. It's added last, so it's outermost and answers preflights before
+routing.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0022-agent-progress.patch.
+diff --git a/omnigent/server/app.py b/omnigent/server/app.py
+index 642960ebd..a38736186 100644
+--- a/omnigent/server/app.py
++++ b/omnigent/server/app.py
+@@ -4380,6 +4380,28 @@ def create_app(
+         # no per-request cost.
+         app.add_middleware(BasePathMiddleware, base_path=resolved_base_path)
+ 
++    # Clients served from another origin, such as an Even Hub glasses app in a
++    # phone's WebView, need CORS headers to read API responses. They sign in
++    # with a Bearer token, never a cookie, so credentials stay off: a page on
++    # another origin still can't make a cookie-authenticated request. Added
++    # last, so it's the outermost layer and answers preflights before routing.
++    cors_origins = [
++        origin.strip()
++        for origin in os.environ.get("OMNIGENT_CORS_ALLOWED_ORIGINS", "").split(",")
++        if origin.strip()
++    ]
++    if cors_origins:
++        from starlette.middleware.cors import CORSMiddleware
++
++        app.add_middleware(
++            CORSMiddleware,
++            allow_origins=cors_origins,
++            allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
++            allow_headers=["Authorization", "Content-Type", "Accept", "Last-Event-ID"],
++            allow_credentials=False,
++            max_age=600,
++        )
++
+     return app
+ 
+ 
+diff --git a/tests/server/test_cors_origins.py b/tests/server/test_cors_origins.py
+new file mode 100644
+index 000000000..fbdbc8d1b
+--- /dev/null
++++ b/tests/server/test_cors_origins.py
+@@ -0,0 +1,103 @@
++"""CORS for clients on another origin (deployment patch 0021-cors-origins).
++
++Off unless ``OMNIGENT_CORS_ALLOWED_ORIGINS`` is set. With it, a page on a
++listed origin can sign in with a password, read the token, and call the API
++with it as a Bearer token. Credentials stay off, so cookies never cross.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Iterator
++from pathlib import Path
++
++import pytest
++from fastapi.testclient import TestClient
++
++from tests.server.test_accounts import _build_accounts_app
++
++APP_ORIGIN = "https://glasses.example"
++PASSWORD = "admin-pw-12345"
++
++
++def _app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, origins: str | None) -> Iterator[TestClient]:
++    if origins is None:
++        monkeypatch.delenv("OMNIGENT_CORS_ALLOWED_ORIGINS", raising=False)
++    else:
++        monkeypatch.setenv("OMNIGENT_CORS_ALLOWED_ORIGINS", origins)
++    yield from _build_accounts_app(tmp_path, monkeypatch, init_admin_password=PASSWORD)
++
++
++@pytest.fixture
++def any_origin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
++    yield from _app(tmp_path, monkeypatch, "*")
++
++
++@pytest.fixture
++def one_origin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
++    yield from _app(tmp_path, monkeypatch, f"  {APP_ORIGIN} , https://other.example")
++
++
++@pytest.fixture
++def no_cors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
++    yield from _app(tmp_path, monkeypatch, None)
++
++
++def _preflight(client: TestClient, path: str, method: str = "POST"):
++    return client.options(
++        path,
++        headers={
++            "Origin": APP_ORIGIN,
++            "Access-Control-Request-Method": method,
++            "Access-Control-Request-Headers": "authorization,content-type",
++        },
++    )
++
++
++def test_preflight_is_answered_for_any_origin(any_origin: TestClient) -> None:
++    resp = _preflight(any_origin, "/v1/sessions")
++    assert resp.status_code == 200
++    assert resp.headers["access-control-allow-origin"] == "*"
++    allowed = resp.headers["access-control-allow-headers"].lower()
++    assert "authorization" in allowed and "content-type" in allowed
++    assert "access-control-allow-credentials" not in resp.headers
++
++
++def test_password_sign_in_then_bearer_calls(any_origin: TestClient) -> None:
++    login = any_origin.post(
++        "/auth/login",
++        json={"username": "admin", "password": PASSWORD, "issue_refresh": True},
++        headers={"Origin": APP_ORIGIN},
++    )
++    assert login.status_code == 200, login.text
++    assert login.headers["access-control-allow-origin"] == "*"
++    token = login.json()["token"]
++    assert login.json()["refresh_token"]
++
++    any_origin.cookies.clear()
++    sessions = any_origin.get(
++        "/v1/sessions", headers={"Origin": APP_ORIGIN, "Authorization": f"Bearer {token}"}
++    )
++    assert sessions.status_code == 200, sessions.text
++    assert sessions.headers["access-control-allow-origin"] == "*"
++    agents = any_origin.get(
++        "/v1/agents", headers={"Origin": APP_ORIGIN, "Authorization": f"Bearer {token}"}
++    )
++    assert agents.status_code == 200, agents.text
++
++
++def test_listed_origin_is_echoed_and_others_are_not(one_origin: TestClient) -> None:
++    resp = _preflight(one_origin, "/v1/sessions")
++    assert resp.status_code == 200
++    assert resp.headers["access-control-allow-origin"] == APP_ORIGIN
++
++    other = one_origin.options(
++        "/v1/sessions",
++        headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"},
++    )
++    assert "access-control-allow-origin" not in other.headers
++
++
++def test_off_without_the_setting(no_cors: TestClient) -> None:
++    resp = no_cors.get("/health", headers={"Origin": APP_ORIGIN})
++    assert "access-control-allow-origin" not in resp.headers
++    assert _preflight(no_cors, "/v1/sessions").status_code == 405

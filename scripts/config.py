@@ -149,6 +149,15 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     # a key; this is the tailnet's MagicDNS suffix the composer shows.
     if "tailscale_tailnet" in data:
         require_string(data, "tailscale_tailnet", r"(?=.{1,200}$)[a-z0-9-]+(?:\.[a-z0-9-]+)+")
+    # Origins allowed to call the API from a browser on another site, such as
+    # the Even G2 glasses app (images/server/patches/0023-cors-origins.patch).
+    data.setdefault("cors_allowed_origins", "")
+    if data["cors_allowed_origins"] != "":
+        require_string(
+            data, "cors_allowed_origins",
+            r"\*|[a-z][a-z0-9+.-]*://[A-Za-z0-9.-]+(?::[0-9]+)?"
+            r"(?:,[a-z][a-z0-9+.-]*://[A-Za-z0-9.-]+(?::[0-9]+)?)*",
+        )
     data.setdefault("tailscale_tags", "tag:omnigent-runner")
     require_string(data, "tailscale_tags", r"tag:[A-Za-z0-9-]+(?:,tag:[A-Za-z0-9-]+)*")
     # The hermes-remote harness's SSH target (docs/features/hermes-remote.md);

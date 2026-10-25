@@ -246,6 +246,30 @@ class ConfigurationTests(unittest.TestCase):
             values, _ = validate("ci")
         self.assertNotIn("tailscale_tailnet", values)
 
+    def test_cors_origins_reach_the_server(self) -> None:
+        subprocess.run(
+            [str(ROOT / "scripts" / "render"), "--environment", "ci", "--prepare-only"],
+            check=True, capture_output=True,
+        )
+        env = (ROOT / ".generated" / "ci" / "omnigent-config.env").read_text()
+        self.assertIn("OMNIGENT_CORS_ALLOWED_ORIGINS=\n", env)
+        server_patch = (ROOT / "images" / "server" / "patches" / "0023-cors-origins.patch").read_text()
+        self.assertIn('os.environ.get("OMNIGENT_CORS_ALLOWED_ORIGINS", "")', server_patch)
+        self.assertIn("allow_credentials=False", server_patch)
+        production = load_environment("production")
+        self.assertEqual(production["cors_allowed_origins"], "*")
+        base = load_environment("ci")
+        for value in ("*", "https://a.example", "https://a.example,capacitor://localhost:8080"):
+            with self.subTest(value=value):
+                with mock.patch("config.load_environment", return_value=dict(base, cors_allowed_origins=value)):
+                    values, _ = validate("ci")
+                self.assertEqual(values["cors_allowed_origins"], value)
+        for value in ("https://a.example/", "a.example", "*,https://a.example", "https://a b", 1):
+            with self.subTest(value=value):
+                with mock.patch("config.load_environment", return_value=dict(base, cors_allowed_origins=value)):
+                    with self.assertRaises(ConfigError):
+                        validate("ci")
+
     def test_stopping_runners_log_out_of_the_tailnet(self) -> None:
         # Never run the script here: on a Linux machine with Tailscale, the
         # socket it logs out through is the machine's own.
