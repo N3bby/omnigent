@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, progress bars from the agent, a session still showing Working… when Claude goes straight on after a reply or its background agent works on, and your own Hermes as an agent with its approval prompts. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, progress bars from the agent, a session still showing Working… when Claude goes straight on after a reply or its background agent works on, your own Hermes as an agent with its approval prompts, and Omnigent's sessions as MCP tools for your Hermes. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -184,7 +184,7 @@ python -m unittest discover -s tests
 ```
 
 **Expected:** `configuration and manifests for <env> are valid` for both, and
-the unit tests end in `OK` (184 tests, 18 skipped, on 2026-10-18). Warnings that
+the unit tests end in `OK` (300 tests, 29 skipped, on 2026-10-25). Warnings that
 `ansible-playbook` or `shellcheck` isn't installed are fine. The tests cover
 the rendered settings behind several features, such as idle-session timing and
 the per-session home volume. They are the local part of the `Validate`
@@ -922,6 +922,17 @@ after the next message it names `feature-check`. Switch back, then remove
     because the file doesn't exist. In Hermes's desktop app or `hermes
     sessions list`, the session is there as `omnigent-<session id>`; delete
     it there when you're done.
+
+23. **Omnigent as tools for your Hermes:** only once `omnigent-mcp` is set up
+    on the Hermes machine. There, `omnigent-mcp status` prints `Signed in to
+    https://<hostname> as <you>.` Ask Hermes "list my Omnigent projects": it
+    names them, with their repositories. Ask it to "start an Omnigent session
+    titled `feature-check mcp` with no repositories, ask it to reply with only
+    the word pong, and tell me what it said": within a few minutes it answers
+    `pong` with the session's link, and the session is in Omnigent's sidebar,
+    titled `feature-check mcp`. Archive that session in the web UI, then ask
+    Hermes "what did my archived session feature-check mcp say?": it finds it
+    and quotes `pong`.
 
 ## 7. Clean up
 

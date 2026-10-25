@@ -128,6 +128,10 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
     value = data["session_ttl_hours"]
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise ConfigError("session_ttl_hours must be a positive integer")
+    data.setdefault("grant_max_lifetime_days", 30)
+    value = data["grant_max_lifetime_days"]
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ConfigError("grant_max_lifetime_days must be a positive integer")
     for key in ("codex_bypass_approvals", "claude_bypass_permissions", "backups_enabled"):
         if not isinstance(data.get(key), bool):
             raise ConfigError(f"{key} must be true or false")

@@ -113,6 +113,7 @@ def main() -> None:
             "OMNIGENT_ACCOUNTS_AUTO_OPEN=0",
             f"OMNIGENT_ACCOUNTS_BASE_URL=https://{cfg['hostname']}",
             f"OMNIGENT_ACCOUNTS_SESSION_TTL_HOURS={cfg['session_ttl_hours']}",
+            f"OMNIGENT_GRANT_MAX_LIFETIME_DAYS={cfg['grant_max_lifetime_days']}",
             "CODEX_HOME=/opt/codex-home",
             f"OMNIGENT_SUBSCRIPTION_LOGIN_IMAGE={runner_ref}",
             f"OMNIGENT_CODEX_BYPASS_APPROVALS={bypass}",

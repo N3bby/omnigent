@@ -10,6 +10,9 @@ Nothing about Omnigent runs on the Hermes machine. The session's Pod reaches
 Hermes's API server over SSH, through your tailnet, with a key that may do
 nothing else.
 
+To go the other way, and give Hermes your Omnigent sessions as tools, see
+[Omnigent as tools for your Hermes](omnigent-mcp.md).
+
 ## Set it up
 
 ### 1. Turn on Hermes's API server
