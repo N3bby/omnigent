@@ -154,6 +154,21 @@ class ConfigurationTests(unittest.TestCase):
                     with self.assertRaises(ConfigError):
                         validate("ci")
 
+    def test_grant_lifetime_reaches_the_server(self) -> None:
+        values, _ = validate("ci")
+        self.assertEqual(values["grant_max_lifetime_days"], 30)
+        subprocess.run([str(ROOT / "scripts" / "render"), "--environment", "ci"], check=True)
+        env = (ROOT / ".generated" / "ci" / "omnigent-config.env").read_text()
+        self.assertIn("OMNIGENT_GRANT_MAX_LIFETIME_DAYS=30\n", env)
+        production = validate("production", require_digests=False)[0]
+        self.assertEqual(production["grant_max_lifetime_days"], 365)
+        for invalid in (0, -1, True, "365"):
+            with self.subTest(grant_max_lifetime_days=invalid):
+                bad = dict(load_environment("ci"), grant_max_lifetime_days=invalid)
+                with mock.patch("config.load_environment", return_value=bad):
+                    with self.assertRaises(ConfigError):
+                        validate("ci")
+
     def test_acme_challenge_selects_the_issuer_solver(self) -> None:
         values, _ = validate("ci")
         self.assertEqual(values["acme_challenge"], "http-01")

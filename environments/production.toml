@@ -88,6 +88,14 @@ runner_idle_shutdown_seconds = 3600
 # site is only reachable from the tailnet. Defaults to 8.
 session_ttl_hours = 168
 
+# How long a command-line sign-in lasts, in days, counted from signing in:
+# `omnigent login` on your computers, and `omnigent-mcp login` for your Hermes
+# (docs/features/omnigent-mcp.md). They renew their access on their own until
+# then. It applies to sign-ins already made, too. Revoking one, with
+# `omnigent-mcp logout` or by deleting the account, ends it early; a copied
+# token works until then. Defaults to 30.
+grant_max_lifetime_days = 365
+
 # Deliberate policy choices.
 codex_bypass_approvals = true
 claude_bypass_permissions = true
