@@ -6,6 +6,7 @@ imports nothing from Omnigent.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sys
 import unittest
@@ -254,13 +255,30 @@ class RunInputTest(unittest.TestCase):
             ]}],
         )
 
-    def test_other_attachments_are_named_instead(self) -> None:
+    def test_text_files_are_sent_in_the_message(self) -> None:
+        # JSON often arrives without a text MIME type.
+        data = "data:application/octet-stream;base64," + base64.b64encode(b'{"a": 1}').decode()
         content = [{"type": "input_text", "text": "Read this"},
-                   {"type": "input_file", "filename": "notes.pdf"}]
+                   {"type": "input_file", "filename": "client.json", "file_data": data}]
 
         self.assertEqual(
-            turns.run_input(content), "Read this\n[Attachment not sent to Hermes: notes.pdf]"
+            turns.run_input(content),
+            'Read this\n--- attached file: client.json ---\n{"a": 1}\n--- end of client.json ---',
         )
+
+    def test_other_attachments_are_named_with_why(self) -> None:
+        pdf = "data:application/pdf;base64," + base64.b64encode(b"%PDF-1.7\n\xe2\xe3\xcf\xd3").decode()
+        long = "data:text/plain;base64," + base64.b64encode(
+            b"x" * (turns.MAX_FILE_CHARS + 1)).decode()
+        content = [{"type": "input_file", "filename": "notes.pdf", "file_data": pdf},
+                   {"type": "input_file", "filename": "huge.log", "file_data": long},
+                   {"type": "input_file", "filename": "gone.txt"}]
+
+        notes, huge, gone = turns.run_input(content).split("\n")
+
+        self.assertIn("attached notes.pdf, but Omnigent can only pass text files and images", notes)
+        self.assertIn("attached huge.log, but at 100,001 characters it's too long", huge)
+        self.assertIn("attached gone.txt, but", gone)
 
     def test_nothing_to_send(self) -> None:
         self.assertIsNone(turns.run_input(""))

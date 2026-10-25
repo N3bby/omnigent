@@ -20,7 +20,8 @@ On each turn the harness:
 2. Forwards a local Unix socket to the API server, which stays bound to
    `127.0.0.1` there. The tunnel is reused across turns and reopened if it drops.
 3. Starts a run (`POST /v1/runs`) with only the new message: Hermes loads the
-   rest of the conversation from its own history.
+   rest of the conversation from its own history. Images go as image parts,
+   and text files in the message itself, as Hermes's API takes no files.
 4. Streams the run's text and tool calls into the chat. Stop in Omnigent stops
    the run.
 
