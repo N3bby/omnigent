@@ -1,9 +1,9 @@
-"""The always-on host Hermes sessions start on (docs/features/hermes-host.md).
+"""The always-on host for Hermes sessions (docs/features/hermes-host.md).
 
 Tests images/server/omnigent_hermes_host.py on its own, and how the deployment
-renders and signs in the host. The create route and the host list are tested
-against a patched upstream checkout (tests/server/integration/test_hermes_host.py
-in 0024-hermes-host.patch).
+renders and signs in the host. The create route and the automations' host pick
+are tested against a patched upstream checkout
+(tests/server/integration/test_hermes_host.py in 0024-hermes-host.patch).
 """
 from __future__ import annotations
 
@@ -24,21 +24,6 @@ from config import ConfigError, load_environment, validate  # noqa: E402
 
 HOST_ID = "6d1c8e0a4b2f4e8f9a7b3c5d2e1f0a9b"
 ENV = {hermes_host.HOST_ID_ENV_VAR: HOST_ID}
-
-
-class Request:
-    """Stands in for upstream's pydantic create request."""
-
-    def __init__(self, **fields: Any) -> None:
-        self.fields = fields
-
-    def model_dump(self, *, exclude_unset: bool) -> dict[str, Any]:
-        assert exclude_unset
-        return dict(self.fields)
-
-    @classmethod
-    def model_validate(cls, data: dict[str, Any]) -> Request:
-        return cls(**data)
 
 
 def render_module() -> Any:
@@ -85,26 +70,9 @@ class ModuleTests(unittest.TestCase):
             with self.subTest(env=env):
                 self.assertIsNone(hermes_host.host_id(env))
                 self.assertFalse(hermes_host.is_hermes_host(HOST_ID, env))
-                self.assertFalse(
-                    hermes_host.should_place(
-                        harness=hermes_host.HARNESS, host_type="managed",
-                        parent_session_id=None, environ=env,
-                    )
+                self.assertIsNone(
+                    hermes_host.refusal(requested_host_id=HOST_ID, harness="codex", environ=env)
                 )
-
-    def test_only_top_level_hermes_sessions_that_would_get_a_sandbox_move(self) -> None:
-        def place(**changes: Any) -> bool:
-            args = {
-                "harness": hermes_host.HARNESS, "host_type": "managed",
-                "parent_session_id": None, "environ": ENV, **changes,
-            }
-            return hermes_host.should_place(**args)
-
-        self.assertTrue(place())
-        self.assertFalse(place(harness="claude-native"))
-        self.assertFalse(place(harness=None))
-        self.assertFalse(place(host_type="external"))
-        self.assertFalse(place(parent_session_id="conv_parent"))
 
     def test_the_host_refuses_other_agents(self) -> None:
         self.assertIn(
@@ -118,27 +86,6 @@ class ModuleTests(unittest.TestCase):
         self.assertIsNone(
             hermes_host.refusal(requested_host_id="0" * 32, harness="codex-native", environ=ENV)
         )
-
-    def test_a_rerouted_create_starts_on_the_host_without_repositories(self) -> None:
-        body = Request(
-            agent_id="agent", host_type="managed", sandbox_provider="agent_sandbox",
-            workspaces=["https://github.com/example/a.git", "https://github.com/example/b.git"],
-            project_id="proj",
-        )
-        moved = hermes_host.rerouted(body, target_host_id=HOST_ID, target_workspace="/w")
-        self.assertEqual(
-            moved.fields,
-            {
-                "agent_id": "agent", "project_id": "proj", "host_type": "external",
-                "host_id": HOST_ID, "workspace": "/w", "git": None,
-            },
-        )
-
-    def test_the_workspace_defaults_to_the_one_the_pod_makes(self) -> None:
-        self.assertEqual(hermes_host.workspace({}), "/home/omnigent/hermes")
-        script = (ROOT / "images" / "runner" / "hermes-host.sh").read_text()
-        self.assertIn("${OMNIGENT_HERMES_HOST_WORKSPACE:-/home/omnigent/hermes}", script)
-
 
 class DeploymentTests(unittest.TestCase):
     def test_the_server_and_the_pod_share_a_fixed_host_id(self) -> None:

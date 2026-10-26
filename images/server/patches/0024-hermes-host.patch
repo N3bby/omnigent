@@ -1,42 +1,18 @@
-Start Hermes sessions on the always-on Hermes host instead of a sandbox each.
+Keep the always-on Hermes host to Hermes sessions.
 
 A session with the hermes agent only forwards its turns to the user's own
 Hermes over SSH, so a sandbox gives it nothing but a start of several seconds.
 The deployment runs one Omnigent host for these sessions in an always-on Pod,
-and POST /v1/sessions starts a Hermes session that would get a sandbox on that
-host instead, whichever client creates it. omnigent_hermes_host (ours, in
-images/server/) decides: only with OMNIGENT_HERMES_HOST_ID set, only for a
-top-level session whose harness is hermes-remote, and only while the host is
-online and the caller's; otherwise the session gets its sandbox as before. A
-create that names the host for another agent is refused, an automation
-without a pinned host never picks it, and GET /v1/hosts marks it hermes_only
-so the web UI's host pickers leave it out
-(web-patches/0040-hide-hermes-host.patch).
+which the user picks like any connected host, such as a project's default
+host. That host is signed in as its owner, and an agent with a shell there
+could read the sign-in, so it must run nothing but the hermes-remote harness.
+omnigent_hermes_host (ours, in images/server/) takes its id from
+OMNIGENT_HERMES_HOST_ID: POST /v1/sessions refuses a create that names the
+host for another agent, and an automation without a pinned host never picks
+it.
 Base: omnigent v0.18.0 (a8676d23e88d), after 0023-cors-origins.patch.
-diff --git a/omnigent/server/routes/hosts.py b/omnigent/server/routes/hosts.py
-index d48f16a61..6d3972b15 100644
---- a/omnigent/server/routes/hosts.py
-+++ b/omnigent/server/routes/hosts.py
-@@ -23,6 +23,7 @@ import secrets
- import weakref
- from typing import Any
- 
-+import omnigent_hermes_host as _hermes_host
- from fastapi import APIRouter, HTTPException, Query, Request
- from packaging.version import InvalidVersion, Version
- from pydantic import BaseModel
-@@ -725,6 +726,9 @@ def create_hosts_router(
-                     # gateway-backed".
-                     "gateway_inference": host_registry.gateway_inference(host.host_id),
-                     "interactive_shells": host_registry.interactive_shells(host.host_id),
-+                    # The always-on host Hermes sessions start on by themselves
-+                    # (omnigent_hermes_host). Host pickers leave it out.
-+                    "hermes_only": _hermes_host.is_hermes_host(host.host_id),
-                 }
-             )
-         return {"hosts": result}
 diff --git a/omnigent/server/routes/sessions/routes_core.py b/omnigent/server/routes/sessions/routes_core.py
-index a3d3044f1..05ca49820 100644
+index a3d3044f1..7852a9387 100644
 --- a/omnigent/server/routes/sessions/routes_core.py
 +++ b/omnigent/server/routes/sessions/routes_core.py
 @@ -12,6 +12,7 @@ from collections.abc import Callable
@@ -47,14 +23,13 @@ index a3d3044f1..05ca49820 100644
  from fastapi import (
      APIRouter,
      Depends,
-@@ -778,6 +779,16 @@ def register_core_routes(
+@@ -778,6 +779,15 @@ def register_core_routes(
              # message survives in each entry's `msg`.
              raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
  
-+        # A Hermes session starts on the always-on Hermes host, when it's
-+        # online, instead of in a sandbox of its own.
-+        body = await _hermes_host.place_session(
-+            request,
++        # The always-on Hermes host is signed in as its owner: only Hermes
++        # sessions may start there.
++        await _hermes_host.check_create(
 +            body,
 +            user_id=user_id,
 +            agent_store=agent_store,
@@ -89,11 +64,11 @@ index 5370bcd47..c191c904a 100644
      raise _CannotLaunchScheduledFire(
 diff --git a/tests/server/integration/test_hermes_host.py b/tests/server/integration/test_hermes_host.py
 new file mode 100644
-index 000000000..5d1174a3e
+index 000000000..428b233cb
 --- /dev/null
 +++ b/tests/server/integration/test_hermes_host.py
-@@ -0,0 +1,237 @@
-+"""Hermes sessions start on the always-on Hermes host instead of a sandbox.
+@@ -0,0 +1,172 @@
++"""The always-on Hermes host runs Hermes sessions only.
 +
 +images/server/omnigent_hermes_host.py decides; this checks it through the real
 +create route, tunnel and stores, with a fake host on the other end.
@@ -119,9 +94,7 @@ index 000000000..5d1174a3e
 +)
 +from omnigent.runner.identity import token_bound_runner_id
 +from tests.server.helpers import (
-+    FakeSandboxLauncher,
 +    create_test_agent,
-+    install_fake_modal_launcher,
 +)
 +from tests.server.helpers import websocket_scope as _websocket_scope
 +from tests.server.integration.test_host_session_binding import (
@@ -209,71 +182,22 @@ index 000000000..5d1174a3e
 +    return _FakeHermesHost(comm)
 +
 +
-+async def test_a_hermes_session_starts_on_the_hermes_host(
++async def test_a_hermes_session_starts_on_the_hermes_host_when_picked(
 +    managed_session_env: ManagedSessionEnv,  # noqa: F811
-+    monkeypatch: pytest.MonkeyPatch,
 +) -> None:
 +    env = managed_session_env
-+    sandboxes = FakeSandboxLauncher()
-+    install_fake_modal_launcher(monkeypatch, sandboxes)
 +    host = await _connect_hermes_host(env)
 +    try:
 +        agent = await create_test_agent(env.client, name="hermes", executor=_HERMES_EXECUTOR)
 +        resp = await env.client.post(
 +            "/v1/sessions",
-+            json={
-+                "agent_id": agent["id"],
-+                "host_type": "managed",
-+                "workspace": "https://github.com/example/repo.git",
-+            },
++            json={"agent_id": agent["id"], "host_id": _HERMES_HOST_ID, "workspace": "/tmp"},
 +        )
 +        assert resp.status_code == 201, resp.text
 +        body = resp.json()
 +        assert body["host_id"] == _HERMES_HOST_ID
 +        assert body["runner_id"] is not None
-+        assert [launch.workspace for launch in host.launches] == [hermes_host.DEFAULT_WORKSPACE]
 +        assert [launch.session_id for launch in host.launches] == [body["id"]]
-+
-+        conv = env.conv_store.get_conversation(body["id"])
-+        assert conv is not None
-+        assert conv.host_id == _HERMES_HOST_ID
-+        assert conv.workspace == hermes_host.DEFAULT_WORKSPACE
-+        # No sandbox was asked for.
-+        assert sandboxes.provisioned_names == []
-+    finally:
-+        await host.close()
-+
-+
-+async def test_a_hermes_session_gets_a_sandbox_while_the_host_is_offline(
-+    managed_session_env: ManagedSessionEnv,  # noqa: F811
-+    monkeypatch: pytest.MonkeyPatch,
-+) -> None:
-+    env = managed_session_env
-+    install_fake_modal_launcher(monkeypatch, FakeSandboxLauncher(fail_on_host_start=True))
-+    agent = await create_test_agent(env.client, name="hermes", executor=_HERMES_EXECUTOR)
-+    resp = await env.client.post(
-+        "/v1/sessions", json={"agent_id": agent["id"], "host_type": "managed"}
-+    )
-+    assert resp.status_code == 201, resp.text
-+    assert resp.json()["host_id"] != _HERMES_HOST_ID
-+    assert env.app.state.managed_launches.get(resp.json()["id"]) is not None
-+
-+
-+async def test_other_agents_keep_their_sandbox(
-+    managed_session_env: ManagedSessionEnv,  # noqa: F811
-+    monkeypatch: pytest.MonkeyPatch,
-+) -> None:
-+    env = managed_session_env
-+    install_fake_modal_launcher(monkeypatch, FakeSandboxLauncher(fail_on_host_start=True))
-+    host = await _connect_hermes_host(env)
-+    try:
-+        agent = await create_test_agent(env.client, name="coder", executor=_OTHER_EXECUTOR)
-+        resp = await env.client.post(
-+            "/v1/sessions", json={"agent_id": agent["id"], "host_type": "managed"}
-+        )
-+        assert resp.status_code == 201, resp.text
-+        assert resp.json()["host_id"] != _HERMES_HOST_ID
-+        assert host.launches == []
 +    finally:
 +        await host.close()
 +
@@ -292,20 +216,6 @@ index 000000000..5d1174a3e
 +        assert resp.status_code == 400, resp.text
 +        assert "only runs Hermes sessions" in resp.text
 +        assert host.launches == []
-+    finally:
-+        await host.close()
-+
-+
-+async def test_the_host_list_marks_the_hermes_host(
-+    managed_session_env: ManagedSessionEnv,  # noqa: F811
-+) -> None:
-+    env = managed_session_env
-+    host = await _connect_hermes_host(env)
-+    try:
-+        resp = await env.client.get("/v1/hosts")
-+        assert resp.status_code == 200, resp.text
-+        hosts = {h["host_id"]: h for h in resp.json()["hosts"]}
-+        assert hosts[_HERMES_HOST_ID]["hermes_only"] is True
 +    finally:
 +        await host.close()
 +

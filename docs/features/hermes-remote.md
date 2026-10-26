@@ -6,9 +6,8 @@ instead of starting an agent in the session's Pod. It's the same Hermes as in
 its desktop app, terminal and chat platforms: each Omnigent session is a
 session in that Hermes's history, with its memory, skills and model login.
 
-Nothing about Omnigent runs on the Hermes machine. Hermes sessions run on
-an always-on host in the cluster instead of a sandbox each
-([Hermes answers without starting a sandbox](hermes-host.md)), which reaches
+Nothing about Omnigent runs on the Hermes machine. The session's sandbox,
+or the always-on [Hermes host](hermes-host.md) if you pick it, reaches
 Hermes's API server over SSH, through your tailnet, with a key that may do
 nothing else.
 
@@ -126,9 +125,10 @@ The **hermes** agent then shows in the new-session picker on every device.
 mise run setup-hermes-host
 ```
 
-Hermes sessions then start on the always-on Hermes host instead of a
-sandbox each. Until you do, they still work, each in a sandbox of its own.
-See [Hermes answers without starting a sandbox](hermes-host.md).
+Then pick the **Hermes** host for Hermes sessions, such as as the host of a
+Hermes project, and they start without waiting for a sandbox. See
+[a host for Hermes sessions](hermes-host.md). It's optional: with the sandbox
+picked, a Hermes session gets a sandbox of its own.
 
 ## What you'll see
 

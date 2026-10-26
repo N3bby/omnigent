@@ -1,21 +1,17 @@
 #!/bin/sh
-# Runs the always-on Omnigent host that Hermes sessions start on, in the
+# Runs the always-on Omnigent host for Hermes sessions, in the
 # omnigent-hermes-host Deployment (docs/features/hermes-host.md). Started
 # through a root login shell, like runner Pods, so the Pod joins the tailnet
 # that leads to the Hermes machine.
 #
 # The host signs in as you with the refresh token `mise run setup-hermes-host`
-# stores. Without it, it waits instead of connecting, and Hermes sessions get
-# a sandbox each, as before.
+# stores. Without it, it waits instead of connecting.
 set -eu
 
 server=${OMNIGENT_SERVER_URL:?OMNIGENT_SERVER_URL is not set}
-workspace=${OMNIGENT_HERMES_HOST_WORKSPACE:-/home/omnigent/hermes}
-mkdir -p "$workspace"
 
 if [ -z "${OMNIGENT_REFRESH_TOKEN:-}" ]; then
     echo "omnigent-hermes-host: not signed in; run \`mise run setup-hermes-host\`." >&2
-    echo "omnigent-hermes-host: Hermes sessions get a sandbox each until then." >&2
     exec sleep infinity
 fi
 
