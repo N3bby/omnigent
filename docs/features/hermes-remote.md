@@ -183,8 +183,7 @@ it allows, so the render names them in `OMNIGENT_RUNNER_ENV_PASSTHROUGH`.
 
 ## Turn it off
 
-Remove the three `hermes_remote_*` settings, run `mise run bootstrap` and
-deploy, and remove the agent with `omnigent agent remove hermes`. The deploy
+Remove the three `hermes_remote_*` settings and deploy, and remove the agent with `omnigent agent remove hermes`. The deploy
 also removes the [Hermes host](hermes-host.md#turn-it-off); delete its
 sign-in as that page says. Remove the key's line from
 `authorized_keys` on the Hermes machine, and the key from the Secret with

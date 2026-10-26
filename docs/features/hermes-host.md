@@ -36,9 +36,8 @@ to one user. Everyone else's Hermes sessions still get sandboxes.
 ## Set it up
 
 It's on wherever [Hermes is set up](hermes-remote.md#set-it-up)
-(`hermes_remote_ssh_host` in `environments/<name>.toml`). Its first deploy
-needs `mise run bootstrap` first, because it makes room for the host in the
-runner quota. Then sign the host in as you, once:
+(`hermes_remote_ssh_host` in `environments/<name>.toml`), from the next
+deploy. Then sign the host in as you, once:
 
 ```bash
 mise run setup-hermes-host
@@ -56,9 +55,8 @@ is, the Pod waits, and Hermes sessions get sandboxes.
 
 ## Turn it off
 
-Set `hermes_host = false` in `environments/<name>.toml`, run
-`mise run bootstrap`, and deploy, which removes the Pod. Then remove its
-sign-in:
+Set `hermes_host = false` in `environments/<name>.toml` and deploy, which
+removes the Pod. Then remove its sign-in:
 
 ```bash
 ./scripts/kube delete secret omnigent-hermes-host -n omnigent-sandboxes
@@ -71,7 +69,8 @@ get sandboxes.
 
 The Pod runs the runner image, so it's set up like a runner Pod: root in its
 own user namespace, and on your tailnet, through which it reaches the Hermes
-machine. Its start script (`images/runner/hermes-host.sh`) writes the
+machine. It counts toward the runners' quota, within the room that keeps
+spare beyond `runner_max_concurrency` runners. Its start script (`images/runner/hermes-host.sh`) writes the
 sign-in where `omnigent login` would, then runs `omnigent host`. The host
 renews its access with the token when it connects, and whenever the access
 runs out. The render gives the host a fixed id, the same in the Pod and in

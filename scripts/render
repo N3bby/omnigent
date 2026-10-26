@@ -41,10 +41,11 @@ def as_mi(value: int) -> str:
 
 
 # The always-on host Hermes sessions start on (docs/features/hermes-host.md).
-# Requests and limits as one map, so the runner quota can make room for them.
+# It shares the runner quota, within the room that keeps spare beyond the
+# runners themselves (the + terms below).
 HERMES_HOST_RESOURCES = {
-    "requests": {"cpu": "100m", "memory": "512Mi", "ephemeral-storage": "256Mi"},
-    "limits": {"cpu": "2", "memory": "4Gi", "ephemeral-storage": "2Gi"},
+    "requests": {"cpu": "100m", "memory": "256Mi", "ephemeral-storage": "256Mi"},
+    "limits": {"cpu": "2", "memory": "2Gi", "ephemeral-storage": "1Gi"},
 }
 
 
@@ -173,36 +174,13 @@ def main() -> None:
         if dirty.stdout.strip():
             deployment_revision += "-dirty"
     concurrency = int(cfg["runner_max_concurrency"])
-    # The Hermes host runs beside the runners, in their namespace and quota.
-    def hermes_room(kind: str, name: str) -> int:
-        if not cfg["hermes_host"]:
-            return 0
-        value = HERMES_HOST_RESOURCES[kind][name]
-        return cpu_milli(value) if name == "cpu" else binary_mi(value)
-
     quota = {
-        "request_cpu": as_cpu(
-            cpu_milli(cfg["runner_cpu_request"]) * concurrency + 500 + hermes_room("requests", "cpu")
-        ),
-        "request_memory": as_mi(
-            binary_mi(cfg["runner_memory_request"]) * concurrency + 512
-            + hermes_room("requests", "memory")
-        ),
-        "request_storage": as_mi(
-            binary_mi(cfg["runner_ephemeral_request"]) * concurrency + 1024
-            + hermes_room("requests", "ephemeral-storage")
-        ),
-        "limit_cpu": as_cpu(
-            cpu_milli(cfg["runner_cpu_limit"]) * concurrency + 3000 + hermes_room("limits", "cpu")
-        ),
-        "limit_memory": as_mi(
-            binary_mi(cfg["runner_memory_limit"]) * concurrency + 3072
-            + hermes_room("limits", "memory")
-        ),
-        "limit_storage": as_mi(
-            binary_mi(cfg["runner_ephemeral_limit"]) * concurrency + 1024
-            + hermes_room("limits", "ephemeral-storage")
-        ),
+        "request_cpu": as_cpu(cpu_milli(cfg["runner_cpu_request"]) * concurrency + 500),
+        "request_memory": as_mi(binary_mi(cfg["runner_memory_request"]) * concurrency + 512),
+        "request_storage": as_mi(binary_mi(cfg["runner_ephemeral_request"]) * concurrency + 1024),
+        "limit_cpu": as_cpu(cpu_milli(cfg["runner_cpu_limit"]) * concurrency + 3000),
+        "limit_memory": as_mi(binary_mi(cfg["runner_memory_limit"]) * concurrency + 3072),
+        "limit_storage": as_mi(binary_mi(cfg["runner_ephemeral_limit"]) * concurrency + 1024),
     }
 
     # The hermes-remote harness reads its SSH target from these, in runner Pods
