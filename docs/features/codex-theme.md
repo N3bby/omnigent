@@ -30,7 +30,8 @@ It changes more than the colours:
 - **A rounder composer** with a soft shadow and a round send button. The
   working directory, branch and Tailscale name move underneath it and stay
   there when messages are queued. Queued messages and the sub-agent tray
-  still sit above the composer.
+  still sit above the composer. On a phone, the composer lines up with the
+  messages on both sides and sits closer to the bottom of the screen.
 - **A terminal mark** above "What should we build?" instead of the starfish.
 - **Rounder menus and dialogs** with a hairline edge.
 

@@ -11,17 +11,18 @@ followed by a hairline across the reply, flat code blocks without line
 numbers, a rounder composer with a round send button and the workspace bar
 beneath it, also
 when messages are queued above it, its labels on one baseline whatever the
-fonts and browser, a terminal mark instead of the mascot on the
+fonts and browser, and on a phone in line with the messages and closer to
+the bottom edge, a terminal mark instead of the mascot on the
 new-session screen, and rounder menus. The other palettes are unchanged.
 Applies after 0010-fast-mode-command-lifecycle.patch.
 Base: omnigent v0.18.0 (a8676d23e88d).
 
 diff --git a/web/src/codexTheme.css b/web/src/codexTheme.css
 new file mode 100644
-index 0000000..903613c
+index 0000000..a753dc8
 --- /dev/null
 +++ b/web/src/codexTheme.css
-@@ -0,0 +1,391 @@
+@@ -0,0 +1,411 @@
 +/* Codex palette: the layout and type changes that go beyond colour.
 + *
 + * themePalette.ts sets the colour tokens for `data-theme="codex"`; this file
@@ -280,6 +281,26 @@ index 0000000..903613c
 +[data-theme="codex"] .chat-composer-form {
 +  display: flex;
 +  flex-direction: column;
++}
++
++/* On a phone, line the card up with the messages' 16px gutter, and bring
++ * the workspace bar a little closer to the bottom edge. Its labels still
++ * clear the home indicator. `:root` outranks the native apps' padding
++ * rule. A new session's card gets the same width, so it doesn't change size
++ * once the first message is sent. */
++@media (width < 48rem) {
++  :root[data-theme="codex"] .chat-composer-form {
++    padding-inline: 1rem;
++    padding-bottom: max(0.875rem, var(--omnigent-safe-bottom));
++  }
++
++  [data-theme="codex"] [data-testid="new-chat-landing"] > div {
++    padding-bottom: max(0.875rem, var(--omnigent-safe-bottom));
++  }
++
++  [data-theme="codex"] [data-testid="new-chat-landing-composer-surface"] {
++    width: 100%;
++  }
 +}
 +
 +[data-theme="codex"]

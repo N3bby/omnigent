@@ -731,7 +731,9 @@ Hand these to the user; they need their own devices or VM access:
     characters wide (ask for `print(1)`) they don't cover the language label.
     Queue a message while
     the agent works: it shows above the composer and the bar stays under it.
-    Switch between light and dark mode, then pick **Omnigent** again: the
+    On a phone, the composer's edges line up with the messages' on both
+    sides, in a session and on the new-session screen, and the bar sits
+    close to the bottom edge, clear of the home indicator. Switch between light and dark mode, then pick **Omnigent** again: the
     pink look is back.
 11. **A repository's own Git token:** it needs a real token, so it's left to
     you. For a repository the GitHub App isn't installed on, add it in
