@@ -88,7 +88,7 @@ index 0374a73..6391187 100644
    it("starts a stopped sandbox without a message", async () => {
      renderMenu({ state: "stopped" });
 diff --git a/web/src/components/composer/EnvironmentMenu.tsx b/web/src/components/composer/EnvironmentMenu.tsx
-index 8b9ddad..81f9776 100644
+index e09d7a1..142b504 100644
 --- a/web/src/components/composer/EnvironmentMenu.tsx
 +++ b/web/src/components/composer/EnvironmentMenu.tsx
 @@ -404,6 +404,63 @@ function PodRow({ view, now }: { view: EnvironmentView; now: number }) {

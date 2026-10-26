@@ -1157,10 +1157,10 @@ index 0000000..0374a73
 +});
 diff --git a/web/src/components/composer/EnvironmentMenu.tsx b/web/src/components/composer/EnvironmentMenu.tsx
 new file mode 100644
-index 0000000..8b9ddad
+index 0000000..e09d7a1
 --- /dev/null
 +++ b/web/src/components/composer/EnvironmentMenu.tsx
-@@ -0,0 +1,966 @@
+@@ -0,0 +1,969 @@
 +import { Fragment, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 +import {
 +  CheckIcon,
@@ -1714,7 +1714,10 @@ index 0000000..8b9ddad
 +      data-testid="environment-keep-running"
 +    >
 +      <CoffeeIcon className="size-4" />
-+      <span data-cap>Keep running</span>
++      {/* Grows so the hint sits by the chevron, whose own ml-auto would split the space. */}
++      <span data-cap className="flex-1">
++        Keep running
++      </span>
 +      {kept !== null && <Hint>until {kept === "forever" ? "you stop it" : formatClock(kept)}</Hint>}
 +    </DropdownMenuSubTrigger>
 +  );
