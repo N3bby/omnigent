@@ -19,7 +19,8 @@ above **Working…**, as one line:
 - **The percentage**, and a thin line along the bar's bottom edge that fills
   to it, when the agent can tell how far along it is. Without one, the line
   sweeps back and forth: the agent is busy, such as with a test suite, but
-  can't say how far it's got.
+  can't say how far it's got. At 100%, the spinner in front of the label
+  turns into a ✓.
 - **Log**, when the agent named a log file. It opens the file's lines as they
   come in.
 
@@ -122,7 +123,9 @@ There's nothing to turn off: an agent shows a bar only for long work.
   you.
 - **The bar:** `images/server/web-patches/0039-agent-progress.patch` keeps
   the bars in the chat store, shows the newest above **Working…** while its
-  turn runs (a message you've sent but the server hasn't confirmed yet
-  already starts a new turn), places each finished one at the end of the reply of the turn it
+  turn runs and the server hasn't ended it (a message you've sent but the
+  server hasn't confirmed yet already starts a new turn, and **Working…**
+  staying lit for a background task, such as a sub-agent, doesn't keep the
+  ended turn's bar live), places each finished one at the end of the reply of the turn it
   was set in, polls an open log every 1.5 seconds, and titles the tool's
   calls in the chat by the bar's label.

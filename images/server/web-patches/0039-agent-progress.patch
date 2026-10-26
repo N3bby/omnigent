@@ -7,9 +7,11 @@ log file. The session snapshot's `progress` field and session.progress events
 carry the session's bars into the chat store as agentProgress.
 
 The newest bar shows above Working… while the agent works on the turn that
-set it (lib/agentProgress.ts liveProgress), as one compact row: the label,
-with a trailing count kept in view, the percentage, a thin line along the
-bottom that fills to it or sweeps without one, and Log. A message from the
+set it and the server hasn't ended it (lib/agentProgress.ts liveProgress):
+Working… also stays lit for a background task after the turn, and the
+turn's bar is finished by then. It's one compact row: a spinner, or a ✓ at
+100%, the label, with a trailing count kept in view, the percentage, a thin
+line along the bottom that fills to it or sweeps without one, and Log. A message from the
 user starts a turn without one, already while it's on its way to the server:
 otherwise the last turn's finished bar flashed above Working… right after
 sending. Every other bar is finished, and AssistantBubble shows it as one
@@ -22,10 +24,10 @@ the turn, e.g. from a dev server. The tool's calls are titled
 
 diff --git a/web/src/components/chat/AgentProgressCard.test.tsx b/web/src/components/chat/AgentProgressCard.test.tsx
 new file mode 100644
-index 0000000..6196a74
+index 0000000..0de4a26
 --- /dev/null
 +++ b/web/src/components/chat/AgentProgressCard.test.tsx
-@@ -0,0 +1,147 @@
+@@ -0,0 +1,158 @@
 +import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 +import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 +
@@ -88,6 +90,17 @@ index 0000000..6196a74
 +    });
 +    expect(progressbar.getAttribute("aria-valuenow")).toBe("30");
 +    expect(screen.queryByRole("button", { name: /log/i })).toBeNull();
++  });
++
++  it("stops spinning at 100%", () => {
++    const { container, rerender } = render(
++      <AgentProgressCard progress={bar()} sessionId="conv_1" />,
++    );
++    expect(container.querySelector(".animate-spin")).not.toBeNull();
++
++    rerender(<AgentProgressCard progress={bar({ percent: 100 })} sessionId="conv_1" />);
++    expect(container.querySelector(".animate-spin")).toBeNull();
++    expect(screen.getByText("100%")).toBeTruthy();
 +  });
 +
 +  it("without a percentage only shows the agent is busy", () => {
@@ -175,10 +188,10 @@ index 0000000..6196a74
 +});
 diff --git a/web/src/components/chat/AgentProgressCard.tsx b/web/src/components/chat/AgentProgressCard.tsx
 new file mode 100644
-index 0000000..7e3dca0
+index 0000000..dd1c791
 --- /dev/null
 +++ b/web/src/components/chat/AgentProgressCard.tsx
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,291 @@
 +import { CheckIcon, ChevronRightIcon, CircleXIcon, Loader2Icon } from "lucide-react";
 +import { useEffect, useLayoutEffect, useRef, useState } from "react";
 +
@@ -332,7 +345,14 @@ index 0000000..7e3dca0
 +      )}
 +    >
 +      <div className="relative flex items-center gap-2 px-2.5 py-1.5">
-+        <Loader2Icon aria-hidden className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
++        {progress.percent === 100 ? (
++          <CheckIcon aria-hidden className="size-3.5 shrink-0 text-success" />
++        ) : (
++          <Loader2Icon
++            aria-hidden
++            className="size-3.5 shrink-0 animate-spin text-muted-foreground"
++          />
++        )}
 +        <Label label={progress.label} className="flex-1 text-xs font-medium" />
 +        {percent !== null && (
 +          <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
@@ -648,10 +668,10 @@ index 22f0c5f..79de6ed 100644
            <div
 diff --git a/web/src/lib/agentProgress.test.ts b/web/src/lib/agentProgress.test.ts
 new file mode 100644
-index 0000000..7376998
+index 0000000..f59d6d3
 --- /dev/null
 +++ b/web/src/lib/agentProgress.test.ts
-@@ -0,0 +1,186 @@
+@@ -0,0 +1,197 @@
 +import { afterEach, describe, expect, it } from "vitest";
 +
 +import { parseEvent } from "@/lib/sse";
@@ -772,6 +792,17 @@ index 0000000..7376998
 +    expect(liveProgress([bar("same", 300.4)], ROWS, true)?.id).toBe("same");
 +  });
 +
++  it("shows an ended bar finished while Working… stays lit for a background task", () => {
++    // The turn ended, but a background task keeps Working… lit.
++    const bars = [bar("second", 305, { percent: 100, endedAt: 330, outcome: "done" })];
++    expect(liveProgress(bars, ROWS, true)).toBeNull();
++    expect(
++      placeFinishedProgress(bars, ROWS, null)
++        .get("assistant:r2b")
++        ?.map((b) => b.id),
++    ).toEqual(["second"]);
++  });
++
 +  it("shows no bar live while a message from the user is on its way", () => {
 +    // The last turn's bar finished; the UI shows Working… as soon as the user
 +    // sends, before the server has taken the message.
@@ -840,10 +871,10 @@ index 0000000..7376998
 +});
 diff --git a/web/src/lib/agentProgress.ts b/web/src/lib/agentProgress.ts
 new file mode 100644
-index 0000000..5805e67
+index 0000000..04b7b51
 --- /dev/null
 +++ b/web/src/lib/agentProgress.ts
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,201 @@
 +/**
 + * The progress bars an agent shows in the chat, and the logs under them.
 + *
@@ -964,9 +995,11 @@ index 0000000..5805e67
 +
 +/**
 + * The bar above Working…: the newest bar, while the agent works on the turn
-+ * that set it. A message from the user starts a turn without one, also while
-+ * it's still on its way: the UI shows Working… as soon as it's sent, and the
-+ * last turn's finished bar mustn't show as live meanwhile.
++ * that set it and the server hasn't ended it. Working… also stays lit for a
++ * background task after the turn, e.g. a dev server or a sub-agent, and the
++ * turn's bar is finished by then. A message from the user starts a turn
++ * without one, also while it's still on its way: the UI shows Working… as soon
++ * as it's sent, and the last turn's finished bar mustn't show as live meanwhile.
 + */
 +export function liveProgress(
 +  bars: readonly AgentProgress[],
@@ -974,7 +1007,7 @@ index 0000000..5805e67
 +  working: boolean,
 +): AgentProgress | null {
 +  const newest = bars.at(-1);
-+  if (!working || !newest) return null;
++  if (!working || !newest || newest.endedAt !== null) return null;
 +  if (rows.some((row) => row.kind === "pending")) return null;
 +  const turnStart = rows.findLast((row) => row.kind === "turn" && row.createdAtS !== undefined);
 +  // Message times are whole seconds, rounded down, so they're never late.
