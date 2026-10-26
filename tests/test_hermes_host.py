@@ -41,6 +41,12 @@ class Request:
         return cls(**data)
 
 
+def render_module() -> Any:
+    from importlib.machinery import SourceFileLoader
+
+    return SourceFileLoader("render", str(ROOT / "scripts" / "render")).load_module()
+
+
 def render(settings: dict[str, Any] | None = None) -> dict[str, str]:
     # A copy of ci under its own name: a render of ci itself would replace the
     # manifest CI validates after the tests.
@@ -160,13 +166,14 @@ class DeploymentTests(unittest.TestCase):
         self.assertIn("- name: HERMES_REMOTE_SSH_HOST\n", dynamic)
         self.assertIn("type: Recreate", dynamic)
 
-    def test_the_runner_quota_makes_room_for_the_host(self) -> None:
-        on, off = render()["platform"], render({"hermes_host": "false"})["platform"]
-        # ci: 2 runners of 500m and 1Gi, plus 500m and 512Mi spare, plus the host.
-        self.assertIn('value: "1600m"', on)
-        self.assertIn('value: "1500m"', off)
-        self.assertIn('value: "3Gi"', on)
-        self.assertIn('value: "2560Mi"', off)
+    def test_the_host_fits_the_runner_quotas_spare_room(self) -> None:
+        # Not changing the quota keeps `mise run bootstrap` out of turning it on.
+        self.assertEqual(render()["platform"], render({"hermes_host": "false"})["platform"])
+        # The quota keeps 500m, 512Mi and 1Gi of requests, and 3 CPUs, 3Gi and
+        # 1Gi of limits, beyond the runners'.
+        resources = render_module().HERMES_HOST_RESOURCES
+        self.assertEqual(resources["requests"], {"cpu": "100m", "memory": "256Mi", "ephemeral-storage": "256Mi"})
+        self.assertEqual(resources["limits"], {"cpu": "2", "memory": "2Gi", "ephemeral-storage": "1Gi"})
 
     def test_hermes_host_false_leaves_it_out(self) -> None:
         rendered = render({"hermes_host": "false"})
