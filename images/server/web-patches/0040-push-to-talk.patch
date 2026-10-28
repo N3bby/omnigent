@@ -20,7 +20,9 @@ While a take runs, the composer card says data-ptt-state: its tools give
 way to a bar with a recording dot, the time, a live waveform, the model
 and how to cancel (pushToTalk.css), and the textarea is read-only. The bar
 is no taller than the buttons, so the card keeps its height, and for a
-moment after a take the card says "ended" while its tools fade back in. The
+moment after a take the card says "ended" while its tools fade back in.
+The waveform keeps its bars when listening turns to finishing, so they
+trail off to silence instead of blanking when you let go. The
 draft is drawn by the composer's highlight backdrop so the words can fade
 in; Deepgram's words that may still change are dimmed.
 
@@ -33,10 +35,10 @@ chat doesn't.
 Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0039.
 diff --git a/web/src/components/PushToTalk.tsx b/web/src/components/PushToTalk.tsx
 new file mode 100644
-index 0000000..4e044d2
+index 0000000..5f1c02b
 --- /dev/null
 +++ b/web/src/components/PushToTalk.tsx
-@@ -0,0 +1,278 @@
+@@ -0,0 +1,289 @@
 +// The composer's push-to-talk pieces: the mic button you hold, the bar that
 +// replaces the composer's tools while you talk, and the words fading in over
 +// the draft. usePushToTalk (hooks/usePushToTalk.ts) runs the take.
@@ -172,6 +174,9 @@ index 0000000..4e044d2
 + */
 +export function PushToTalkBar({ ptt }: { ptt: PushToTalk }) {
 +  const canvasRef = useRef<HTMLCanvasElement>(null);
++  // The take's waveform so far. It outlives the drawing effect, which restarts
++  // when listening turns to finishing, so letting go doesn't blank it.
++  const wave = useRef({ take: -1, history: [] as number[], smooth: 0, lastBar: 0 });
 +  const [elapsed, setElapsed] = useState(0);
 +  const { phase, startedAt, releasedAt } = ptt;
 +  const level = ptt.level;
@@ -186,26 +191,34 @@ index 0000000..4e044d2
 +  }, [phase, startedAt, releasedAt]);
 +
 +  // The waveform, and the level the mic button's halo follows, at the
-+  // display's frame rate. Bars slide between samples instead of jumping.
++  // display's frame rate. Bars slide between samples instead of jumping, and
++  // after you let go they keep sliding out while the level falls to silence.
 +  useEffect(() => {
 +    const canvas = canvasRef.current;
 +    if (phase === "idle" || !canvas) return;
 +    const card = composerCard(canvas);
-+    const history: number[] = [];
-+    let smooth = 0;
++    const state = wave.current;
++    if (state.take !== startedAt) {
++      state.take = startedAt;
++      state.history = [];
++      state.smooth = 0;
++      state.lastBar = performance.now();
++    }
++    const { history } = state;
 +    let lastFrame = performance.now();
-+    let lastBar = lastFrame;
 +    let frame = 0;
 +    const draw = (now: number) => {
 +      const dt = now - lastFrame;
 +      lastFrame = now;
 +      const target = phase === "listening" ? level() : 0;
-+      smooth += (target - smooth) * (1 - Math.pow(0.6, dt / 16.7));
-+      card?.style.setProperty("--ptt-level", smooth.toFixed(3));
-+      while (now - lastBar >= BAR_MS) {
-+        history.push(smooth);
-+        lastBar += BAR_MS;
++      state.smooth += (target - state.smooth) * (1 - Math.pow(0.6, dt / 16.7));
++      card?.style.setProperty("--ptt-level", state.smooth.toFixed(3));
++      while (now - state.lastBar >= BAR_MS) {
++        history.push(state.smooth);
++        state.lastBar += BAR_MS;
 +      }
++      // Only what fits on screen is ever drawn.
++      if (history.length > 400) history.splice(0, history.length - 400);
 +      const dpr = window.devicePixelRatio || 1;
 +      const w = canvas.clientWidth;
 +      const h = canvas.clientHeight;
@@ -219,7 +232,7 @@ index 0000000..4e044d2
 +          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 +          ctx.clearRect(0, 0, w, h);
 +          ctx.fillStyle = getComputedStyle(canvas).color;
-+          const shift = ((now - lastBar) / BAR_MS) * BAR_WIDTH;
++          const shift = ((now - state.lastBar) / BAR_MS) * BAR_WIDTH;
 +          const n = Math.ceil(w / BAR_WIDTH) + 1;
 +          for (let k = 0; k < n; k++) {
 +            const value = history[history.length - n + k] ?? 0;
@@ -241,7 +254,7 @@ index 0000000..4e044d2
 +      cancelAnimationFrame(frame);
 +      card?.style.setProperty("--ptt-level", "0");
 +    };
-+  }, [phase, level]);
++  }, [phase, level, startedAt]);
 +
 +  if (phase === "idle") return null;
 +  const engine = ptt.settings.engine;
