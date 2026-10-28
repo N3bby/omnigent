@@ -19,8 +19,10 @@ focus or the tab is hidden (the key-up would never arrive), and after
 While a take runs, the composer card says data-ptt-state: its tools give
 way to a bar with a recording dot, the time, a live waveform, the model
 and how to cancel (pushToTalk.css), and the textarea is read-only. The bar
-is no taller than the buttons, so the card keeps its height, and for a
-moment after a take the card says "ended" while its tools fade back in.
+is no taller than the buttons, so the card keeps its height. It replaces the
+tools at once when a take starts; for a moment after one, the card says
+"ended" and the bar, pinned where it was, fades out while the tools fade
+back in underneath it, so the row is never empty for a frame.
 The waveform keeps its bars when listening turns to finishing, so they
 trail off to silence instead of blanking when you let go. The
 draft is drawn by the composer's highlight backdrop so the words can fade
@@ -35,15 +37,22 @@ chat doesn't.
 Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0039.
 diff --git a/web/src/components/PushToTalk.tsx b/web/src/components/PushToTalk.tsx
 new file mode 100644
-index 0000000..5f1c02b
+index 0000000..c87e24b
 --- /dev/null
 +++ b/web/src/components/PushToTalk.tsx
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,332 @@
 +// The composer's push-to-talk pieces: the mic button you hold, the bar that
 +// replaces the composer's tools while you talk, and the words fading in over
 +// the draft. usePushToTalk (hooks/usePushToTalk.ts) runs the take.
 +
-+import { type PointerEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
++import {
++  type PointerEvent,
++  type KeyboardEvent,
++  useEffect,
++  useLayoutEffect,
++  useRef,
++  useState,
++} from "react";
 +import { CloudIcon, MicIcon, ServerIcon, ZapIcon } from "lucide-react";
 +import { Button } from "@/components/ui/button";
 +import type { PushToTalk, PushToTalkRegion } from "@/hooks/usePushToTalk";
@@ -171,9 +180,16 @@ index 0000000..5f1c02b
 +/**
 + * What the composer's tools turn into while you talk: a recording dot, the
 + * time, a live waveform, which model is listening, and how to cancel.
++ *
++ * Once the take ends it stays a moment where it was, out of the row's flow,
++ * and fades out while the tools fade back in underneath it, so the row is
++ * never empty for a frame.
 + */
 +export function PushToTalkBar({ ptt }: { ptt: PushToTalk }) {
++  const barRef = useRef<HTMLDivElement>(null);
 +  const canvasRef = useRef<HTMLCanvasElement>(null);
++  // Where the bar sat in the row on the take's last frame.
++  const place = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
 +  // The take's waveform so far. It outlives the drawing effect, which restarts
 +  // when listening turns to finishing, so letting go doesn't blank it.
 +  const wave = useRef({ take: -1, history: [] as number[], smooth: 0, lastBar: 0 });
@@ -210,6 +226,15 @@ index 0000000..5f1c02b
 +    const draw = (now: number) => {
 +      const dt = now - lastFrame;
 +      lastFrame = now;
++      const bar = barRef.current;
++      if (bar) {
++        place.current = {
++          left: bar.offsetLeft,
++          top: bar.offsetTop,
++          width: bar.offsetWidth,
++          height: bar.offsetHeight,
++        };
++      }
 +      const target = phase === "listening" ? level() : 0;
 +      state.smooth += (target - state.smooth) * (1 - Math.pow(0.6, dt / 16.7));
 +      card?.style.setProperty("--ptt-level", state.smooth.toFixed(3));
@@ -256,15 +281,32 @@ index 0000000..5f1c02b
 +    };
 +  }, [phase, level, startedAt]);
 +
-+  if (phase === "idle") return null;
++  // Pin the fading bar where it was before the row lays out its tools again.
++  const shown = ptt.cardState;
++  useLayoutEffect(() => {
++    const bar = barRef.current;
++    if (!bar) return;
++    const at = place.current;
++    if (shown === "ended" && at) {
++      bar.style.left = `${at.left}px`;
++      bar.style.top = `${at.top}px`;
++      bar.style.width = `${at.width}px`;
++      bar.style.height = `${at.height}px`;
++    } else {
++      for (const side of ["left", "top", "width", "height"] as const) bar.style[side] = "";
++    }
++  }, [shown]);
++
++  if (shown === "idle") return null;
 +  const engine = ptt.settings.engine;
 +  const Icon = ENGINE_ICONS[engine];
 +  const seconds = Math.floor(elapsed);
 +  return (
 +    <div
++      ref={barRef}
 +      className="ptt-bar"
 +      data-ptt-keep
-+      data-ptt-state={phase}
++      data-ptt-state={shown}
 +      data-testid="push-to-talk-bar"
 +      role="status"
 +      aria-live="polite"
@@ -280,6 +322,9 @@ index 0000000..5f1c02b
 +        {pushToTalkEngineLabel(engine, ptt.server)}
 +      </span>
 +      <span className="ptt-hint">{ptt.touch ? "‹ Slide to cancel" : "Esc cancels"}</span>
++      {/* Adding a node makes the action row re-measure whether its labels fit
++          now that the tools are back, instead of once the bar has gone. */}
++      {shown === "ended" && <span hidden />}
 +    </div>
 +  );
 +}
@@ -2289,10 +2334,10 @@ index 39a8b97..ac04893 100644
        {section === "custom-agents" && <SettingsCustomAgentsSection />}
 diff --git a/web/src/pushToTalk.css b/web/src/pushToTalk.css
 new file mode 100644
-index 0000000..60b259e
+index 0000000..54bf76d
 --- /dev/null
 +++ b/web/src/pushToTalk.css
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,251 @@
 +/* Push-to-talk in the composer (components/PushToTalk.tsx).
 + *
 + * While a take runs, the composer card carries data-ptt-state ("listening",
@@ -2342,7 +2387,16 @@ index 0000000..60b259e
 +  overflow: hidden;
 +  font-size: 0.8125rem;
 +  white-space: nowrap;
-+  animation: ptt-fade-in 0.2s ease both;
++}
++
++/* After a take: pinned where it was (PushToTalkBar sets the box) and fading
++ * out over the tools, which fade in underneath. */
++.ptt-bar[data-ptt-state="ended"] {
++  position: absolute;
++  z-index: 1;
++  margin: 0;
++  pointer-events: none;
++  animation: ptt-fade-out 0.2s ease both;
 +}
 +
 +.ptt-rec {
@@ -2354,7 +2408,7 @@ index 0000000..60b259e
 +  animation: ptt-rec 1.2s ease-in-out infinite;
 +}
 +
-+.ptt-bar[data-ptt-state="finishing"] .ptt-rec {
++.ptt-bar:is([data-ptt-state="finishing"], [data-ptt-state="ended"]) .ptt-rec {
 +  background: var(--muted-foreground);
 +  animation: none;
 +}
@@ -2363,7 +2417,7 @@ index 0000000..60b259e
 +  font-weight: 500;
 +}
 +
-+.ptt-bar[data-ptt-state="finishing"] .ptt-label {
++.ptt-bar:is([data-ptt-state="finishing"], [data-ptt-state="ended"]) .ptt-label {
 +  background: linear-gradient(
 +      90deg,
 +      var(--muted-foreground) 30%,
@@ -2495,6 +2549,12 @@ index 0000000..60b259e
 +  }
 +}
 +
++@keyframes ptt-fade-out {
++  to {
++    opacity: 0;
++  }
++}
++
 +@keyframes ptt-rec {
 +  50% {
 +    box-shadow: 0 0 0 4px color-mix(in srgb, var(--destructive) 22%, transparent);
@@ -2521,7 +2581,7 @@ index 0000000..60b259e
 +@media (prefers-reduced-motion: reduce) {
 +  .ptt-rec,
 +  .ptt-button::after,
-+  .ptt-bar[data-ptt-state="finishing"] .ptt-label {
++  .ptt-bar:is([data-ptt-state="finishing"], [data-ptt-state="ended"]) .ptt-label {
 +    animation: none;
 +  }
 +  .ptt-word {
