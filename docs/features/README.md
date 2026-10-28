@@ -20,6 +20,7 @@ What you see and choose while talking to an agent.
 | [Start without a message](start-without-message.md) | Start a session from the New session screen with an empty composer, so its sandbox and @ file search are ready before you ask anything | Nothing to turn off |
 | [Your first message survives closing the app](first-message-while-starting.md) | Send a new session's first message and close the app while the sandbox starts: the agent still gets it | Nothing to turn off |
 | [Images, video and audio in the chat](inline-media.md) | An agent's screenshots show in the chat, side by side in a grid, and open full screen to pinch-zoom and swipe through; videos and audio play in place; in the desktop app, right-click one to copy it | No |
+| [Push-to-talk](push-to-talk.md) | Hold Right ⌥ or the mic button and talk: your words stream into the composer from your own Voxtral speech server, or through it from Mistral's or Deepgram's cloud | Yes, remove `push_to_talk_url` |
 | [Progress bars from the agent](agent-progress.md) | During long work, the agent shows what it's doing and how far along it is, in a one-line bar above Working…, with the work's log, such as a test run's or a dev server's, a click away; once it's done, the bar stays at the end of its reply with its log | Nothing to turn off: the agent shows one only for long work |
 
 ## Subscriptions
@@ -87,7 +88,7 @@ Changes to how the web UI looks and behaves.
 | [Swipe for a session's menu](session-swipe-menu.md) | On a phone, swipe a session left for its menu; holding it down only moves it | No |
 | [No Share button](no-share-button.md) | Sessions can't be shared from the web UI | No |
 | [No pin or archive buttons in the sidebar](no-sidebar-quick-actions.md) | Hovering a session no longer shows buttons you can hit by accident; Pin and Archive are in its ⋯ menu | No |
-| [No microphone in the composer](no-voice-dictation.md) | The composer has no voice dictation button; a phone keyboard's own voice input still works | No |
+| [No upstream voice dictation](no-voice-dictation.md) | Upstream's dictation button and its ⌘⌥V shortcut are gone; [push-to-talk](push-to-talk.md) has its own mic button | No |
 
 ## Words used on these pages
 

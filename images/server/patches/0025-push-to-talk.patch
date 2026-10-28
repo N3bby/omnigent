@@ -1,0 +1,79 @@
+Tell the web UI where this deployment's push-to-talk speech server is.
+
+push_to_talk_url in the environment file (OMNIGENT_PUSH_TO_TALK_URL) is a
+Voxtral Realtime server on the tailnet, such as
+wss://mac-mini.tail1234.ts.net:8443. GET /v1/info passes it on as
+push_to_talk_url, or null when it's unset; the composer's hold-to-talk mic
+button shows only when it's set, and streams the microphone straight to
+that server (web-patches/0040-push-to-talk.patch). Omnigent's own server
+never handles the audio.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0024-hermes-host.patch.
+diff --git a/omnigent/server/app.py b/omnigent/server/app.py
+index a387361..29296b6 100644
+--- a/omnigent/server/app.py
++++ b/omnigent/server/app.py
+@@ -208,6 +208,9 @@ class ServerInfoResponse(BaseModel):
+     harness_install_enabled: bool
+     installable_harnesses: list[str]
+     dictation_available: bool
++    # The deployment's push-to-talk speech server (``push_to_talk_url``), a
++    # ``wss://`` URL the web composer streams the microphone to, or ``None``.
++    push_to_talk_url: str | None = None
+     # The archive PATCH accepts ``delete_worktree``; older servers reject it.
+     archive_worktree_cleanup: bool = True
+     # User agents (`omnigent agent add`, GET /v1/agents?scope=user); absent on
+@@ -3103,6 +3106,7 @@ def create_app(
+                 "harness_install_enabled": harness_install_enabled,
+                 "installable_harnesses": installable_harnesses,
+                 "dictation_available": dictation_available,
++                "push_to_talk_url": os.environ.get("OMNIGENT_PUSH_TO_TALK_URL", "").strip() or None,
+                 "archive_worktree_cleanup": True,
+                 "agent_install": agent_store.supports_user_agents,
+                 "agent_detail": True,
+diff --git a/tests/server/routes/test_push_to_talk_info.py b/tests/server/routes/test_push_to_talk_info.py
+new file mode 100644
+index 0000000..6c4546f
+--- /dev/null
++++ b/tests/server/routes/test_push_to_talk_info.py
+@@ -0,0 +1,41 @@
++"""Tests for this deployment's push-to-talk speech server in ``/v1/info``.
++
++``OMNIGENT_PUSH_TO_TALK_URL`` (``push_to_talk_url`` in the environment file)
++is the speech server the web composer streams the microphone to; ``/v1/info``
++passes it on, and the mic button shows only when it's set.
++"""
++
++from __future__ import annotations
++
++import httpx
++import pytest
++
++
++@pytest.mark.parametrize(
++    ("value", "expected"),
++    [
++        ("wss://mac-mini.tail1234.ts.net:8443", "wss://mac-mini.tail1234.ts.net:8443"),
++        (" wss://speech.example ", "wss://speech.example"),
++        ("", None),
++        (None, None),
++    ],
++)
++async def test_info_tells_the_web_ui_the_speech_server(
++    client: httpx.AsyncClient,
++    monkeypatch: pytest.MonkeyPatch,
++    value: str | None,
++    expected: str | None,
++) -> None:
++    """
++    ``/v1/info`` says where the speech server is, or ``null`` without one.
++
++    A failure here means the composer shows no mic button although the
++    deployment set a speech server, or shows one that streams nowhere.
++    """
++    if value is None:
++        monkeypatch.delenv("OMNIGENT_PUSH_TO_TALK_URL", raising=False)
++    else:
++        monkeypatch.setenv("OMNIGENT_PUSH_TO_TALK_URL", value)
++    resp = await client.get("/v1/info")
++    assert resp.status_code == 200
++    assert resp.json()["push_to_talk_url"] == expected

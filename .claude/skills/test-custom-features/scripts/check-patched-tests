@@ -9,9 +9,9 @@
 # drop, inline media with the image lightbox and its Copy image menu, the
 # composers without a mic, the Claude permission hook's bearer refresh,
 # agents' progress bars, a turn Claude starts straight after Stop showing as
-# working, CORS for the glasses app, and the always-on Hermes host running
-# Hermes sessions only, against a fresh, fully patched upstream checkout. Keep
-# logs and JUnit reports.
+# working, CORS for the glasses app, the always-on Hermes host running
+# Hermes sessions only, and push-to-talk, against a fresh, fully patched
+# upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -110,6 +110,7 @@ PY
       tests/runner/test_progress_log.py \
       tests/runner/test_claude_native_turn_end_recheck.py tests/runner/test_resource_registry.py \
       tests/server/test_cors_origins.py tests/server/integration/test_hermes_host.py \
+      tests/server/routes/test_push_to_talk_info.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \
@@ -134,6 +135,8 @@ PY
       src/pages/ChatPage.composer.test.tsx src/components/chat/SideChatPane.test.tsx \
       src/lib/agentProgress.test.ts src/components/chat/AgentProgressCard.test.tsx \
       src/lib/sessionsApi.test.ts src/lib/toolTitle.test.ts \
+      src/lib/pushToTalk.test.ts src/hooks/usePushToTalk.test.tsx \
+      src/components/PushToTalkSettings.test.tsx src/lib/settingsPortability.test.ts \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

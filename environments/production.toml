@@ -37,6 +37,11 @@ hermes_remote_ssh_port = 2222
 # doesn't let other sites act as you. Remove it to turn CORS off.
 cors_allowed_origins = "*"
 
+# Push-to-talk in the composer streams your voice to this Voxtral Realtime
+# server, which your browser reaches over the tailnet; see
+# docs/features/push-to-talk.md. Remove it to hide the mic button.
+push_to_talk_url = "wss://mac-mini.taild5bc1b.ts.net:8443"
+
 # The GitHub repository (by numeric ID) and Environment whose Actions runs may
 # deploy. Remove both to turn off deploying from GitHub Actions.
 deploy_github_repository_id = "1386328125"

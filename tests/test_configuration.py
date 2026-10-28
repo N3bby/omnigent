@@ -270,6 +270,31 @@ class ConfigurationTests(unittest.TestCase):
                     with self.assertRaises(ConfigError):
                         validate("ci")
 
+    def test_push_to_talk_url_reaches_the_server(self) -> None:
+        subprocess.run(
+            [str(ROOT / "scripts" / "render"), "--environment", "ci", "--prepare-only"],
+            check=True, capture_output=True,
+        )
+        env = (ROOT / ".generated" / "ci" / "omnigent-config.env").read_text()
+        self.assertIn("OMNIGENT_PUSH_TO_TALK_URL=\n", env)
+        server_patch = (ROOT / "images" / "server" / "patches" / "0025-push-to-talk.patch").read_text()
+        self.assertIn('os.environ.get("OMNIGENT_PUSH_TO_TALK_URL", "")', server_patch)
+        production = load_environment("production")
+        self.assertTrue(production["push_to_talk_url"].startswith("wss://"))
+        base = load_environment("ci")
+        for value in ("wss://mac-mini.tail1234.ts.net:8443", "wss://speech.example", "wss://speech.example/"):
+            with self.subTest(value=value):
+                with mock.patch("config.load_environment", return_value=dict(base, push_to_talk_url=value)):
+                    values, _ = validate("ci")
+                self.assertEqual(values["push_to_talk_url"], value)
+        # Browsers only allow the microphone on secure pages, and those can't
+        # open ws:// sockets, so only wss:// works.
+        for value in ("ws://mac-mini:8765", "https://mac-mini", "wss://a b", "wss://x/stream?y", "", 1):
+            with self.subTest(value=value):
+                with mock.patch("config.load_environment", return_value=dict(base, push_to_talk_url=value)):
+                    with self.assertRaises(ConfigError):
+                        validate("ci")
+
     def test_stopping_runners_log_out_of_the_tailnet(self) -> None:
         # Never run the script here: on a Linux machine with Tailscale, the
         # socket it logs out through is the machine's own.

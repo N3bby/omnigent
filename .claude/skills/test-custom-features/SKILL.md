@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed composer microphone, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, progress bars from the agent, a session still showing Working… when Claude goes straight on after a reply or its background agent works on, your own Hermes as an agent with its approval prompts, the always-on Hermes host for Hermes sessions, Omnigent's sessions as MCP tools for your Hermes, and CORS for the Even G2 glasses app. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed upstream dictation, push-to-talk dictation through your speech server, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, progress bars from the agent, a session still showing Working… when Claude goes straight on after a reply or its background agent works on, your own Hermes as an agent with its approval prompts, the always-on Hermes host for Hermes sessions, Omnigent's sessions as MCP tools for your Hermes, and CORS for the Even G2 glasses app. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -103,6 +103,7 @@ PASS  images/server/patches/0021-environment-exit-node.patch
 PASS  images/server/patches/0022-agent-progress.patch
 PASS  images/server/patches/0023-cors-origins.patch
 PASS  images/server/patches/0024-hermes-host.patch
+PASS  images/server/patches/0025-push-to-talk.patch
 PASS  images/server/patches: patched Python compiles
 PASS  images/server/web-patches/0001-composer-rate-limits.patch
 PASS  images/server/web-patches/0002-composer-tailscale-host.patch
@@ -143,6 +144,7 @@ PASS  images/server/web-patches/0036-repo-exit-node.patch
 PASS  images/server/web-patches/0037-environment-exit-node.patch
 PASS  images/server/web-patches/0038-repo-exit-node-git-only.patch
 PASS  images/server/web-patches/0039-agent-progress.patch
+PASS  images/server/web-patches/0040-push-to-talk.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -202,7 +204,7 @@ compilation/imports. `Validate` CI runs this repo's unit tests, including patch
 application and compilation checks. **Neither executes the patched upstream
 frontend/backend tests.** Run them explicitly when testing fast mode, fuzzy
 `@` file search, a project's repositories, the environment menu, the
-startup card, the New session screen, MCP servers, a first message waiting for its sandbox, the repository picker's tabs, images in the chat, agents' progress bars, CORS or the Hermes host, or changing their native message, composer, file-index, project
+startup card, the New session screen, MCP servers, a first message waiting for its sandbox, the repository picker's tabs, images in the chat, agents' progress bars, CORS, the Hermes host or push-to-talk, or changing their native message, composer, file-index, project
 settings, Stop, sandbox lifecycle, sandbox start, chat stream reconnect, chat markdown, image viewer or runner idle paths:
 
 ```bash
@@ -214,8 +216,8 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx`, `web/src/lib/agentProgress.test.ts`, `web/src/components/chat/AgentProgressCard.test.tsx`, `web/src/lib/sessionsApi.test.ts`, `web/src/lib/toolTitle.test.ts` | 2577 passed |
-| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py`, `tests/harnesses/claude_native/test_permission_hook_auth_refresh.py`, `tests/server/test_agent_progress.py`, `tests/runner/test_session_progress_dispatch.py`, `tests/runner/test_progress_log.py`, `tests/runner/test_claude_native_turn_end_recheck.py`, `tests/runner/test_resource_registry.py`, `tests/server/test_cors_origins.py`, `tests/server/integration/test_hermes_host.py` | 494 passed, 1 skipped |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx`, `web/src/lib/agentProgress.test.ts`, `web/src/components/chat/AgentProgressCard.test.tsx`, `web/src/lib/sessionsApi.test.ts`, `web/src/lib/toolTitle.test.ts`, `web/src/lib/pushToTalk.test.ts`, `web/src/hooks/usePushToTalk.test.tsx`, `web/src/components/PushToTalkSettings.test.tsx`, `web/src/lib/settingsPortability.test.ts` | 2600 passed |
+| Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py`, `tests/harnesses/claude_native/test_permission_hook_auth_refresh.py`, `tests/server/test_agent_progress.py`, `tests/runner/test_session_progress_dispatch.py`, `tests/runner/test_progress_log.py`, `tests/runner/test_claude_native_turn_end_recheck.py`, `tests/runner/test_resource_registry.py`, `tests/server/test_cors_origins.py`, `tests/server/integration/test_hermes_host.py`, `tests/server/routes/test_push_to_talk_info.py` | 498 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
 and 15 backend cases; fuzzy `@` file search adds 22 frontend and 5 backend
@@ -275,7 +277,15 @@ origin, and nothing when unset). The Hermes host
 (`0024-hermes-host.patch`) adds `test_hermes_host.py` (3 cases, on the real
 app with a fake host on a real tunnel: a Hermes session starts on the host,
 another agent is refused there, and an automation without a pinned host skips
-it). These are
+it). Push-to-talk (`0025-push-to-talk.patch` and `0040-push-to-talk.patch`)
+adds `test_push_to_talk_info.py` (4 cases: `/v1/info` passes the speech
+server on, or `null`), `pushToTalk.test.ts` (10 cases: the settings, the
+stream URL, the server's frames, and the socket with a fake WebSocket),
+`usePushToTalk.test.tsx` (8 cases: words at the caret, dimmed partials, Esc,
+the key, a tap, a shortcut, focus loss and sending on release) and
+`PushToTalkSettings.test.tsx` (5 cases), and runs upstream's
+`settingsPortability.test.ts` beside it. None of these talks to a real speech
+server or microphone; that's step 6. These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -619,7 +629,8 @@ settings.
 | Bypass in the permission picker | In this session's composer, the permission menu (hand icon) lists **Manual**, **Auto**, **Accept edits**, **Plan** and **Bypass permissions**, with **Bypass permissions** selected. Close the menu with Escape without picking anything. |
 | No Share button | No **Share** in the chat header or its menu. Open a session row's menu (⋯) in the sidebar: it has **Fork** but no **Share**. Close the menu with Escape. |
 | No pin or archive buttons in the sidebar | Session rows in the sidebar have a `Conversation actions` button (⋯) and no `Pin conversation`, `Unpin conversation` or `Archive conversation` button. A row's ⋯ menu has **Pin** (**Unpin** under **Pinned**) and **Archive**. Close the menu with Escape without picking anything. |
-| No microphone in the composer | This session's composer has no `Voice dictation` button between the model picker and the send button, and neither has the **New session** screen's. Open **Keyboard shortcuts** (⌘/ or Ctrl+/): **In chats** has no **Toggle voice dictation**. Close it with Escape. |
+| No upstream voice dictation | This session's composer has no `Voice dictation` button between the model picker and the send button, and neither has the **New session** screen's. Open **Keyboard shortcuts** (⌘/ or Ctrl+/): **In chats** has no **Toggle voice dictation**. Close it with Escape. |
+| Push-to-talk | With `push_to_talk_url` in the environment file, this session's composer has a `Hold to talk` button between the model picker and the send button, the same size and centred on the same line as Send, and so has the **New session** screen's. Without it there's no such button. Open Settings → **Speech** (`https://<hostname>/settings/speech`): it lists **Voxtral on <machine>**, **Voxtral on Mistral's cloud** and **Deepgram Nova-3**, the push-to-talk key (**Right ⌥** unless someone changed it), **Send when you let go**, **Words to listen for**, and the speech server's address with **Online** (or **Can't reach it from this device**, which is expected when the desktop app's device isn't on the tailnet). Without the setting it says how to turn it on. Don't change anything, and don't hold the button: talking is left to the user (step 6). |
 | Fuzzy file search with @ | In this session's composer, type `@chkrunner` and don't send it. The menu is headed **Search workspace**, and its first row is `check-runner` with `.claude/skills/test-custom-features/scripts/` in grey, the matched letters in bold. Press Enter: the composer now reads `@.claude/skills/test-custom-features/scripts/check-runner ` (the mention stays in the text, with a space after it) with the path in the accent colour on a light tint, and no chip appears under the composer. Type `@.claude/` instead: it lists that folder's entries, headed `/.claude`. Clear the composer without sending. A menu that only lists the workspace's top level, or nothing, for `@chkrunner` means the file index didn't load: check the runner and server patches and that this session started after the deploy. |
 | Model picker | Start a new session (don't send it) with the Kubernetes sandbox and Claude Code: the model menu lists models, such as Opus and Sonnet, and never says `Models unavailable`. Repeat for Codex. Then discard it. |
 | Repository variables page | If you're an admin, Settings has **Repository variables** under Admin. It lists repositories with their variable names and `••••••••`, never a value. Don't add, edit or remove anything. Not an admin: record SKIP. |
@@ -980,6 +991,18 @@ after the next message it names `feature-check`. Switch back, then remove
     on: signing in works, and the glasses list your sessions by project.
     "Can't reach … (CORS)?" on sign-in means CORS is off or the patch is
     missing (step 5d).
+
+25. **Push-to-talk:** it needs your microphone and your speech server, so it's
+    left to you. On a device on the tailnet, hold **Right ⌥** in a session's
+    composer and say a sentence: a red dot, the time and a moving waveform
+    replace the composer's tools, and your words fade in at the caret while
+    you talk. Let go: **Finishing**, then the full sentence stays in the
+    composer, and the browser's microphone indicator goes off. Hold again and
+    press Esc: the draft is back as it was. On a phone, hold the mic button
+    and talk, then slide your finger left off it: nothing is kept. In
+    Settings → Speech, pick **Deepgram Nova-3** and talk: unsure words show
+    dimmed, then settle. The speech server's own log shows each take end
+    (`take from … ended`) within a second or two of letting go.
 
 ## 7. Clean up
 

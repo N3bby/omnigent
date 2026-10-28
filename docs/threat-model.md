@@ -107,6 +107,12 @@ the runner namespace, which limits what a compromised server could do there.
   page on any site read API responses. It never allows credentials, so such
   a page can't use your browser's cookie; it needs a Bearer token, which
   takes your password. Empty the setting to turn it off.
+- **Push-to-talk sends your voice off the deployment.** With
+  `push_to_talk_url` set, the browser streams the microphone straight to
+  that [speech server](features/push-to-talk.md) while you hold the key or
+  the button, and with a cloud model chosen, the speech server passes it on
+  to Mistral or Deepgram. The server has no login of its own; it's only on
+  the tailnet, so anyone on the tailnet can use it, and its cloud keys.
 - **The Hermes host is signed in as you.** The
   [always-on Hermes host](features/hermes-host.md) keeps a token that acts as
   your Omnigent account until `grant_max_lifetime_days` after you signed it
