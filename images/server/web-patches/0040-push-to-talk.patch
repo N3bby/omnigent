@@ -1,0 +1,2648 @@
+Push-to-talk dictation in the composers, through this deployment's speech server.
+
+Hold Right ⌥ (or another key, chosen in Settings → Speech), or hold the
+mic button next to Send, and talk: the words stream into the draft at the
+caret as the speech server recognizes them, each fading in. Letting go
+stops the microphone and the stream; the last words arrive and the text
+stays in the composer, or is sent if Send when you let go is on. Esc, or
+sliding a finger off the button to the left, puts the draft back.
+
+The browser streams 16 kHz PCM straight to the server GET /v1/info names
+(push_to_talk_url, server patch 0025-push-to-talk.patch), a Voxtral
+Realtime server that transcribes on its own machine, or relays the audio to
+Mistral's hosted Voxtral or to Deepgram Nova-3 (lib/pushToTalk.ts). The
+socket and the microphone open together, and audio captured before the
+server is ready is held for it. A take also ends when the window loses
+focus or the tab is hidden (the key-up would never arrive), and after
+2 minutes, so nothing streams to a paid service once you've let go.
+
+While a take runs, the composer card says data-ptt-state: its tools give
+way to a bar with a recording dot, the time, a live waveform, the model
+and how to cancel (pushToTalk.css), and the textarea is read-only. The
+draft is drawn by the composer's highlight backdrop so the words can fade
+in; Deepgram's words that may still change are dimmed.
+
+Settings → Speech (components/PushToTalkSettings.tsx) picks the model, the
+key, the words to listen for (Mistral's context bias and Deepgram's
+keyterms), and what letting go does, and shows whether the server answers.
+The choices are kept per browser and are part of Export settings.
+Both the session composer and the New session screen have it; the side
+chat doesn't.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0039.
+diff --git a/web/src/components/PushToTalk.tsx b/web/src/components/PushToTalk.tsx
+new file mode 100644
+index 0000000..4e044d2
+--- /dev/null
++++ b/web/src/components/PushToTalk.tsx
+@@ -0,0 +1,278 @@
++// The composer's push-to-talk pieces: the mic button you hold, the bar that
++// replaces the composer's tools while you talk, and the words fading in over
++// the draft. usePushToTalk (hooks/usePushToTalk.ts) runs the take.
++
++import { type PointerEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
++import { CloudIcon, MicIcon, ServerIcon, ZapIcon } from "lucide-react";
++import { Button } from "@/components/ui/button";
++import type { PushToTalk, PushToTalkRegion } from "@/hooks/usePushToTalk";
++import { pushToTalkEngine, type PushToTalkEngine } from "@/lib/pushToTalk";
++import { cn } from "@/lib/utils";
++
++/** Sliding a finger this far left off the button cancels the take. */
++const SLIDE_TO_CANCEL_PX = 90;
++/** One waveform bar per this many milliseconds of sound. */
++const BAR_MS = 45;
++const BAR_WIDTH = 5;
++
++/** The speech server's machine, e.g. "mac-mini" for wss://mac-mini.tailnet.ts.net:8443. */
++export function pushToTalkServerName(server: string | null): string {
++  if (!server) return "";
++  try {
++    return new URL(server.replace(/^ws/, "http")).hostname.split(".")[0];
++  } catch {
++    return server;
++  }
++}
++
++/** "Voxtral · mac-mini", "Voxtral · Mistral", "Nova-3 · Deepgram". */
++export function pushToTalkEngineLabel(engine: PushToTalkEngine, server: string | null): string {
++  if (engine === "cloud") return "Voxtral · Mistral";
++  if (engine === "deepgram") return "Nova-3 · Deepgram";
++  const name = pushToTalkServerName(server);
++  return name ? `Voxtral · ${name}` : "Voxtral";
++}
++
++const ENGINE_ICONS = { local: ServerIcon, cloud: CloudIcon, deepgram: ZapIcon } as const;
++
++function composerCard(element: Element | null): HTMLElement | null {
++  return element?.closest<HTMLElement>("[data-composer-card]") ?? null;
++}
++
++/**
++ * The mic button: hold it to talk. A mouse or a finger holds it with the
++ * pointer; Space or Enter holds it from the keyboard. On a touch screen,
++ * sliding off it to the left cancels the take.
++ */
++export function PushToTalkButton({
++  ptt,
++  disabled,
++  className,
++}: {
++  ptt: PushToTalk;
++  disabled?: boolean;
++  className?: string;
++}) {
++  const startX = useRef<number | null>(null);
++  const active = ptt.phase !== "idle";
++
++  const setSlide = (target: Element, px: number) => {
++    composerCard(target)?.style.setProperty("--ptt-slide", `${px}px`);
++  };
++
++  const onPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
++    if (event.button !== 0 || disabled || active) return;
++    // Keep focus (and the caret) in the composer, and don't start a text selection.
++    event.preventDefault();
++    event.currentTarget.setPointerCapture(event.pointerId);
++    startX.current = event.clientX;
++    ptt.start("pointer", event.pointerType !== "mouse");
++  };
++  const onPointerMove = (event: PointerEvent<HTMLButtonElement>) => {
++    if (startX.current === null || ptt.phase !== "listening" || !ptt.touch) return;
++    const dx = Math.min(0, event.clientX - startX.current);
++    setSlide(event.currentTarget, dx);
++    if (dx < -SLIDE_TO_CANCEL_PX) {
++      startX.current = null;
++      setSlide(event.currentTarget, 0);
++      ptt.cancel();
++    }
++  };
++  const onPointerUp = (event: PointerEvent<HTMLButtonElement>) => {
++    if (startX.current === null) return;
++    startX.current = null;
++    setSlide(event.currentTarget, 0);
++    if (ptt.source === "pointer") ptt.release();
++  };
++  const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
++    if (event.key !== " " && event.key !== "Enter") return;
++    event.preventDefault();
++    if (!event.repeat && !active && !disabled) ptt.start("pointer");
++  };
++  const onKeyUp = (event: KeyboardEvent<HTMLButtonElement>) => {
++    if (event.key !== " " && event.key !== "Enter") return;
++    event.preventDefault();
++    if (ptt.source === "pointer") ptt.release();
++  };
++
++  const label = `Hold to talk, or hold ${ptt.settings.key.label}`;
++  return (
++    <Button
++      type="button"
++      variant="ghost"
++      size="icon"
++      aria-label="Hold to talk"
++      aria-pressed={active}
++      title={active ? undefined : label}
++      disabled={disabled && !active}
++      data-ptt-keep
++      data-ptt-state={ptt.phase}
++      data-ptt-touch={ptt.touch ? "true" : undefined}
++      data-testid="push-to-talk-button"
++      className={cn(
++        "ptt-button relative size-8 shrink-0 touch-none select-none rounded-lg text-muted-foreground md:size-7",
++        className,
++      )}
++      onPointerDown={onPointerDown}
++      onPointerMove={onPointerMove}
++      onPointerUp={onPointerUp}
++      onPointerCancel={onPointerUp}
++      onLostPointerCapture={onPointerUp}
++      onKeyDown={onKeyDown}
++      onKeyUp={onKeyUp}
++      onContextMenu={(event) => event.preventDefault()}
++    >
++      <MicIcon className="relative z-[1] size-4" />
++    </Button>
++  );
++}
++
++/**
++ * What the composer's tools turn into while you talk: a recording dot, the
++ * time, a live waveform, which model is listening, and how to cancel.
++ */
++export function PushToTalkBar({ ptt }: { ptt: PushToTalk }) {
++  const canvasRef = useRef<HTMLCanvasElement>(null);
++  const [elapsed, setElapsed] = useState(0);
++  const { phase, startedAt, releasedAt } = ptt;
++  const level = ptt.level;
++
++  useEffect(() => {
++    if (phase === "idle") return;
++    const tick = () => setElapsed(((releasedAt ?? performance.now()) - startedAt) / 1000);
++    tick();
++    if (releasedAt !== null) return;
++    const timer = setInterval(tick, 250);
++    return () => clearInterval(timer);
++  }, [phase, startedAt, releasedAt]);
++
++  // The waveform, and the level the mic button's halo follows, at the
++  // display's frame rate. Bars slide between samples instead of jumping.
++  useEffect(() => {
++    const canvas = canvasRef.current;
++    if (phase === "idle" || !canvas) return;
++    const card = composerCard(canvas);
++    const history: number[] = [];
++    let smooth = 0;
++    let lastFrame = performance.now();
++    let lastBar = lastFrame;
++    let frame = 0;
++    const draw = (now: number) => {
++      const dt = now - lastFrame;
++      lastFrame = now;
++      const target = phase === "listening" ? level() : 0;
++      smooth += (target - smooth) * (1 - Math.pow(0.6, dt / 16.7));
++      card?.style.setProperty("--ptt-level", smooth.toFixed(3));
++      while (now - lastBar >= BAR_MS) {
++        history.push(smooth);
++        lastBar += BAR_MS;
++      }
++      const dpr = window.devicePixelRatio || 1;
++      const w = canvas.clientWidth;
++      const h = canvas.clientHeight;
++      if (w > 0 && h > 0) {
++        if (canvas.width !== Math.round(w * dpr)) {
++          canvas.width = Math.round(w * dpr);
++          canvas.height = Math.round(h * dpr);
++        }
++        const ctx = canvas.getContext("2d");
++        if (ctx) {
++          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
++          ctx.clearRect(0, 0, w, h);
++          ctx.fillStyle = getComputedStyle(canvas).color;
++          const shift = ((now - lastBar) / BAR_MS) * BAR_WIDTH;
++          const n = Math.ceil(w / BAR_WIDTH) + 1;
++          for (let k = 0; k < n; k++) {
++            const value = history[history.length - n + k] ?? 0;
++            const bh = Math.max(2, Math.min(h, value * h * 1.2));
++            const x = w - (n - k) * BAR_WIDTH + 2 - shift;
++            ctx.globalAlpha = 0.15 + 0.55 * (k / n);
++            ctx.beginPath();
++            if (ctx.roundRect) ctx.roundRect(x, (h - bh) / 2, 3, bh, 1.5);
++            else ctx.rect(x, (h - bh) / 2, 3, bh);
++            ctx.fill();
++          }
++          ctx.globalAlpha = 1;
++        }
++      }
++      frame = requestAnimationFrame(draw);
++    };
++    frame = requestAnimationFrame(draw);
++    return () => {
++      cancelAnimationFrame(frame);
++      card?.style.setProperty("--ptt-level", "0");
++    };
++  }, [phase, level]);
++
++  if (phase === "idle") return null;
++  const engine = ptt.settings.engine;
++  const Icon = ENGINE_ICONS[engine];
++  const seconds = Math.floor(elapsed);
++  return (
++    <div
++      className="ptt-bar"
++      data-ptt-keep
++      data-ptt-state={phase}
++      data-testid="push-to-talk-bar"
++      role="status"
++      aria-live="polite"
++    >
++      <span className="ptt-rec" aria-hidden />
++      <span className="ptt-label">{phase === "listening" ? "Listening" : "Finishing"}</span>
++      <span className="ptt-timer">
++        {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
++      </span>
++      <canvas ref={canvasRef} className="ptt-wave" aria-hidden />
++      <span className="ptt-chip" title={pushToTalkEngine(engine).name}>
++        <Icon className="size-3" aria-hidden />
++        {pushToTalkEngineLabel(engine, ptt.server)}
++      </span>
++      <span className="ptt-hint">{ptt.touch ? "‹ Slide to cancel" : "Esc cancels"}</span>
++    </div>
++  );
++}
++
++/** Split text into words and the whitespace between them, with where each starts. */
++function tokens(text: string): { text: string; at: number }[] {
++  const out: { text: string; at: number }[] = [];
++  let at = 0;
++  for (const token of text.split(/(\s+)/)) {
++    if (token) out.push({ text: token, at });
++    at += token.length;
++  }
++  return out;
++}
++
++/**
++ * The draft as the composer's backdrop draws it during a take: the words
++ * fade in as they arrive, and words that may still change are dimmed.
++ */
++export function PushToTalkWords({ region }: { region: PushToTalkRegion }) {
++  return (
++    <>
++      {region.before}
++      {region.lead}
++      {tokens(region.final).map((token) =>
++        /^\s+$/.test(token.text) ? (
++          token.text
++        ) : (
++          // Keyed by where the word starts: words only ever arrive after it.
++          <span key={`f${token.at}`} className="ptt-word">
++            {token.text}
++          </span>
++        ),
++      )}
++      {tokens(region.partial).map((token) =>
++        /^\s+$/.test(token.text) ? (
++          token.text
++        ) : (
++          <span key={`p${token.at}`} className="ptt-word ptt-word-partial">
++            {token.text}
++          </span>
++        ),
++      )}
++      {region.trail}
++      {region.after}
++    </>
++  );
++}
+diff --git a/web/src/components/PushToTalkSettings.test.tsx b/web/src/components/PushToTalkSettings.test.tsx
+new file mode 100644
+index 0000000..5aa1104
+--- /dev/null
++++ b/web/src/components/PushToTalkSettings.test.tsx
+@@ -0,0 +1,72 @@
++// Tests for Settings → Speech: the model, the key, the words to listen for.
++
++import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { readPushToTalkSettings } from "@/lib/pushToTalk";
++import { PushToTalkSettingsBody } from "./PushToTalkSettings";
++
++const serverInfo = vi.hoisted(() => ({
++  push_to_talk_url: "wss://mac-mini.tail.ts.net:8443" as string | null,
++}));
++vi.mock("@/lib/CapabilitiesContext", () => ({ useServerInfo: () => serverInfo }));
++
++beforeEach(() => {
++  localStorage.clear();
++  serverInfo.push_to_talk_url = "wss://mac-mini.tail.ts.net:8443";
++  vi.stubGlobal(
++    "fetch",
++    vi.fn(async () => new Response(null)),
++  );
++});
++afterEach(() => {
++  cleanup();
++  vi.unstubAllGlobals();
++});
++
++describe("Settings → Speech", () => {
++  it("picks the model, named after the speech server's machine", async () => {
++    render(<PushToTalkSettingsBody />);
++    expect(screen.getByText("Voxtral on mac-mini")).toBeInTheDocument();
++    expect(screen.getByTestId("push-to-talk-engine-local")).toHaveAttribute("aria-checked", "true");
++    fireEvent.click(screen.getByTestId("push-to-talk-engine-deepgram"));
++    expect(readPushToTalkSettings().engine).toBe("deepgram");
++    expect(screen.getByTestId("push-to-talk-engine-deepgram")).toHaveAttribute(
++      "aria-checked",
++      "true",
++    );
++    expect(await screen.findByText("Online")).toBeInTheDocument();
++  });
++
++  it("takes the next key pressed as the push-to-talk key", () => {
++    render(<PushToTalkSettingsBody />);
++    fireEvent.click(screen.getByTestId("push-to-talk-key-change"));
++    expect(screen.getByTestId("push-to-talk-key")).toHaveTextContent("Press a key…");
++    act(() => {
++      window.dispatchEvent(new KeyboardEvent("keydown", { key: "F13", code: "F13" }));
++    });
++    expect(readPushToTalkSettings().key).toEqual({ code: "F13", label: "F13" });
++    expect(screen.getByTestId("push-to-talk-key")).toHaveTextContent("F13");
++  });
++
++  it("adds and removes words to listen for", () => {
++    render(<PushToTalkSettingsBody />);
++    const input = screen.getByTestId("push-to-talk-hint-input");
++    fireEvent.change(input, { target: { value: "Omnigent, k3s" } });
++    fireEvent.keyDown(input, { key: "Enter" });
++    expect(readPushToTalkSettings().hints).toEqual(["Omnigent", "k3s"]);
++    fireEvent.click(screen.getByRole("button", { name: "Remove k3s" }));
++    expect(readPushToTalkSettings().hints).toEqual(["Omnigent"]);
++  });
++
++  it("sends on release when switched on", () => {
++    render(<PushToTalkSettingsBody />);
++    fireEvent.click(screen.getByTestId("push-to-talk-send-toggle"));
++    expect(readPushToTalkSettings().afterRelease).toBe("send");
++  });
++
++  it("explains how to turn it on when the deployment has no speech server", () => {
++    serverInfo.push_to_talk_url = null;
++    render(<PushToTalkSettingsBody />);
++    expect(screen.getByTestId("push-to-talk-settings-off")).toHaveTextContent("push_to_talk_url");
++  });
++});
+diff --git a/web/src/components/PushToTalkSettings.tsx b/web/src/components/PushToTalkSettings.tsx
+new file mode 100644
+index 0000000..a419eb1
+--- /dev/null
++++ b/web/src/components/PushToTalkSettings.tsx
+@@ -0,0 +1,290 @@
++// Settings → Speech: which model listens, the push-to-talk key, the words to
++// listen for, what letting go does, and whether the speech server answers.
++// The choices are this browser's (lib/pushToTalk.ts); the server is the
++// deployment's (`push_to_talk_url`).
++
++import { useEffect, useId, useState } from "react";
++import { XIcon } from "lucide-react";
++import { SettingsGroup } from "@/components/SettingsGroup";
++import { SettingsLabel } from "@/components/SettingsLabel";
++import { CardRadioGroup } from "@/components/theme/CardRadioGroup";
++import { Button } from "@/components/ui/button";
++import { Switch } from "@/components/ui/switch";
++import { pushToTalkServerName } from "@/components/PushToTalk";
++import { useServerInfo } from "@/lib/CapabilitiesContext";
++import {
++  PUSH_TO_TALK_ENGINES,
++  pushToTalkEngine,
++  pushToTalkHttpUrl,
++  pushToTalkKeyLabel,
++  usePushToTalkSettings,
++  writePushToTalkSettings,
++  type PushToTalkEngine,
++} from "@/lib/pushToTalk";
++import { cn } from "@/lib/utils";
++
++type Reachability = "checking" | "online" | "offline";
++
++/** Whether the speech server answers. Its /info has no CORS headers, so an
++ *  opaque no-cors request is all a page can make: it resolves when the server
++ *  answers and rejects when it can't be reached. */
++function useReachability(server: string | null): Reachability {
++  const [state, setState] = useState<Reachability>("checking");
++  useEffect(() => {
++    if (!server) return;
++    let live = true;
++    setState("checking");
++    const controller = new AbortController();
++    const timer = setTimeout(() => controller.abort(), 5000);
++    // The speech server is its own origin, not the Omnigent API hostFetch serves.
++    // oxlint-disable-next-line no-restricted-globals
++    fetch(`${pushToTalkHttpUrl(server)}/info`, { mode: "no-cors", signal: controller.signal })
++      .then(() => live && setState("online"))
++      .catch(() => live && setState("offline"))
++      .finally(() => clearTimeout(timer));
++    return () => {
++      live = false;
++      controller.abort();
++      clearTimeout(timer);
++    };
++  }, [server]);
++  return state;
++}
++
++export function PushToTalkSettingsBody() {
++  const info = useServerInfo();
++  const server = info !== "loading" ? (info.push_to_talk_url ?? null) : null;
++  const settings = usePushToTalkSettings();
++  const reachability = useReachability(server);
++  const modelLabelId = useId();
++  const keyLabelId = useId();
++  const hintsLabelId = useId();
++  const sendLabelId = useId();
++  const [capturing, setCapturing] = useState(false);
++  const [hintDraft, setHintDraft] = useState("");
++  const engine = pushToTalkEngine(settings.engine);
++  const serverName = pushToTalkServerName(server);
++
++  // Changing the key: the next key pressed becomes it; Esc keeps the old one.
++  useEffect(() => {
++    if (!capturing) return;
++    const onKeyDown = (event: KeyboardEvent) => {
++      event.preventDefault();
++      event.stopPropagation();
++      if (event.key !== "Escape") {
++        writePushToTalkSettings({
++          key: { code: event.code, label: pushToTalkKeyLabel(event.code, event.key) },
++        });
++      }
++      setCapturing(false);
++    };
++    window.addEventListener("keydown", onKeyDown, true);
++    return () => window.removeEventListener("keydown", onKeyDown, true);
++  }, [capturing]);
++
++  const addHint = () => {
++    const words = hintDraft
++      .split(",")
++      .map((word) => word.trim())
++      .filter((word) => word && !settings.hints.includes(word));
++    if (words.length)
++      writePushToTalkSettings({ hints: [...settings.hints, ...words].slice(0, 100) });
++    setHintDraft("");
++  };
++
++  if (info !== "loading" && !server) {
++    return (
++      <SettingsGroup title="Speech server" testId="push-to-talk-settings-off">
++        <p className="text-ui text-muted-foreground">
++          This deployment has no speech server, so push-to-talk is off. Set{" "}
++          <code>push_to_talk_url</code> in its environment file to turn it on.
++        </p>
++      </SettingsGroup>
++    );
++  }
++
++  return (
++    <div className="flex flex-col gap-6" data-testid="push-to-talk-settings">
++      <SettingsGroup title="Transcription model" testId="push-to-talk-settings-model">
++        <div className="flex flex-col gap-3">
++          <SettingsLabel
++            label="Model"
++            labelId={modelLabelId}
++            description="Which model turns your voice into text."
++            className="sr-only"
++          />
++          <CardRadioGroup<PushToTalkEngine>
++            labelledBy={modelLabelId}
++            value={settings.engine}
++            onSelect={(next) => writePushToTalkSettings({ engine: next })}
++            componentId="settings.speech.engine"
++            className="grid grid-cols-1 gap-2"
++            cardClassName="items-start gap-1 p-3.5 pr-10 text-left"
++            items={PUSH_TO_TALK_ENGINES.map((option) => ({
++              value: option.id,
++              testId: `push-to-talk-engine-${option.id}`,
++              body: (
++                <span className="flex w-full flex-col gap-1">
++                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
++                    <span className="text-ui font-medium">
++                      {option.id === "local" && serverName
++                        ? `Voxtral on ${serverName}`
++                        : option.name}
++                    </span>
++                    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
++                      <span
++                        aria-hidden
++                        className={cn(
++                          "size-1.5 rounded-full",
++                          option.billed ? "bg-amber-500" : "bg-emerald-500",
++                        )}
++                      />
++                      {option.billed ? "Billed per minute" : "Free · private"}
++                    </span>
++                  </span>
++                  <span className="text-ui font-normal text-muted-foreground">
++                    {option.description}
++                  </span>
++                </span>
++              ),
++            }))}
++          />
++        </div>
++      </SettingsGroup>
++
++      <SettingsGroup title="Talking" testId="push-to-talk-settings-talking">
++        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
++          <SettingsLabel
++            label="Push-to-talk key"
++            labelId={keyLabelId}
++            className="flex-1"
++            descriptionClassName="text-ui"
++            description="Hold it anywhere in Omnigent to talk into the composer, and let go when you're done. Held together with another key, it's a shortcut instead, and nothing is kept."
++          />
++          <div className="flex shrink-0 items-center gap-2" aria-labelledby={keyLabelId}>
++            <kbd
++              className="inline-flex h-7 min-w-7 items-center justify-center rounded-md border border-border border-b-2 bg-background px-2 font-sans text-xs"
++              data-testid="push-to-talk-key"
++            >
++              {capturing ? "Press a key…" : settings.key.label}
++            </kbd>
++            <Button
++              type="button"
++              variant="outline"
++              size="sm"
++              onClick={() => setCapturing((on) => !on)}
++              data-testid="push-to-talk-key-change"
++            >
++              {capturing ? "Cancel" : "Change"}
++            </Button>
++          </div>
++        </div>
++        <div className="mt-4 flex items-start justify-between gap-6 border-t border-border pt-4">
++          <SettingsLabel
++            label="Send when you let go"
++            labelId={sendLabelId}
++            className="flex-1"
++            descriptionClassName="text-ui"
++            description="Off: the words stay in the composer for you to check. On: they're sent straight away."
++          />
++          <Switch
++            aria-labelledby={sendLabelId}
++            checked={settings.afterRelease === "send"}
++            onCheckedChange={(on) =>
++              writePushToTalkSettings({ afterRelease: on ? "send" : "keep" })
++            }
++            className="mt-0.5 shrink-0"
++            data-testid="push-to-talk-send-toggle"
++            componentId="settings.speech.send_on_release"
++          />
++        </div>
++      </SettingsGroup>
++
++      <SettingsGroup title="Words to listen for" testId="push-to-talk-settings-hints">
++        <div className={cn("flex flex-col gap-3", !engine.hints && "opacity-60")}>
++          <SettingsLabel
++            label="Names and jargon"
++            labelId={hintsLabelId}
++            descriptionClassName="text-ui"
++            description={
++              engine.hints
++                ? "Project names and terms the model should expect, such as Omnigent or k3s."
++                : "Voxtral on your own server can't take hints, so these only help Mistral's cloud and Deepgram."
++            }
++          />
++          <div
++            className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border p-1.5"
++            aria-labelledby={hintsLabelId}
++          >
++            {settings.hints.map((hint) => (
++              <span
++                key={hint}
++                className="inline-flex items-center gap-1 rounded-full bg-muted py-0.5 pr-1 pl-2.5 text-ui"
++              >
++                {hint}
++                <button
++                  type="button"
++                  aria-label={`Remove ${hint}`}
++                  className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
++                  onClick={() =>
++                    writePushToTalkSettings({ hints: settings.hints.filter((h) => h !== hint) })
++                  }
++                >
++                  <XIcon className="size-3" />
++                </button>
++              </span>
++            ))}
++            <input
++              value={hintDraft}
++              onChange={(event) => setHintDraft(event.target.value)}
++              onKeyDown={(event) => {
++                if (event.key === "Enter" || event.key === ",") {
++                  event.preventDefault();
++                  addHint();
++                }
++              }}
++              onBlur={addHint}
++              placeholder="Add a word, then Enter"
++              aria-label="Add a word to listen for"
++              data-testid="push-to-talk-hint-input"
++              className="min-w-40 flex-1 bg-transparent px-1.5 py-1 text-ui outline-none placeholder:text-muted-foreground"
++            />
++          </div>
++        </div>
++      </SettingsGroup>
++
++      <SettingsGroup title="Speech server" testId="push-to-talk-settings-server">
++        <div className="flex flex-col gap-2">
++          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
++            <code className="text-xs break-all">{server}</code>
++            <span
++              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
++              data-testid="push-to-talk-server-status"
++            >
++              <span
++                aria-hidden
++                className={cn(
++                  "size-1.5 rounded-full",
++                  reachability === "online"
++                    ? "bg-emerald-500"
++                    : reachability === "offline"
++                      ? "bg-destructive"
++                      : "bg-muted-foreground",
++                )}
++              />
++              {reachability === "online"
++                ? "Online"
++                : reachability === "offline"
++                  ? "Can't reach it from this device"
++                  : "Checking…"}
++            </span>
++          </div>
++          <p className="text-ui text-muted-foreground">
++            Set by the deployment. The microphone only opens while you hold the key or the button. A
++            take ends when you let go, when Omnigent loses focus, or after 2 minutes.
++          </p>
++        </div>
++      </SettingsGroup>
++    </div>
++  );
++}
+diff --git a/web/src/components/composer/ChatComposer.tsx b/web/src/components/composer/ChatComposer.tsx
+index 7f0211c..72314b4 100644
+--- a/web/src/components/composer/ChatComposer.tsx
++++ b/web/src/components/composer/ChatComposer.tsx
+@@ -448,6 +448,7 @@ export const ComposerActionGroup = forwardRef<
+   return (
+     <div
+       ref={ref}
++      data-composer-group={side}
+       className={cn(
+         "flex min-w-0 items-center gap-1",
+         // A right group holding a control that can truncate, like the
+diff --git a/web/src/hooks/usePushToTalk.test.tsx b/web/src/hooks/usePushToTalk.test.tsx
+new file mode 100644
+index 0000000..671635d
+--- /dev/null
++++ b/web/src/hooks/usePushToTalk.test.tsx
+@@ -0,0 +1,195 @@
++// Tests for usePushToTalk: words stream into the draft at the caret, Esc puts
++// the draft back, a tap is dropped, and letting go ends the stream.
++
++import { act, render } from "@testing-library/react";
++import { useRef, useState } from "react";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import type * as PushToTalkModule from "@/lib/pushToTalk";
++import type { PushToTalkStreamEvents } from "@/lib/pushToTalk";
++import { usePushToTalk, type PushToTalk } from "./usePushToTalk";
++
++const streams = vi.hoisted(() => ({
++  last: null as null | {
++    events: PushToTalkStreamEvents;
++    stop: ReturnType<typeof vi.fn>;
++    cancel: ReturnType<typeof vi.fn>;
++    finish: () => void;
++  },
++}));
++
++vi.mock("@/lib/pushToTalk", async (importOriginal) => {
++  const actual = await importOriginal<typeof PushToTalkModule>();
++  return {
++    ...actual,
++    PushToTalkStream: {
++      start: (_server: string, _settings: unknown, events: PushToTalkStreamEvents) => {
++        let finish = () => {};
++        const stopped = new Promise<void>((resolve) => {
++          finish = resolve;
++        });
++        const stream = {
++          events,
++          stop: vi.fn(() => stopped),
++          cancel: vi.fn(),
++          finish,
++          level: () => 0,
++        };
++        streams.last = stream;
++        return stream;
++      },
++    },
++  };
++});
++
++const serverInfo = vi.hoisted(() => ({
++  push_to_talk_url: "wss://speech.example" as string | null,
++}));
++vi.mock("@/lib/CapabilitiesContext", () => ({ useServerInfo: () => serverInfo }));
++vi.mock("@/components/ui/toast", () => ({ showToast: vi.fn() }));
++
++function renderComposer(initial = "", onSend = vi.fn()) {
++  const box: { ptt: PushToTalk | null; ta: HTMLTextAreaElement | null } = { ptt: null, ta: null };
++  function Composer() {
++    const [value, setValue] = useState(initial);
++    const ref = useRef<HTMLTextAreaElement>(null);
++    box.ptt = usePushToTalk({
++      value,
++      setValue,
++      textareaRef: ref,
++      enabled: true,
++      onSend,
++      hotkey: true,
++    });
++    return (
++      <textarea
++        ref={(el) => {
++          ref.current = el;
++          box.ta = el;
++        }}
++        value={value}
++        onChange={(e) => setValue(e.target.value)}
++      />
++    );
++  }
++  render(<Composer />);
++  return box;
++}
++
++let now = 1000;
++
++beforeEach(() => {
++  localStorage.clear();
++  serverInfo.push_to_talk_url = "wss://speech.example";
++  now = 1000;
++  vi.spyOn(performance, "now").mockImplementation(() => now);
++});
++afterEach(() => vi.restoreAllMocks());
++
++describe("usePushToTalk", () => {
++  it("streams words in at the caret, then keeps them when you let go", async () => {
++    const box = renderComposer("Fix  please");
++    act(() => {
++      box.ta!.focus();
++      box.ta!.setSelectionRange(4, 4);
++    });
++    act(() => box.ptt!.start("key"));
++    expect(box.ptt!.phase).toBe("listening");
++    act(() => streams.last!.events.onText(" the"));
++    act(() => streams.last!.events.onText(" flaky"));
++    expect(box.ta!.value).toBe("Fix the flaky please");
++    expect(box.ptt!.region).toMatchObject({ before: "Fix ", final: "the flaky" });
++
++    now += 2000;
++    act(() => box.ptt!.release());
++    expect(box.ptt!.phase).toBe("finishing");
++    expect(streams.last!.stop).toHaveBeenCalled();
++    act(() => streams.last!.events.onText(" test"));
++    await act(async () => streams.last!.finish());
++    expect(box.ptt!.phase).toBe("idle");
++    expect(box.ta!.value).toBe("Fix the flaky test please");
++  });
++
++  it("dims Deepgram's unsure words, and keeps them if they never settle", async () => {
++    const box = renderComposer();
++    act(() => box.ptt!.start("pointer"));
++    act(() => streams.last!.events.onText("Add a retry "));
++    act(() => streams.last!.events.onPartial("with back"));
++    expect(box.ptt!.region).toMatchObject({ final: "Add a retry ", partial: "with back" });
++    now += 2000;
++    act(() => box.ptt!.release());
++    await act(async () => streams.last!.finish());
++    expect(box.ta!.value).toBe("Add a retry with back");
++  });
++
++  it("puts the draft back on Esc and drops the stream", () => {
++    const box = renderComposer("Keep this");
++    act(() => box.ptt!.start("key"));
++    act(() => streams.last!.events.onText(" and this"));
++    expect(box.ta!.value).toBe("Keep this and this");
++    act(() => {
++      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape" }));
++    });
++    expect(streams.last!.cancel).toHaveBeenCalled();
++    expect(box.ptt!.phase).toBe("idle");
++    expect(box.ta!.value).toBe("Keep this");
++  });
++
++  it("starts and ends with the push-to-talk key, and drops a tap", async () => {
++    const box = renderComposer();
++    act(() => {
++      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Alt", code: "AltRight" }));
++    });
++    expect(box.ptt!.phase).toBe("listening");
++    now += 100;
++    act(() => {
++      window.dispatchEvent(new KeyboardEvent("keyup", { key: "Alt", code: "AltRight" }));
++    });
++    // Too short to be a take: nothing streams on, nothing is kept.
++    expect(streams.last!.cancel).toHaveBeenCalled();
++    expect(box.ptt!.phase).toBe("idle");
++  });
++
++  it("drops the take when the key turns out to be part of a shortcut", () => {
++    const box = renderComposer();
++    act(() => {
++      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Alt", code: "AltRight" }));
++    });
++    act(() => {
++      window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", code: "KeyE", altKey: true }));
++    });
++    expect(streams.last!.cancel).toHaveBeenCalled();
++    expect(box.ptt!.phase).toBe("idle");
++  });
++
++  it("ends a take when the window loses focus", () => {
++    const box = renderComposer();
++    act(() => box.ptt!.start("key"));
++    now += 1500;
++    act(() => {
++      window.dispatchEvent(new Event("blur"));
++    });
++    expect(streams.last!.stop).toHaveBeenCalled();
++    expect(box.ptt!.phase).toBe("finishing");
++  });
++
++  it("sends the words when you let go, if that's the setting", async () => {
++    localStorage.setItem("omnigent:push-to-talk", JSON.stringify({ afterRelease: "send" }));
++    const onSend = vi.fn();
++    const box = renderComposer("", onSend);
++    act(() => box.ptt!.start("pointer"));
++    act(() => streams.last!.events.onText(" Ship it."));
++    now += 1500;
++    act(() => box.ptt!.release());
++    await act(async () => streams.last!.finish());
++    expect(box.ta!.value).toBe("Ship it.");
++    expect(onSend).toHaveBeenCalledTimes(1);
++  });
++
++  it("stays off without a speech server", () => {
++    serverInfo.push_to_talk_url = null;
++    const box = renderComposer();
++    expect(box.ptt!.available).toBe(false);
++    act(() => box.ptt!.start("key"));
++    expect(box.ptt!.phase).toBe("idle");
++  });
++});
+diff --git a/web/src/hooks/usePushToTalk.ts b/web/src/hooks/usePushToTalk.ts
+new file mode 100644
+index 0000000..3f525e4
+--- /dev/null
++++ b/web/src/hooks/usePushToTalk.ts
+@@ -0,0 +1,417 @@
++// Push-to-talk in a composer: hold a key or the mic button, talk, let go.
++//
++// The words stream into the draft at the caret while the person talks (see
++// lib/pushToTalk.ts for the transport). The draft is rebuilt on every update
++// from what it was when the take started, so a take only ever owns its own
++// span: `before + lead + words + trail + after`. The textarea is read-only for
++// the take, so nothing else edits it meanwhile; Esc, or sliding off the
++// button on a phone, puts the draft back as it was.
++//
++// A take ends when the key or button is let go, and also when the window
++// loses focus or the tab is hidden (the key-up would never arrive), and after
++// PUSH_TO_TALK_MAX_TAKE_MS. The microphone and the socket close with it.
++
++import { type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
++import { showToast } from "@/components/ui/toast";
++import { useServerInfo } from "@/lib/CapabilitiesContext";
++import {
++  PUSH_TO_TALK_MAX_TAKE_MS,
++  PUSH_TO_TALK_MIN_TAKE_MS,
++  PushToTalkStream,
++  readPushToTalkSettings,
++  usePushToTalkSettings,
++  type PushToTalkSettings,
++} from "@/lib/pushToTalk";
++
++export type PushToTalkPhase = "idle" | "listening" | "finishing";
++export type PushToTalkSource = "key" | "pointer";
++
++/** The take's span of the draft, for the composer's word-by-word backdrop. */
++export interface PushToTalkRegion {
++  before: string;
++  lead: string;
++  /** Words the server won't change. */
++  final: string;
++  /** Words that may still change (Deepgram). */
++  partial: string;
++  trail: string;
++  after: string;
++}
++
++/** The draft a region spells out; it must equal the draft to be drawn over it. */
++export function pushToTalkRegionText(region: PushToTalkRegion): string {
++  return region.before + region.lead + region.final + region.partial + region.trail + region.after;
++}
++
++/** Characters the dictated words sit flush against, on either side. */
++const HUGS_RIGHT = /[\s([{<]$/;
++const HUGS_LEFT = /^[\s,.;:!?)\]}>]/;
++/** How long the backdrop stays after a take, so the last words finish fading in. */
++const SETTLE_MS = 700;
++
++function buildRegion(
++  base: string,
++  at: number,
++  final: string,
++  partial: string,
++): { region: PushToTalkRegion; value: string; caret: number } {
++  const before = base.slice(0, at);
++  const after = base.slice(at);
++  const finalShown = final.replace(/^\s+/, "");
++  const partialShown = finalShown ? partial : partial.replace(/^\s+/, "");
++  const spacer = finalShown && partialShown && !/\s$/.test(finalShown) ? " " : "";
++  const words = finalShown + spacer + partialShown;
++  const lead = words && before && !HUGS_RIGHT.test(before) ? " " : "";
++  const trail = words && after && !HUGS_LEFT.test(after) ? " " : "";
++  const region = {
++    before,
++    lead,
++    final: finalShown + spacer,
++    partial: partialShown,
++    trail,
++    after,
++  };
++  return {
++    region,
++    value: before + lead + words + trail + after,
++    caret: before.length + lead.length + words.length,
++  };
++}
++
++export interface UsePushToTalkOptions {
++  value: string;
++  setValue: (next: string) => void;
++  textareaRef: RefObject<HTMLTextAreaElement | null>;
++  /** False while the composer can't take input (read-only, sending, ...). */
++  enabled: boolean;
++  /** Sends the draft, for the "Send it" setting. */
++  onSend?: () => void;
++  /** Listen for the push-to-talk key. Enable on one mounted composer only. */
++  hotkey?: boolean;
++}
++
++export interface PushToTalk {
++  /** Whether this deployment has a speech server, so the button shows. */
++  available: boolean;
++  phase: PushToTalkPhase;
++  source: PushToTalkSource | null;
++  /** Whether the take started with a finger, which can slide off to cancel. */
++  touch: boolean;
++  /** When the take started (performance.now()), for the timer. */
++  startedAt: number;
++  /** When the person let go, or null while they're still talking. */
++  releasedAt: number | null;
++  region: PushToTalkRegion | null;
++  settings: PushToTalkSettings;
++  server: string | null;
++  start: (source: PushToTalkSource, touch?: boolean) => void;
++  release: () => void;
++  cancel: () => void;
++  /** How loud the microphone is, from 0 to 1. */
++  level: () => number;
++}
++
++export function usePushToTalk({
++  value,
++  setValue,
++  textareaRef,
++  enabled,
++  onSend,
++  hotkey = false,
++}: UsePushToTalkOptions): PushToTalk {
++  const info = useServerInfo();
++  const server = info !== "loading" ? (info.push_to_talk_url ?? null) : null;
++  const settings = usePushToTalkSettings();
++  const available = server !== null;
++
++  const [phase, setPhase] = useState<PushToTalkPhase>("idle");
++  const [source, setSource] = useState<PushToTalkSource | null>(null);
++  const [touch, setTouch] = useState(false);
++  const [region, setRegion] = useState<PushToTalkRegion | null>(null);
++  const [startedAt, setStartedAt] = useState(0);
++  const [releasedAt, setReleasedAt] = useState<number | null>(null);
++
++  const streamRef = useRef<PushToTalkStream | null>(null);
++  const phaseRef = useRef<PushToTalkPhase>("idle");
++  const sourceRef = useRef<PushToTalkSource | null>(null);
++  const takeRef = useRef<{
++    base: string;
++    at: number;
++    final: string;
++    partial: string;
++    written: string;
++    startedAt: number;
++    caret: number;
++  } | null>(null);
++  const valueRef = useRef(value);
++  valueRef.current = value;
++  const sendAfterRef = useRef<string | null>(null);
++  // Bumped to run the send effect even when the finished draft reads as before.
++  const [sendNonce, setSendNonce] = useState(0);
++  const caretRef = useRef<number | null>(null);
++  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const maxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const onSendRef = useRef(onSend);
++  onSendRef.current = onSend;
++
++  const setPhaseBoth = useCallback((next: PushToTalkPhase) => {
++    phaseRef.current = next;
++    setPhase(next);
++  }, []);
++
++  const write = useCallback(() => {
++    const take = takeRef.current;
++    if (!take) return;
++    const built = buildRegion(take.base, take.at, take.final, take.partial);
++    take.written = built.value;
++    take.caret = built.caret;
++    caretRef.current = built.caret;
++    setRegion(built.region);
++    setValue(built.value);
++  }, [setValue]);
++
++  // Keep the caret right after the words while they arrive, where it's visible.
++  useLayoutEffect(() => {
++    const caret = caretRef.current;
++    const ta = textareaRef.current;
++    if (caret === null || !ta || ta !== document.activeElement) return;
++    caretRef.current = null;
++    ta.setSelectionRange(caret, caret);
++  });
++
++  const clearTimers = useCallback(() => {
++    if (maxTimer.current) clearTimeout(maxTimer.current);
++    maxTimer.current = null;
++  }, []);
++
++  const end = useCallback(
++    (keep: boolean) => {
++      const take = takeRef.current;
++      takeRef.current = null;
++      streamRef.current = null;
++      clearTimers();
++      setPhaseBoth("idle");
++      setSource(null);
++      sourceRef.current = null;
++      if (!take) return;
++      // Somebody else changed the draft (a session switch): it isn't ours.
++      if (valueRef.current !== take.written) {
++        setRegion(null);
++        return;
++      }
++      // Words Deepgram never finalized are still the person's words: keep them.
++      const gap = take.final && take.partial && !/\s$/.test(take.final) ? " " : "";
++      const words = (take.final + gap + take.partial).trim();
++      if (!keep || !words) {
++        setRegion(null);
++        setValue(take.base);
++        return;
++      }
++      const built = buildRegion(take.base, take.at, words, "");
++      caretRef.current = built.caret;
++      setRegion(built.region);
++      setValue(built.value);
++      if (settleTimer.current) clearTimeout(settleTimer.current);
++      settleTimer.current = setTimeout(() => setRegion(null), SETTLE_MS);
++      if (readPushToTalkSettings().afterRelease === "send") {
++        sendAfterRef.current = built.value;
++        setSendNonce((n) => n + 1);
++      }
++    },
++    [clearTimers, setPhaseBoth, setValue],
++  );
++
++  // "Send it": send once the composer has rendered the finished draft.
++  useEffect(() => {
++    if (sendAfterRef.current !== null && sendAfterRef.current === value) {
++      sendAfterRef.current = null;
++      onSendRef.current?.();
++    }
++  }, [value, sendNonce]);
++
++  const cancel = useCallback(() => {
++    const stream = streamRef.current;
++    if (phaseRef.current === "idle") return;
++    stream?.cancel();
++    end(false);
++  }, [end]);
++
++  const release = useCallback(() => {
++    const take = takeRef.current;
++    const stream = streamRef.current;
++    if (phaseRef.current !== "listening" || !take || !stream) return;
++    if (performance.now() - take.startedAt < PUSH_TO_TALK_MIN_TAKE_MS) {
++      stream.cancel();
++      end(false);
++      showToast(
++        sourceRef.current === "key"
++          ? `Hold ${readPushToTalkSettings().key.label} while you talk.`
++          : "Hold the mic button while you talk.",
++        { duration: 2500 },
++      );
++      return;
++    }
++    clearTimers();
++    setPhaseBoth("finishing");
++    setReleasedAt(performance.now());
++    void stream.stop().then(() => {
++      if (streamRef.current === stream) end(true);
++    });
++  }, [clearTimers, end, setPhaseBoth]);
++
++  const start = useCallback(
++    (from: PushToTalkSource, byTouch = false) => {
++      if (!server || !enabled || phaseRef.current !== "idle") return;
++      const ta = textareaRef.current;
++      const base = valueRef.current;
++      // Insert at the caret when the composer has focus; at the end otherwise.
++      const at = ta && ta === document.activeElement ? ta.selectionEnd : base.length;
++      if (settleTimer.current) clearTimeout(settleTimer.current);
++      const now = performance.now();
++      takeRef.current = {
++        base,
++        at,
++        final: "",
++        partial: "",
++        written: base,
++        startedAt: now,
++        caret: at,
++      };
++      const stream = PushToTalkStream.start(server, readPushToTalkSettings(), {
++        onText: (text) => {
++          const take = takeRef.current;
++          if (!take || streamRef.current !== stream) return;
++          take.final += text;
++          write();
++        },
++        onPartial: (text) => {
++          const take = takeRef.current;
++          if (!take || streamRef.current !== stream) return;
++          take.partial = text;
++          write();
++        },
++        onError: (message) => {
++          if (streamRef.current !== stream) return;
++          // Keep the words that made it, and say what went wrong.
++          end(true);
++          showToast(message);
++        },
++      });
++      streamRef.current = stream;
++      sourceRef.current = from;
++      setSource(from);
++      setTouch(byTouch);
++      setStartedAt(now);
++      setReleasedAt(null);
++      setRegion(null);
++      setPhaseBoth("listening");
++      maxTimer.current = setTimeout(() => release(), PUSH_TO_TALK_MAX_TAKE_MS);
++    },
++    [enabled, end, release, server, setPhaseBoth, textareaRef, write],
++  );
++
++  // Losing focus or hiding the tab ends a take: the key-up would never arrive.
++  useEffect(() => {
++    if (phase !== "listening") return;
++    const onBlur = () => release();
++    const onVisibility = () => {
++      if (document.hidden) release();
++    };
++    window.addEventListener("blur", onBlur);
++    document.addEventListener("visibilitychange", onVisibility);
++    return () => {
++      window.removeEventListener("blur", onBlur);
++      document.removeEventListener("visibilitychange", onVisibility);
++    };
++  }, [phase, release]);
++
++  // The push-to-talk key, and Esc to cancel a take however it started.
++  useEffect(() => {
++    if (!hotkey && phase === "idle") return;
++    const onKeyDown = (event: KeyboardEvent) => {
++      const current = phaseRef.current;
++      if (current !== "idle" && event.key === "Escape") {
++        event.preventDefault();
++        event.stopPropagation();
++        cancel();
++        return;
++      }
++      if (!hotkey) return;
++      const key = readPushToTalkSettings().key;
++      if (event.code === key.code) {
++        if (current === "idle" && !event.repeat && canStartFrom(event.target, textareaRef)) {
++          event.preventDefault();
++          start("key");
++        } else if (current !== "idle") {
++          event.preventDefault();
++        }
++        return;
++      }
++      // The key held with another key is a shortcut or a special character.
++      if (current === "listening" && sourceRef.current === "key") cancel();
++    };
++    const onKeyUp = (event: KeyboardEvent) => {
++      if (!hotkey) return;
++      if (event.code === readPushToTalkSettings().key.code && sourceRef.current === "key") {
++        event.preventDefault();
++        release();
++      }
++    };
++    window.addEventListener("keydown", onKeyDown, true);
++    window.addEventListener("keyup", onKeyUp, true);
++    return () => {
++      window.removeEventListener("keydown", onKeyDown, true);
++      window.removeEventListener("keyup", onKeyUp, true);
++    };
++  }, [cancel, hotkey, phase, release, start, textareaRef]);
++
++  // Unmounting mid-take (leaving the session) drops it.
++  useEffect(
++    () => () => {
++      streamRef.current?.cancel();
++      streamRef.current = null;
++      if (maxTimer.current) clearTimeout(maxTimer.current);
++      if (settleTimer.current) clearTimeout(settleTimer.current);
++    },
++    [],
++  );
++
++  // A disabled composer (the agent took it over, it went read-only) ends a take.
++  useEffect(() => {
++    if (!enabled && phaseRef.current === "listening") release();
++  }, [enabled, release]);
++
++  const level = useCallback(() => streamRef.current?.level() ?? 0, []);
++
++  return {
++    available,
++    phase,
++    source,
++    touch,
++    startedAt,
++    releasedAt,
++    region,
++    settings,
++    server,
++    start,
++    release,
++    cancel,
++    level,
++  };
++}
++
++/** Whether the push-to-talk key may start a take while focus is on *target*. */
++function canStartFrom(
++  target: EventTarget | null,
++  textareaRef: RefObject<HTMLTextAreaElement | null>,
++): boolean {
++  if (!(target instanceof HTMLElement)) return true;
++  if (target === textareaRef.current) return true;
++  // Another text field keeps its keys: typing there isn't dictation.
++  if (target.isContentEditable) return false;
++  if (target instanceof HTMLTextAreaElement) return false;
++  if (target instanceof HTMLInputElement) {
++    return ["button", "checkbox", "radio", "range", "submit", "reset"].includes(target.type);
++  }
++  return true;
++}
+diff --git a/web/src/index.css b/web/src/index.css
+index 345d11d..45aba47 100644
+--- a/web/src/index.css
++++ b/web/src/index.css
+@@ -5,6 +5,7 @@
+ @import "@fontsource-variable/geist-mono";
+ @import "./themePalettes.generated.css";
+ @import "./codexTheme.css";
++@import "./pushToTalk.css";
+ 
+ /* Streamdown ships utility classes pre-compiled in its dist; this @source
+  * pragma tells Tailwind v4 to scan those files so the classes survive the
+diff --git a/web/src/lib/capabilities.ts b/web/src/lib/capabilities.ts
+index 4e8b90f..5126e4c 100644
+--- a/web/src/lib/capabilities.ts
++++ b/web/src/lib/capabilities.ts
+@@ -211,6 +211,12 @@ export interface ServerInfo {
+    * backend (Electron, Firefox/Chromium).
+    */
+   dictation_available: boolean;
++  /**
++   * The deployment's push-to-talk speech server, e.g.
++   * ``wss://mac-mini.tailnet.ts.net:8443`` (``push_to_talk_url``), or null
++   * when it has none. Shows the composer's hold-to-talk mic button.
++   */
++  push_to_talk_url?: string | null;
+   /**
+    * True when the archive PATCH accepts ``delete_worktree``. Older servers
+    * reject the unknown field, so the archive worktree prompt and setting are
+@@ -284,6 +290,7 @@ export const FALLBACK_SERVER_INFO: ServerInfo = {
+   harness_install_enabled: false,
+   installable_harnesses: [],
+   dictation_available: false,
++  push_to_talk_url: null,
+   archive_worktree_cleanup: false,
+   branding: null,
+ };
+@@ -396,6 +403,10 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
+             ? data.installable_harnesses.filter((h): h is string => typeof h === "string")
+             : [],
+           dictation_available: data.dictation_available === true,
++          push_to_talk_url:
++            typeof data.push_to_talk_url === "string" && data.push_to_talk_url !== ""
++              ? data.push_to_talk_url
++              : null,
+           archive_worktree_cleanup: data.archive_worktree_cleanup === true,
+           agent_install: data.agent_install === true,
+           agent_detail: data.agent_detail === true,
+diff --git a/web/src/lib/pushToTalk.test.ts b/web/src/lib/pushToTalk.test.ts
+new file mode 100644
+index 0000000..31691d3
+--- /dev/null
++++ b/web/src/lib/pushToTalk.test.ts
+@@ -0,0 +1,192 @@
++// Tests for push-to-talk's settings and its socket to the speech server.
++
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  DEFAULT_PUSH_TO_TALK_SETTINGS,
++  PushToTalkStream,
++  parsePushToTalkMessage,
++  pushToTalkHttpUrl,
++  pushToTalkKeyLabel,
++  pushToTalkStreamUrl,
++  readPushToTalkSettings,
++  writePushToTalkSettings,
++} from "./pushToTalk";
++
++describe("push-to-talk settings", () => {
++  beforeEach(() => localStorage.clear());
++
++  it("starts on Voxtral, Right ⌥ and keeping the words", () => {
++    expect(readPushToTalkSettings()).toEqual(DEFAULT_PUSH_TO_TALK_SETTINGS);
++  });
++
++  it("keeps what's written, and ignores what it can't read", () => {
++    writePushToTalkSettings({ engine: "deepgram", hints: ["Omnigent"], afterRelease: "send" });
++    expect(readPushToTalkSettings()).toMatchObject({
++      engine: "deepgram",
++      hints: ["Omnigent"],
++      afterRelease: "send",
++      key: { code: "AltRight" },
++    });
++    localStorage.setItem("omnigent:push-to-talk", '{"engine":"whisper","hints":[1,"k3s",""]}');
++    expect(readPushToTalkSettings()).toMatchObject({ engine: "local", hints: ["k3s"] });
++    localStorage.setItem("omnigent:push-to-talk", "not json");
++    expect(readPushToTalkSettings()).toEqual(DEFAULT_PUSH_TO_TALK_SETTINGS);
++  });
++
++  it("names keys the way a keyboard shows them", () => {
++    expect(pushToTalkKeyLabel("AltRight", "Alt")).toBe("Right ⌥");
++    expect(pushToTalkKeyLabel("F13", "F13")).toBe("F13");
++    expect(pushToTalkKeyLabel("KeyD", "d")).toBe("D");
++  });
++});
++
++describe("the speech server's URLs", () => {
++  it("asks for the chosen engine at Voxtral's 480 ms delay, with hints where they work", () => {
++    const local = new URL(
++      pushToTalkStreamUrl("wss://mac-mini.tail.ts.net:8443/", {
++        ...DEFAULT_PUSH_TO_TALK_SETTINGS,
++        hints: ["Omnigent"],
++      }),
++    );
++    expect(local.origin + local.pathname).toBe("wss://mac-mini.tail.ts.net:8443/stream");
++    expect(local.searchParams.get("engines")).toBe("local");
++    expect(local.searchParams.get("delay")).toBe("480");
++    // Voxtral on the server can't take hints, so none are sent.
++    expect(local.searchParams.getAll("hint")).toEqual([]);
++
++    const cloud = new URL(
++      pushToTalkStreamUrl("https://speech.example", {
++        ...DEFAULT_PUSH_TO_TALK_SETTINGS,
++        engine: "cloud",
++        hints: ["Omnigent", "k3s"],
++      }),
++    );
++    expect(cloud.protocol).toBe("wss:");
++    expect(cloud.searchParams.getAll("hint")).toEqual(["Omnigent", "k3s"]);
++  });
++
++  it("checks the server over https", () => {
++    expect(pushToTalkHttpUrl("wss://mac-mini.tail.ts.net:8443")).toBe(
++      "https://mac-mini.tail.ts.net:8443",
++    );
++  });
++});
++
++describe("parsePushToTalkMessage", () => {
++  it("reads the engine's frames and drops other engines'", () => {
++    expect(parsePushToTalkMessage('{"type":"ready","engines":["local"]}', "local")).toEqual({
++      type: "ready",
++    });
++    expect(
++      parsePushToTalkMessage('{"source":"local","type":"text","text":" Hi"}', "local"),
++    ).toEqual({ type: "text", text: " Hi" });
++    expect(parsePushToTalkMessage('{"source":"cloud","type":"text","text":"x"}', "local")).toBe(
++      null,
++    );
++    expect(
++      parsePushToTalkMessage('{"source":"deepgram","type":"partial","text":"hel"}', "deepgram"),
++    ).toEqual({ type: "partial", text: "hel" });
++    expect(
++      parsePushToTalkMessage('{"source":"local","type":"error","message":"busy"}', "local"),
++    ).toEqual({ type: "error", message: "busy" });
++    expect(parsePushToTalkMessage("garbage", "local")).toBe(null);
++  });
++});
++
++class FakeSocket extends EventTarget {
++  static last: FakeSocket | null = null;
++  static OPEN = 1;
++  static CONNECTING = 0;
++  readyState = 0;
++  binaryType = "blob";
++  sent: unknown[] = [];
++  url: string;
++  constructor(url: string) {
++    super();
++    this.url = url;
++    FakeSocket.last = this;
++  }
++  send(data: unknown) {
++    this.sent.push(data);
++  }
++  close() {
++    if (this.readyState === 3) return;
++    this.readyState = 3;
++    this.dispatchEvent(new Event("close"));
++  }
++  open() {
++    this.readyState = 1;
++    this.dispatchEvent(new Event("open"));
++  }
++  message(data: object) {
++    this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(data) }));
++  }
++}
++
++describe("PushToTalkStream", () => {
++  const track = { stop: vi.fn() };
++  beforeEach(() => {
++    vi.stubGlobal("WebSocket", FakeSocket);
++    track.stop.mockClear();
++    vi.stubGlobal("navigator", {
++      mediaDevices: { getUserMedia: vi.fn(async () => ({ getTracks: () => [track] })) },
++    });
++    // No AudioContext in jsdom: the microphone opens, the graph fails, and
++    // the stream reports it, which the tests below don't reach.
++  });
++  afterEach(() => vi.unstubAllGlobals());
++
++  it("streams the engine's words and stops on request", async () => {
++    const events = { onText: vi.fn(), onPartial: vi.fn(), onError: vi.fn() };
++    const stream = PushToTalkStream.start(
++      "wss://speech.example",
++      DEFAULT_PUSH_TO_TALK_SETTINGS,
++      events,
++    );
++    const ws = FakeSocket.last!;
++    ws.open();
++    ws.message({ type: "ready" });
++    ws.message({ source: "local", type: "text", text: " Hello" });
++    ws.message({ source: "cloud", type: "text", text: " ignored" });
++    expect(events.onText).toHaveBeenCalledWith(" Hello");
++    expect(events.onText).toHaveBeenCalledTimes(1);
++
++    const stopped = stream.stop();
++    await vi.waitFor(() => expect(ws.sent).toContainEqual(JSON.stringify({ type: "stop" })));
++    ws.message({ source: "local", type: "done", tail: 0.8 });
++    ws.close();
++    await stopped;
++    expect(events.onError).not.toHaveBeenCalled();
++  });
++
++  it("closes at once when cancelled, releasing the microphone", async () => {
++    const events = { onText: vi.fn(), onPartial: vi.fn(), onError: vi.fn() };
++    const stream = PushToTalkStream.start(
++      "wss://speech.example",
++      DEFAULT_PUSH_TO_TALK_SETTINGS,
++      events,
++    );
++    const ws = FakeSocket.last!;
++    ws.open();
++    stream.cancel();
++    expect(ws.readyState).toBe(3);
++    expect(events.onError).not.toHaveBeenCalled();
++  });
++
++  it("reports the server's error, such as a busy model, and closes", () => {
++    const events = { onText: vi.fn(), onPartial: vi.fn(), onError: vi.fn() };
++    PushToTalkStream.start("wss://speech.example", DEFAULT_PUSH_TO_TALK_SETTINGS, events);
++    const ws = FakeSocket.last!;
++    ws.open();
++    ws.message({ source: "local", type: "error", message: "Someone else is using the model." });
++    expect(events.onError).toHaveBeenCalledWith("Someone else is using the model.");
++    expect(ws.readyState).toBe(3);
++  });
++
++  it("says so when the server can't be reached", () => {
++    const events = { onText: vi.fn(), onPartial: vi.fn(), onError: vi.fn() };
++    PushToTalkStream.start("wss://speech.example", DEFAULT_PUSH_TO_TALK_SETTINGS, events);
++    FakeSocket.last!.dispatchEvent(new Event("error"));
++    expect(events.onError).toHaveBeenCalledWith("Omnigent can't reach the speech server.");
++  });
++});
+diff --git a/web/src/lib/pushToTalk.ts b/web/src/lib/pushToTalk.ts
+new file mode 100644
+index 0000000..db022af
+--- /dev/null
++++ b/web/src/lib/pushToTalk.ts
+@@ -0,0 +1,538 @@
++// Push-to-talk dictation through this deployment's own speech server.
++//
++// The server (`push_to_talk_url` in the deployment's environment, advertised
++// as `push_to_talk_url` by GET /v1/info) is a Voxtral Realtime server on the
++// user's tailnet. It transcribes with Voxtral on its own machine, or relays
++// the same audio to Mistral's hosted Voxtral or to Deepgram Nova-3, and
++// streams the words back as they're recognized. The browser talks to it
++// directly over a WebSocket:
++//
++//   wss://<server>/stream?engines=local&delay=480&hint=Omnigent
++//   → binary frames: 16 kHz mono s16le PCM, as it's recorded
++//   → {"type": "stop"} when the person lets go
++//   ← {"type": "ready"}, then per engine {"type": "text"|"partial"|"done"|"error", ...}
++//
++// One PushToTalkStream is one take: it owns the microphone, an AudioWorklet
++// that converts the capture to 16 kHz PCM, and the socket. The socket and the
++// microphone open together, so the first words aren't lost while either
++// starts; audio captured before the server says "ready" is held and sent then.
++// Everything is released the moment the take ends: the microphone and the
++// socket close, so nothing streams (or is billed) once the person lets go.
++
++import { useSyncExternalStore } from "react";
++
++export type PushToTalkEngine = "local" | "cloud" | "deepgram";
++
++export interface PushToTalkEngineInfo {
++  id: PushToTalkEngine;
++  name: string;
++  /** Short name for the listening bar, e.g. "Voxtral · Mac". */
++  short: string;
++  description: string;
++  /** Whether a take costs money (the server relays it to a paid service). */
++  billed: boolean;
++  /** Whether the engine can use the words to listen for. */
++  hints: boolean;
++}
++
++export const PUSH_TO_TALK_ENGINES: readonly PushToTalkEngineInfo[] = [
++  {
++    id: "local",
++    name: "Voxtral on your server",
++    short: "Voxtral",
++    description:
++      "Runs on the speech server's own machine, so it's free and stays private. Last words arrive about 0.8 s after you let go.",
++    billed: false,
++    hints: false,
++  },
++  {
++    id: "cloud",
++    name: "Voxtral on Mistral's cloud",
++    short: "Voxtral cloud",
++    description:
++      "The same model on Mistral's servers. It listens for your words below. Last words arrive about 1.3 s after you let go.",
++    billed: true,
++    hints: true,
++  },
++  {
++    id: "deepgram",
++    name: "Deepgram Nova-3",
++    short: "Nova-3",
++    description:
++      "Shows words while you're still saying them, then corrects them. Last words arrive about 0.2 s after you let go.",
++    billed: true,
++    hints: true,
++  },
++];
++
++export function pushToTalkEngine(id: PushToTalkEngine): PushToTalkEngineInfo {
++  return PUSH_TO_TALK_ENGINES.find((engine) => engine.id === id) ?? PUSH_TO_TALK_ENGINES[0];
++}
++
++export interface PushToTalkKey {
++  /** KeyboardEvent.code, e.g. "AltRight". */
++  code: string;
++  label: string;
++}
++
++export interface PushToTalkSettings {
++  engine: PushToTalkEngine;
++  key: PushToTalkKey;
++  /** Names and jargon to listen for (Mistral's context bias, Deepgram's keyterms). */
++  hints: string[];
++  /** What letting go does: leave the words in the composer, or send them. */
++  afterRelease: "keep" | "send";
++}
++
++export const DEFAULT_PUSH_TO_TALK_SETTINGS: PushToTalkSettings = {
++  engine: "local",
++  key: { code: "AltRight", label: "Right ⌥" },
++  hints: [],
++  afterRelease: "keep",
++};
++
++/** How long a take may last. The server stops one at 2 minutes too. */
++export const PUSH_TO_TALK_MAX_TAKE_MS = 120_000;
++/** A press shorter than this is a tap, not a take, and is dropped. */
++export const PUSH_TO_TALK_MIN_TAKE_MS = 300;
++/** The Voxtral delay: how far the text may trail the voice. 480 ms is Mistral's recommendation. */
++const VOXTRAL_DELAY_MS = 480;
++/** How long to wait for the last words after letting go before closing anyway. */
++const STOP_TIMEOUT_MS = 10_000;
++/** At most this much audio is held while the socket opens (16 kHz × 2 bytes × 10 s). */
++const MAX_PENDING_BYTES = 320_000;
++
++const STORAGE_KEY = "omnigent:push-to-talk";
++const KEY_LABELS: Record<string, string> = {
++  AltRight: "Right ⌥",
++  AltLeft: "Left ⌥",
++  ControlRight: "Right Ctrl",
++  ControlLeft: "Left Ctrl",
++  MetaRight: "Right ⌘",
++  MetaLeft: "Left ⌘",
++  ShiftRight: "Right Shift",
++  ShiftLeft: "Left Shift",
++  CapsLock: "Caps Lock",
++  Space: "Space",
++  Backquote: "`",
++};
++
++/** A readable name for the key a KeyboardEvent reports. */
++export function pushToTalkKeyLabel(code: string, key: string): string {
++  if (KEY_LABELS[code]) return KEY_LABELS[code];
++  if (/^F\d+$/.test(code)) return code;
++  if (key.length === 1) return key.toUpperCase();
++  return key || code;
++}
++
++function parseSettings(raw: string | null): PushToTalkSettings {
++  if (!raw) return DEFAULT_PUSH_TO_TALK_SETTINGS;
++  try {
++    const data = JSON.parse(raw) as Partial<PushToTalkSettings>;
++    const engine = PUSH_TO_TALK_ENGINES.some((e) => e.id === data.engine)
++      ? (data.engine as PushToTalkEngine)
++      : DEFAULT_PUSH_TO_TALK_SETTINGS.engine;
++    const key =
++      data.key && typeof data.key.code === "string" && typeof data.key.label === "string"
++        ? { code: data.key.code, label: data.key.label }
++        : DEFAULT_PUSH_TO_TALK_SETTINGS.key;
++    const hints = Array.isArray(data.hints)
++      ? data.hints.filter((h): h is string => typeof h === "string" && h.trim() !== "")
++      : [];
++    const afterRelease = data.afterRelease === "send" ? "send" : "keep";
++    return { engine, key, hints, afterRelease };
++  } catch {
++    return DEFAULT_PUSH_TO_TALK_SETTINGS;
++  }
++}
++
++let cachedRaw: string | null | undefined;
++let cachedSettings = DEFAULT_PUSH_TO_TALK_SETTINGS;
++const listeners = new Set<() => void>();
++
++function readRaw(): string | null {
++  try {
++    return window.localStorage.getItem(STORAGE_KEY);
++  } catch {
++    return null;
++  }
++}
++
++/** This browser's push-to-talk settings. */
++export function readPushToTalkSettings(): PushToTalkSettings {
++  const raw = typeof window === "undefined" ? null : readRaw();
++  if (raw !== cachedRaw) {
++    cachedRaw = raw;
++    cachedSettings = parseSettings(raw);
++  }
++  return cachedSettings;
++}
++
++export function writePushToTalkSettings(patch: Partial<PushToTalkSettings>): void {
++  const next = { ...readPushToTalkSettings(), ...patch };
++  try {
++    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
++  } catch {
++    // Private mode or blocked storage: keep it for this page only.
++    cachedRaw = JSON.stringify(next);
++    cachedSettings = next;
++  }
++  for (const listener of listeners) listener();
++}
++
++function subscribe(listener: () => void): () => void {
++  listeners.add(listener);
++  const onStorage = (event: StorageEvent) => {
++    if (event.key === STORAGE_KEY) listener();
++  };
++  window.addEventListener("storage", onStorage);
++  return () => {
++    listeners.delete(listener);
++    window.removeEventListener("storage", onStorage);
++  };
++}
++
++export function usePushToTalkSettings(): PushToTalkSettings {
++  return useSyncExternalStore(
++    subscribe,
++    readPushToTalkSettings,
++    () => DEFAULT_PUSH_TO_TALK_SETTINGS,
++  );
++}
++
++/** The speech server's /stream URL for a take with these settings. */
++export function pushToTalkStreamUrl(server: string, settings: PushToTalkSettings): string {
++  const base = server.replace(/\/+$/, "").replace(/^http(s?):/, "ws$1:");
++  const query = new URLSearchParams({ engines: settings.engine, delay: String(VOXTRAL_DELAY_MS) });
++  if (pushToTalkEngine(settings.engine).hints) {
++    for (const hint of settings.hints.slice(0, 100)) query.append("hint", hint);
++  }
++  return `${base}/stream?${query}`;
++}
++
++/** The speech server's https:// address, for checking it's reachable. */
++export function pushToTalkHttpUrl(server: string): string {
++  return server.replace(/\/+$/, "").replace(/^ws(s?):/, "http$1:");
++}
++
++/** One message from the speech server, for the engine this take uses. */
++export type PushToTalkMessage =
++  | { type: "ready" }
++  | { type: "text"; text: string }
++  | { type: "partial"; text: string }
++  | { type: "done" }
++  | { type: "error"; message: string };
++
++/** Parse a frame from the server; null for anything else, including other engines' frames. */
++export function parsePushToTalkMessage(
++  raw: string,
++  engine: PushToTalkEngine,
++): PushToTalkMessage | null {
++  let data: unknown;
++  try {
++    data = JSON.parse(raw);
++  } catch {
++    return null;
++  }
++  if (typeof data !== "object" || data === null) return null;
++  const frame = data as { type?: unknown; source?: unknown; text?: unknown; message?: unknown };
++  if (frame.type === "ready") return { type: "ready" };
++  if (frame.source !== undefined && frame.source !== engine) return null;
++  switch (frame.type) {
++    case "text":
++    case "partial":
++      return typeof frame.text === "string" ? { type: frame.type, text: frame.text } : null;
++    case "done":
++      return { type: "done" };
++    case "error":
++      return {
++        type: "error",
++        message: typeof frame.message === "string" ? frame.message : "The speech server failed.",
++      };
++    default:
++      return null;
++  }
++}
++
++export interface PushToTalkStreamEvents {
++  /** New final words; append them as they are (they carry their own spaces). */
++  onText: (text: string) => void;
++  /** Words that may still change (Deepgram); replaces the previous partial. */
++  onPartial: (text: string) => void;
++  /** The take failed. The stream has already released the microphone and socket. */
++  onError: (message: string) => void;
++}
++
++const TARGET_RATE = 16_000;
++
++// AudioWorklet processor, inlined as a Blob module so no separate asset has to
++// survive the build: linear-interpolation downsample from the capture rate to
++// 16 kHz, Float32 → Int16, posted in 80 ms chunks (Voxtral's frame). Any
++// message on the port means "flush": the partial chunk is posted, then null.
++const WORKLET_SOURCE = `
++const TARGET_RATE = ${TARGET_RATE};
++const CHUNK_SAMPLES = 1280;
++class PushToTalkPcm16 extends AudioWorkletProcessor {
++  constructor() {
++    super();
++    this.step = sampleRate / TARGET_RATE;
++    this.pos = 0;
++    this.pending = new Int16Array(CHUNK_SAMPLES);
++    this.filled = 0;
++    this.port.onmessage = () => {
++      if (this.filled > 0) {
++        const out = this.pending.slice(0, this.filled);
++        this.filled = 0;
++        this.port.postMessage(out, [out.buffer]);
++      }
++      this.port.postMessage(null);
++    };
++  }
++  process(inputs) {
++    const channel = inputs[0] && inputs[0][0];
++    if (!channel || channel.length === 0) return true;
++    let pos = this.pos;
++    while (pos < channel.length) {
++      const i = Math.floor(pos);
++      const s0 = channel[i];
++      const s1 = i + 1 < channel.length ? channel[i + 1] : s0;
++      const sample = Math.max(-1, Math.min(1, s0 + (s1 - s0) * (pos - i)));
++      this.pending[this.filled++] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
++      if (this.filled === CHUNK_SAMPLES) {
++        const out = this.pending;
++        this.pending = new Int16Array(CHUNK_SAMPLES);
++        this.filled = 0;
++        this.port.postMessage(out, [out.buffer]);
++      }
++      pos += this.step;
++    }
++    this.pos = pos - channel.length;
++    return true;
++  }
++}
++registerProcessor("omnigent-push-to-talk-pcm16", PushToTalkPcm16);
++`;
++
++let cachedWorkletUrl: string | null = null;
++
++function workletUrl(): string {
++  cachedWorkletUrl ??= URL.createObjectURL(
++    new Blob([WORKLET_SOURCE], { type: "application/javascript" }),
++  );
++  return cachedWorkletUrl;
++}
++
++function microphoneError(error: unknown): string {
++  if (error instanceof DOMException) {
++    if (error.name === "NotAllowedError" || error.name === "SecurityError") {
++      return "Omnigent isn't allowed to use the microphone. Allow it in the browser's site settings, then try again.";
++    }
++    if (error.name === "NotFoundError") return "No microphone was found.";
++  }
++  return "The microphone couldn't be opened.";
++}
++
++/**
++ * One take: the microphone, its conversion to PCM, and the socket to the
++ * speech server. Start it with {@link PushToTalkStream.start}; end it with
++ * {@link stop} (waits for the last words) or {@link cancel} (drops them).
++ */
++export class PushToTalkStream {
++  private readonly events: PushToTalkStreamEvents;
++  private readonly engine: PushToTalkEngine;
++  private readonly ws: WebSocket;
++  private media: MediaStream | null = null;
++  private context: AudioContext | null = null;
++  private node: AudioWorkletNode | null = null;
++  private analyser: AnalyserNode | null = null;
++  private samples: Float32Array<ArrayBuffer> | null = null;
++  private pending: ArrayBuffer[] = [];
++  private pendingBytes = 0;
++  private ready = false;
++  private stopping = false;
++  private finished = false;
++  private flushed: (() => void) | null = null;
++  private closed: Promise<void>;
++
++  private constructor(url: string, engine: PushToTalkEngine, events: PushToTalkStreamEvents) {
++    this.events = events;
++    this.engine = engine;
++    this.ws = new WebSocket(url);
++    this.ws.binaryType = "arraybuffer";
++    this.closed = new Promise((resolve) => {
++      this.ws.addEventListener("close", () => resolve());
++    });
++    this.ws.addEventListener("message", (event) => this.receive(event));
++    this.ws.addEventListener("error", () => {
++      if (!this.ready) this.fail("Omnigent can't reach the speech server.");
++    });
++    this.ws.addEventListener("close", () => {
++      this.releaseAudio();
++      if (!this.stopping && !this.finished) this.fail("The speech server closed the connection.");
++    });
++  }
++
++  /** Open the microphone and the socket together, and start streaming. */
++  static start(
++    server: string,
++    settings: PushToTalkSettings,
++    events: PushToTalkStreamEvents,
++  ): PushToTalkStream {
++    const stream = new PushToTalkStream(
++      pushToTalkStreamUrl(server, settings),
++      settings.engine,
++      events,
++    );
++    void stream.openMicrophone();
++    return stream;
++  }
++
++  /** How loud the microphone is right now, from 0 to 1. */
++  level(): number {
++    if (!this.analyser || !this.samples) return 0;
++    this.analyser.getFloatTimeDomainData(this.samples);
++    let sum = 0;
++    for (const sample of this.samples) sum += sample * sample;
++    // Speech sits around 0.02–0.2 RMS; scale that onto 0–1.
++    return Math.min(1, Math.sqrt(sum / this.samples.length) * 6);
++  }
++
++  /** Stop recording, wait for the last words, and close. */
++  async stop(): Promise<void> {
++    if (this.stopping || this.finished) return;
++    this.stopping = true;
++    await this.flushWorklet();
++    this.releaseAudio();
++    if (this.ready) this.sendStop();
++    else if (this.ws.readyState !== WebSocket.CONNECTING) this.ws.close();
++    // Not ready yet: receive() flushes the held audio and stops once it is.
++    const timeout = new Promise<void>((resolve) => {
++      setTimeout(resolve, STOP_TIMEOUT_MS);
++    });
++    await Promise.race([this.closed, timeout]);
++    this.finished = true;
++    this.ws.close();
++  }
++
++  /** Drop the take: release the microphone and close the socket now. */
++  cancel(): void {
++    this.finished = true;
++    this.releaseAudio();
++    this.ws.close();
++  }
++
++  private async openMicrophone(): Promise<void> {
++    let media: MediaStream;
++    try {
++      media = await navigator.mediaDevices.getUserMedia({
++        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
++      });
++    } catch (error) {
++      this.fail(microphoneError(error));
++      return;
++    }
++    if (this.stopping || this.finished) {
++      // Let go before the microphone opened: nothing to record.
++      for (const track of media.getTracks()) track.stop();
++      return;
++    }
++    this.media = media;
++    try {
++      // Ask for 16 kHz so the browser resamples; some platforms refuse the hint.
++      try {
++        this.context = new AudioContext({ sampleRate: TARGET_RATE });
++      } catch {
++        this.context = new AudioContext();
++      }
++      await this.context.audioWorklet.addModule(workletUrl());
++      if (this.finished || !this.media) return;
++      const source = this.context.createMediaStreamSource(media);
++      this.node = new AudioWorkletNode(this.context, "omnigent-push-to-talk-pcm16");
++      this.node.port.onmessage = (msg: MessageEvent<Int16Array<ArrayBuffer> | null>) => {
++        if (msg.data === null) {
++          this.flushed?.();
++          this.flushed = null;
++        } else {
++          this.send(msg.data.buffer);
++        }
++      };
++      this.analyser = this.context.createAnalyser();
++      this.analyser.fftSize = 1024;
++      this.samples = new Float32Array(this.analyser.fftSize);
++      // The worklet only runs while it reaches the destination; mute it there.
++      const mute = this.context.createGain();
++      mute.gain.value = 0;
++      source.connect(this.analyser);
++      source.connect(this.node);
++      this.node.connect(mute);
++      mute.connect(this.context.destination);
++    } catch {
++      this.fail("The microphone couldn't be opened.");
++    }
++  }
++
++  private send(chunk: ArrayBuffer): void {
++    if (this.finished) return;
++    if (this.ready && this.ws.readyState === WebSocket.OPEN) {
++      this.ws.send(chunk);
++    } else if (this.pendingBytes < MAX_PENDING_BYTES) {
++      this.pending.push(chunk);
++      this.pendingBytes += chunk.byteLength;
++    }
++  }
++
++  private sendStop(): void {
++    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: "stop" }));
++  }
++
++  private receive(event: MessageEvent): void {
++    if (typeof event.data !== "string") return;
++    const msg = parsePushToTalkMessage(event.data, this.engine);
++    if (msg === null) return;
++    if (msg.type === "ready") {
++      this.ready = true;
++      for (const chunk of this.pending) this.ws.send(chunk);
++      this.pending = [];
++      this.pendingBytes = 0;
++      if (this.stopping) this.sendStop();
++    } else if (msg.type === "text") {
++      this.events.onText(msg.text);
++    } else if (msg.type === "partial") {
++      this.events.onPartial(msg.text);
++    } else if (msg.type === "error") {
++      this.fail(msg.message);
++    }
++  }
++
++  private flushWorklet(): Promise<void> {
++    const node = this.node;
++    if (!node) return Promise.resolve();
++    return new Promise<void>((resolve) => {
++      this.flushed = resolve;
++      try {
++        node.port.postMessage("flush");
++      } catch {
++        resolve();
++        return;
++      }
++      setTimeout(resolve, 250);
++    });
++  }
++
++  private releaseAudio(): void {
++    for (const track of this.media?.getTracks() ?? []) track.stop();
++    this.media = null;
++    if (this.context && this.context.state !== "closed") void this.context.close();
++    this.context = null;
++    this.node = null;
++    this.analyser = null;
++  }
++
++  private fail(message: string): void {
++    if (this.finished) return;
++    this.finished = true;
++    this.releaseAudio();
++    this.ws.close();
++    this.events.onError(message);
++  }
++}
+diff --git a/web/src/lib/settingsPortability.ts b/web/src/lib/settingsPortability.ts
+index ca23fa3..5df0472 100644
+--- a/web/src/lib/settingsPortability.ts
++++ b/web/src/lib/settingsPortability.ts
+@@ -26,6 +26,8 @@ const EXPORTABLE_KEYS = [
+   "omnigent:always-use-worktree",
+   DELETE_WORKTREES_ON_ARCHIVE_STORAGE_KEY,
+   COMPOSER_SEND_SHORTCUT_STORAGE_KEY,
++  // Push-to-talk: the model, the key and the words to listen for.
++  "omnigent:push-to-talk",
+   "web-theme",
+ ] as const;
+ 
+diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
+index cd94129..4344e75 100644
+--- a/web/src/pages/ChatPage.tsx
++++ b/web/src/pages/ChatPage.tsx
+@@ -78,6 +78,7 @@ import { useSessionModelLabel } from "@/hooks/useSessionModelLabel";
+ import { useModelPickerHotkey } from "@/hooks/useModelPickerHotkey";
+ import { useFocusComposerHotkey } from "@/hooks/useFocusComposerHotkey";
+ import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
++import { pushToTalkRegionText, usePushToTalk } from "@/hooks/usePushToTalk";
+ import {
+   derivePermissionLevel,
+   isOwnerLevel,
+@@ -219,6 +220,7 @@ import {
+ import { buildFuzzyPathIndex, fuzzyMatchPaths, fuzzyMentionScope } from "@/lib/fuzzyPathMatch";
+ import type { MentionMenuEntry } from "@/components/FileMentionMenu";
+ import { ComposerAttachments } from "@/components/ComposerAttachments";
++import { PushToTalkBar, PushToTalkButton, PushToTalkWords } from "@/components/PushToTalk";
+ import { isCostRoutingSession, isSubagentRoutingSession } from "@/components/CostRoutingControl";
+ import {
+   SMART_ROUTING_ARMS,
+@@ -2732,7 +2734,26 @@ function ComposerImpl(
+     splitSlashCommand(value, slashCommandNames) !== null;
+   // Colour "@" path mentions in the draft, as the sent message shows them.
+   const composerHasMentions = mentionEnabled && draft.quotes.length === 0 && hasMentionPaths(value);
+-  const composerHighlighted = composerIsCommand || composerHasMentions;
++  // Hold-to-talk dictation into the draft (docs: push-to-talk.md in the deployment).
++  const pushToTalkSendRef = useRef<() => void>(() => {});
++  const pushToTalk = usePushToTalk({
++    value,
++    setValue: (next) => {
++      setValue(next);
++      dirtyRef.current = true;
++      resetCursor();
++    },
++    textareaRef,
++    enabled: !disabled && !isReadOnly && !hasPendingElicitation && !composerLockedByBtw,
++    onSend: () => pushToTalkSendRef.current(),
++    hotkey: true,
++  });
++  // The words fading in, drawn over the draft while it still reads exactly so.
++  const pushToTalkRegion =
++    pushToTalk.region && pushToTalkRegionText(pushToTalk.region) === value
++      ? pushToTalk.region
++      : null;
++  const composerHighlighted = composerIsCommand || composerHasMentions || pushToTalkRegion !== null;
+   const toggleCodexPlanMode = async () => {
+     if (planModeBusy) return;
+     setCommandError(null);
+@@ -3443,6 +3464,8 @@ function ComposerImpl(
+     setMention(null);
+   };
+ 
++  pushToTalkSendRef.current = () => submit({ resetNativeInputSession: true });
++
+   const handleSubmit = (e: FormEvent) => {
+     e.preventDefault();
+     if (showInterruptButton) {
+@@ -3695,6 +3718,7 @@ function ComposerImpl(
+       <ChatComposer
+         keyboard={{ submitWithModEnter, preventsKeyboardSubmit }}
+         ref={bindComposerCard}
++        data-ptt-state={pushToTalk.phase}
+         className={cn(
+           "mx-auto",
+           COMPOSER_COLUMN_WIDTH,
+@@ -3716,6 +3740,7 @@ function ComposerImpl(
+             dismissMention();
+           },
+           onPaste,
++          readOnly: pushToTalk.phase !== "idle" || undefined,
+           "aria-label": "Message the agent",
+           placeholder: composerLockedByBtw
+             ? "Side chat open — press Esc to close"
+@@ -3849,6 +3874,7 @@ function ComposerImpl(
+               data-testid="composer-highlight-overlay"
+             >
+               {(() => {
++                if (pushToTalkRegion) return <PushToTalkWords region={pushToTalkRegion} />;
+                 const split = composerIsCommand
+                   ? splitSlashCommand(value, slashCommandNames)
+                   : null;
+@@ -4007,10 +4033,22 @@ function ComposerImpl(
+                   openNonce={pickerOpenNonce}
+                 />
+               </div>
++              {pushToTalk.available && (
++                <>
++                  <PushToTalkBar ptt={pushToTalk} />
++                  <PushToTalkButton
++                    ptt={pushToTalk}
++                    disabled={
++                      disabled || isReadOnly || hasPendingElicitation || composerLockedByBtw
++                    }
++                  />
++                </>
++              )}
+               <TooltipProvider>
+                 <Tooltip>
+                   <TooltipTrigger asChild>
+                     <ComposerSendButton
++                      data-ptt-keep
+                       interrupt={showInterruptButton}
+                       disabled={
+                         showInterruptButton
+diff --git a/web/src/pages/SettingsPage.tsx b/web/src/pages/SettingsPage.tsx
+index 39a8b97..ac04893 100644
+--- a/web/src/pages/SettingsPage.tsx
++++ b/web/src/pages/SettingsPage.tsx
+@@ -75,6 +75,7 @@ import { useTheme } from "next-themes";
+ import { PageScroll } from "@/components/PageScroll";
+ import { SettingsGroup } from "@/components/SettingsGroup";
+ import { SettingsLabel } from "@/components/SettingsLabel";
++import { PushToTalkSettingsBody } from "@/components/PushToTalkSettings";
+ import { ThemeColorPicker } from "@/components/theme/ThemeColorPicker";
+ import { CardRadioGroup } from "@/components/theme/CardRadioGroup";
+ import { IconSegmentedControl } from "@/components/theme/IconSegmentedControl";
+@@ -357,6 +358,14 @@ export function SettingsPage() {
+       {...pageWrapperSettings}
+     >
+       {section === "appearance" && <AppearanceSection />}
++      {section === "speech" && (
++        <Section
++          title="Speech"
++          description="Hold a key or the mic button and talk: the words stream into the composer."
++        >
++          <PushToTalkSettingsBody />
++        </Section>
++      )}
+       {section === "general" && <GeneralSection />}
+       {section === "harnesses" && <SettingsHarnessesSection />}
+       {section === "custom-agents" && <SettingsCustomAgentsSection />}
+diff --git a/web/src/pushToTalk.css b/web/src/pushToTalk.css
+new file mode 100644
+index 0000000..a9e7fdd
+--- /dev/null
++++ b/web/src/pushToTalk.css
+@@ -0,0 +1,231 @@
++/* Push-to-talk in the composer (components/PushToTalk.tsx).
++ *
++ * While a take runs, the composer card carries data-ptt-state ("listening",
++ * then "finishing"): its tools give way to the listening bar, only the bar
++ * and the buttons marked data-ptt-keep stay, and its edge darkens a little.
++ * --ptt-level (0–1, set every frame) is how loud the microphone is. */
++
++[data-composer-card][data-ptt-state="listening"],
++[data-composer-card][data-ptt-state="finishing"] {
++  border-color: color-mix(in srgb, var(--foreground) 28%, transparent);
++}
++
++[data-composer-card]:is([data-ptt-state="listening"], [data-ptt-state="finishing"])
++  [data-composer-group="left"] {
++  display: none;
++}
++
++[data-composer-card]:is([data-ptt-state="listening"], [data-ptt-state="finishing"])
++  [data-composer-group="right"] {
++  flex: 1 1 auto;
++  margin-left: 0;
++}
++
++[data-composer-card]:is([data-ptt-state="listening"], [data-ptt-state="finishing"])
++  [data-composer-group="right"]
++  > :not([data-ptt-keep]) {
++  display: none;
++}
++
++/* ---- The listening bar ---------------------------------------------------- */
++
++.ptt-bar {
++  display: flex;
++  flex: 1 1 auto;
++  align-items: center;
++  gap: 0.625rem;
++  min-width: 0;
++  height: 2rem;
++  /* Clear of the mic button, which grows and gets a halo while you talk. */
++  margin-right: 0.5rem;
++  padding-left: 0.25rem;
++  overflow: hidden;
++  font-size: 0.8125rem;
++  white-space: nowrap;
++  animation: ptt-fade-in 0.2s ease both;
++}
++
++.ptt-rec {
++  flex: none;
++  width: 0.5rem;
++  height: 0.5rem;
++  border-radius: 999px;
++  background: var(--destructive);
++  animation: ptt-rec 1.2s ease-in-out infinite;
++}
++
++.ptt-bar[data-ptt-state="finishing"] .ptt-rec {
++  background: var(--muted-foreground);
++  animation: none;
++}
++
++.ptt-label {
++  font-weight: 500;
++}
++
++.ptt-bar[data-ptt-state="finishing"] .ptt-label {
++  background: linear-gradient(
++      90deg,
++      var(--muted-foreground) 30%,
++      var(--foreground) 50%,
++      var(--muted-foreground) 70%
++    )
++    0 0 / 200% 100%;
++  -webkit-background-clip: text;
++  background-clip: text;
++  color: transparent;
++  animation: ptt-shimmer 1.2s linear infinite;
++}
++
++.ptt-timer {
++  color: var(--muted-foreground);
++  font-variant-numeric: tabular-nums;
++}
++
++.ptt-wave {
++  flex: 1 1 auto;
++  min-width: 2.5rem;
++  height: 1.5rem;
++  color: var(--foreground);
++}
++
++.ptt-chip {
++  display: inline-flex;
++  flex: none;
++  align-items: center;
++  gap: 0.3rem;
++  padding: 0.125rem 0.5rem;
++  border-radius: 999px;
++  background: var(--muted);
++  color: var(--muted-foreground);
++  font-size: 0.75rem;
++}
++
++.ptt-hint {
++  flex: none;
++  color: var(--muted-foreground);
++  font-size: 0.75rem;
++  transform: translateX(calc(var(--ptt-slide, 0px) * 0.6));
++  opacity: calc(1 + var(--ptt-slide, 0px) / 110px);
++}
++
++/* A narrow composer (a phone) keeps the dot, the time, the waveform and the hint. */
++@container composer-actions (max-width: 30rem) {
++  .ptt-chip {
++    display: none;
++  }
++}
++
++@container composer-actions (max-width: 24rem) {
++  .ptt-label {
++    display: none;
++  }
++}
++
++/* ---- The mic button -------------------------------------------------------- */
++
++.ptt-button[data-ptt-state="listening"],
++.ptt-button[data-ptt-state="listening"]:hover {
++  background: var(--primary);
++  color: var(--primary-foreground);
++  transform: scale(1.06);
++}
++
++.ptt-button[data-ptt-state="listening"][data-ptt-touch] {
++  transform: scale(1.15);
++}
++
++.ptt-button {
++  transition:
++    transform 0.2s cubic-bezier(0.3, 1.6, 0.5, 1),
++    background-color 0.2s,
++    color 0.2s;
++}
++
++/* A soft halo that grows with your voice, and a slow ripple. */
++.ptt-button::before,
++.ptt-button::after {
++  content: "";
++  position: absolute;
++  inset: 0;
++  border-radius: inherit;
++  pointer-events: none;
++  opacity: 0;
++  background: color-mix(in srgb, var(--foreground) 12%, transparent);
++}
++
++.ptt-button[data-ptt-state="listening"]::before {
++  opacity: 1;
++  transform: scale(calc(1.15 + 0.6 * var(--ptt-level, 0)));
++  transition: transform 0.08s linear;
++}
++
++.ptt-button[data-ptt-state="listening"]::after {
++  animation: ptt-ripple 1.6s ease-out infinite;
++}
++
++[data-theme="codex"] .ptt-button {
++  border-radius: 999px;
++}
++
++/* ---- Words in the composer -------------------------------------------------- */
++
++.ptt-word {
++  animation: ptt-word-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
++}
++
++.ptt-word-partial {
++  color: var(--muted-foreground);
++}
++
++@keyframes ptt-word-in {
++  from {
++    opacity: 0;
++    filter: blur(4px);
++  }
++  to {
++    opacity: 1;
++    filter: none;
++  }
++}
++
++@keyframes ptt-fade-in {
++  from {
++    opacity: 0;
++  }
++}
++
++@keyframes ptt-rec {
++  50% {
++    box-shadow: 0 0 0 4px color-mix(in srgb, var(--destructive) 22%, transparent);
++  }
++}
++
++@keyframes ptt-shimmer {
++  to {
++    background-position: -200% 0;
++  }
++}
++
++@keyframes ptt-ripple {
++  from {
++    opacity: 0.5;
++    transform: scale(1);
++  }
++  to {
++    opacity: 0;
++    transform: scale(1.9);
++  }
++}
++
++@media (prefers-reduced-motion: reduce) {
++  .ptt-rec,
++  .ptt-button::after,
++  .ptt-bar[data-ptt-state="finishing"] .ptt-label {
++    animation: none;
++  }
++  .ptt-word {
++    animation-duration: 0.2s;
++    filter: none;
++  }
++}
+diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
+index 937d858..75dafc4 100644
+--- a/web/src/shell/NewChatDialog.tsx
++++ b/web/src/shell/NewChatDialog.tsx
+@@ -284,6 +284,7 @@ import {
+   type AvailableAgent,
+ } from "@/hooks/useAvailableAgents";
+ import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
++import { pushToTalkRegionText, usePushToTalk } from "@/hooks/usePushToTalk";
+ import { useComposerAttachments } from "@/hooks/useComposerAttachments";
+ import { useFileDropTarget } from "@/hooks/useFileDropTarget";
+ import { useRecentHarnesses } from "@/hooks/useRecentHarnesses";
+@@ -329,6 +330,7 @@ import {
+ import { BrandLogo } from "@/components/BrandLogo";
+ import { PoweredByOmnigent } from "@/components/PoweredByOmnigent";
+ import { SkillPills } from "@/components/SkillPills";
++import { PushToTalkBar, PushToTalkButton, PushToTalkWords } from "@/components/PushToTalk";
+ import type { CostControlMode } from "@/components/CostRoutingControl";
+ import {
+   composerSendShortcutKeys,
+@@ -5236,6 +5238,20 @@ export function NewChatLandingScreen() {
+   // order a user fills the form — location first, then message — so the
+   // tooltip always names the next missing input. Null when nothing is
+   // actionable (submitting, or mid-create).
++  // Hold-to-talk dictation into the first message.
++  const pushToTalkSendRef = useRef<() => void>(() => {});
++  const pushToTalk = usePushToTalk({
++    value: message,
++    setValue: setMessage,
++    textareaRef,
++    enabled: !creating,
++    onSend: () => pushToTalkSendRef.current(),
++    hotkey: true,
++  });
++  const pushToTalkRegion =
++    pushToTalk.region && pushToTalkRegionText(pushToTalk.region) === message
++      ? pushToTalk.region
++      : null;
+   const submitDisabledReason = canSubmit
+     ? null
+     : pendingSkillCompletion
+@@ -5575,6 +5591,9 @@ export function NewChatLandingScreen() {
+     }
+   }
+ 
++  pushToTalkSendRef.current = () => {
++    if (canSubmit) void handleCreate();
++  };
+   async function handleCreate() {
+     // Mirror the Send button's disabled condition (canSubmit) so the Enter-key
+     // and form-submit paths that call this directly can't create a session with
+@@ -6333,9 +6352,7 @@ export function NewChatLandingScreen() {
+           </DropdownMenuItem>
+         )}
+         {hasCloudOptions && <DropdownMenuSeparator />}
+-        <div className="px-2 py-1 text-xs leading-[18px] text-muted-foreground/75">
+-          My machines
+-        </div>
++        <div className="px-2 py-1 text-xs leading-[18px] text-muted-foreground/75">My machines</div>
+         {allHosts.length === 0 && !showConnectThisMachine && (
+           <div className="px-2 py-1.5 text-sm text-muted-foreground">No hosts connected yet.</div>
+         )}
+@@ -6967,6 +6984,7 @@ export function NewChatLandingScreen() {
+               keyboard={{ submitWithModEnter, preventsKeyboardSubmit }}
+               className={cn(isDragActive && "ring-2 ring-ring ring-inset")}
+               data-testid="new-chat-landing-composer"
++              data-ptt-state={pushToTalk.phase}
+               input={{
+                 ref: textareaRef,
+                 value: message,
+@@ -7022,13 +7040,22 @@ export function NewChatLandingScreen() {
+                 rows: 1,
+                 autoFocus: !isMobileViewport,
+                 "data-testid": "new-chat-landing-input",
+-                // The backdrop paints the text while it has a mention to colour.
+-                className: messageHasMentions ? "text-transparent caret-foreground" : undefined,
++                readOnly: pushToTalk.phase !== "idle" || undefined,
++                // The backdrop paints the text while it has a mention to colour,
++                // or dictated words fading in.
++                className:
++                  messageHasMentions || pushToTalkRegion
++                    ? "text-transparent caret-foreground"
++                    : undefined,
+               }}
+               slots={{
+-                inputBackdrop: messageHasMentions && (
++                inputBackdrop: (messageHasMentions || pushToTalkRegion) && (
+                   <ComposerHighlightBackdrop textarea={textareaRef} text={message}>
+-                    <MentionHighlights text={message} />
++                    {pushToTalkRegion ? (
++                      <PushToTalkWords region={pushToTalkRegion} />
++                    ) : (
++                      <MentionHighlights text={message} />
++                    )}
+                   </ComposerHighlightBackdrop>
+                 ),
+                 beforeInput: (
+@@ -7243,10 +7270,16 @@ export function NewChatLandingScreen() {
+                         triggerClassName="text-[13px] leading-5"
+                       />
+                     </div>
++                    {pushToTalk.available && (
++                      <>
++                        <PushToTalkBar ptt={pushToTalk} />
++                        <PushToTalkButton ptt={pushToTalk} disabled={creating} />
++                      </>
++                    )}
+                     <TooltipProvider>
+                       <Tooltip>
+                         <TooltipTrigger asChild>
+-                          <span className="inline-flex shrink-0">
++                          <span className="inline-flex shrink-0" data-ptt-keep>
+                             <ComposerSendButton
+                               disabled={!canSubmit}
+                               label={creating ? "Starting session" : "Start session"}
+diff --git a/web/src/shell/settingsNav.tsx b/web/src/shell/settingsNav.tsx
+index 4a38f55..a2a00c8 100644
+--- a/web/src/shell/settingsNav.tsx
++++ b/web/src/shell/settingsNav.tsx
+@@ -17,6 +17,7 @@ import {
+   GitBranchIcon,
+   KeyboardIcon,
+   KeyRoundIcon,
++  MicIcon,
+   PaletteIcon,
+   PlugIcon,
+   SettingsIcon,
+@@ -38,6 +39,7 @@ import { SIDEBAR_ROW } from "./sidebarStyles";
+ 
+ export type SettingsSectionId =
+   | "appearance"
++  | "speech"
+   | "harnesses"
+   | "custom-agents"
+   | "general"
+@@ -58,6 +60,7 @@ export type SettingsSectionId =
+ 
+ const SECTION_IDS: readonly SettingsSectionId[] = [
+   "appearance",
++  "speech",
+   "harnesses",
+   "custom-agents",
+   "general",
+@@ -115,6 +118,8 @@ export function settingsNavGroups(
+   const general: SettingsNavItem[] = [
+     { id: "general", label: "General", icon: SettingsIcon },
+     { id: "appearance", label: "Appearance", icon: PaletteIcon },
++    // Push-to-talk dictation: the model, the key, the words to listen for.
++    { id: "speech", label: "Speech", icon: MicIcon },
+     { id: "git", label: "Git", icon: GitBranchIcon },
+     { id: "shortcuts", label: "Keyboard shortcuts", icon: KeyboardIcon, hideOnMobile: true },
+     { id: "import", label: "Import sessions", icon: DownloadIcon },

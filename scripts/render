@@ -241,6 +241,8 @@ def main() -> None:
             # Browser clients on another origin, such as the Even G2 glasses
             # app, get CORS headers. Empty turns it off.
             f"OMNIGENT_CORS_ALLOWED_ORIGINS={cfg['cors_allowed_origins']}",
+            # The composer's push-to-talk speech server. Empty hides the mic.
+            f"OMNIGENT_PUSH_TO_TALK_URL={cfg.get('push_to_talk_url', '')}",
             "",
         ])
     )

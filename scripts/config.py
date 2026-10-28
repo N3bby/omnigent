@@ -158,6 +158,14 @@ def validate(name: str, *, require_digests: bool = True) -> tuple[dict[str, obje
             r"\*|[a-z][a-z0-9+.-]*://[A-Za-z0-9.-]+(?::[0-9]+)?"
             r"(?:,[a-z][a-z0-9+.-]*://[A-Za-z0-9.-]+(?::[0-9]+)?)*",
         )
+    # The speech server the composer's push-to-talk streams the microphone to
+    # (images/server/web-patches/0040-push-to-talk.patch). Browsers reach it
+    # directly, so it's a wss:// address they can resolve, such as a tailnet name.
+    if "push_to_talk_url" in data:
+        require_string(
+            data, "push_to_talk_url",
+            r"wss://[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?/?",
+        )
     data.setdefault("tailscale_tags", "tag:omnigent-runner")
     require_string(data, "tailscale_tags", r"tag:[A-Za-z0-9-]+(?:,tag:[A-Za-z0-9-]+)*")
     # The hermes-remote harness's SSH target (docs/features/hermes-remote.md);
