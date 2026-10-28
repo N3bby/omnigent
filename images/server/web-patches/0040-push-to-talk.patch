@@ -18,7 +18,9 @@ focus or the tab is hidden (the key-up would never arrive), and after
 
 While a take runs, the composer card says data-ptt-state: its tools give
 way to a bar with a recording dot, the time, a live waveform, the model
-and how to cancel (pushToTalk.css), and the textarea is read-only. The
+and how to cancel (pushToTalk.css), and the textarea is read-only. The bar
+is no taller than the buttons, so the card keeps its height, and for a
+moment after a take the card says "ended" while its tools fade back in. The
 draft is drawn by the composer's highlight backdrop so the words can fade
 in; Deepgram's words that may still change are dimmed.
 
@@ -701,10 +703,10 @@ index 7f0211c..72314b4 100644
          // A right group holding a control that can truncate, like the
 diff --git a/web/src/hooks/usePushToTalk.test.tsx b/web/src/hooks/usePushToTalk.test.tsx
 new file mode 100644
-index 0000000..671635d
+index 0000000..310e772
 --- /dev/null
 +++ b/web/src/hooks/usePushToTalk.test.tsx
-@@ -0,0 +1,195 @@
+@@ -0,0 +1,197 @@
 +// Tests for usePushToTalk: words stream into the draft at the caret, Esc puts
 +// the draft back, a tap is dropped, and letting go ends the stream.
 +
@@ -838,6 +840,8 @@ index 0000000..671635d
 +    });
 +    expect(streams.last!.cancel).toHaveBeenCalled();
 +    expect(box.ptt!.phase).toBe("idle");
++    // The card says "ended" for a moment, while its tools fade back in.
++    expect(box.ptt!.cardState).toBe("ended");
 +    expect(box.ta!.value).toBe("Keep this");
 +  });
 +
@@ -902,10 +906,10 @@ index 0000000..671635d
 +});
 diff --git a/web/src/hooks/usePushToTalk.ts b/web/src/hooks/usePushToTalk.ts
 new file mode 100644
-index 0000000..3f525e4
+index 0000000..44fc0f7
 --- /dev/null
 +++ b/web/src/hooks/usePushToTalk.ts
-@@ -0,0 +1,417 @@
+@@ -0,0 +1,430 @@
 +// Push-to-talk in a composer: hold a key or the mic button, talk, let go.
 +//
 +// The words stream into the draft at the caret while the person talks (see
@@ -932,6 +936,8 @@ index 0000000..3f525e4
 +} from "@/lib/pushToTalk";
 +
 +export type PushToTalkPhase = "idle" | "listening" | "finishing";
++/** The composer card's data-ptt-state: a take's phase, or "ended" for a moment after one. */
++export type PushToTalkCardState = PushToTalkPhase | "ended";
 +export type PushToTalkSource = "key" | "pointer";
 +
 +/** The take's span of the draft, for the composer's word-by-word backdrop. */
@@ -956,6 +962,8 @@ index 0000000..3f525e4
 +const HUGS_LEFT = /^[\s,.;:!?)\]}>]/;
 +/** How long the backdrop stays after a take, so the last words finish fading in. */
 +const SETTLE_MS = 700;
++/** How long the card says "ended" after a take, while its tools fade back in. */
++const ENDED_MS = 400;
 +
 +function buildRegion(
 +  base: string,
@@ -1002,6 +1010,8 @@ index 0000000..3f525e4
 +  /** Whether this deployment has a speech server, so the button shows. */
 +  available: boolean;
 +  phase: PushToTalkPhase;
++  /** For the composer card's data-ptt-state. */
++  cardState: PushToTalkCardState;
 +  source: PushToTalkSource | null;
 +  /** Whether the take started with a finger, which can slide off to cancel. */
 +  touch: boolean;
@@ -1038,6 +1048,8 @@ index 0000000..3f525e4
 +  const [region, setRegion] = useState<PushToTalkRegion | null>(null);
 +  const [startedAt, setStartedAt] = useState(0);
 +  const [releasedAt, setReleasedAt] = useState<number | null>(null);
++  const [ended, setEnded] = useState(false);
++  const endedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 +
 +  const streamRef = useRef<PushToTalkStream | null>(null);
 +  const phaseRef = useRef<PushToTalkPhase>("idle");
@@ -1101,6 +1113,9 @@ index 0000000..3f525e4
 +      setPhaseBoth("idle");
 +      setSource(null);
 +      sourceRef.current = null;
++      setEnded(true);
++      if (endedTimer.current) clearTimeout(endedTimer.current);
++      endedTimer.current = setTimeout(() => setEnded(false), ENDED_MS);
 +      if (!take) return;
 +      // Somebody else changed the draft (a session switch): it isn't ours.
 +      if (valueRef.current !== take.written) {
@@ -1280,6 +1295,7 @@ index 0000000..3f525e4
 +      streamRef.current = null;
 +      if (maxTimer.current) clearTimeout(maxTimer.current);
 +      if (settleTimer.current) clearTimeout(settleTimer.current);
++      if (endedTimer.current) clearTimeout(endedTimer.current);
 +    },
 +    [],
 +  );
@@ -1294,6 +1310,7 @@ index 0000000..3f525e4
 +  return {
 +    available,
 +    phase,
++    cardState: phase === "idle" && ended ? "ended" : phase,
 +    source,
 +    touch,
 +    startedAt,
@@ -2127,7 +2144,7 @@ index ca23fa3..5df0472 100644
  ] as const;
  
 diff --git a/web/src/pages/ChatPage.tsx b/web/src/pages/ChatPage.tsx
-index cd94129..4344e75 100644
+index cd94129..66af486 100644
 --- a/web/src/pages/ChatPage.tsx
 +++ b/web/src/pages/ChatPage.tsx
 @@ -78,6 +78,7 @@ import { useSessionModelLabel } from "@/hooks/useSessionModelLabel";
@@ -2187,7 +2204,7 @@ index cd94129..4344e75 100644
        <ChatComposer
          keyboard={{ submitWithModEnter, preventsKeyboardSubmit }}
          ref={bindComposerCard}
-+        data-ptt-state={pushToTalk.phase}
++        data-ptt-state={pushToTalk.cardState}
          className={cn(
            "mx-auto",
            COMPOSER_COLUMN_WIDTH,
@@ -2259,15 +2276,17 @@ index 39a8b97..ac04893 100644
        {section === "custom-agents" && <SettingsCustomAgentsSection />}
 diff --git a/web/src/pushToTalk.css b/web/src/pushToTalk.css
 new file mode 100644
-index 0000000..a9e7fdd
+index 0000000..60b259e
 --- /dev/null
 +++ b/web/src/pushToTalk.css
-@@ -0,0 +1,231 @@
+@@ -0,0 +1,236 @@
 +/* Push-to-talk in the composer (components/PushToTalk.tsx).
 + *
 + * While a take runs, the composer card carries data-ptt-state ("listening",
 + * then "finishing"): its tools give way to the listening bar, only the bar
 + * and the buttons marked data-ptt-keep stay, and its edge darkens a little.
++ * For a moment after, it says "ended" while the tools fade back in. The bar
++ * is never taller than the buttons, so the card keeps its height throughout.
 + * --ptt-level (0–1, set every frame) is how loud the microphone is. */
 +
 +[data-composer-card][data-ptt-state="listening"],
@@ -2292,6 +2311,10 @@ index 0000000..a9e7fdd
 +  display: none;
 +}
 +
++[data-composer-card][data-ptt-state="ended"] [data-composer-group] > :not([data-ptt-keep]) {
++  animation: ptt-fade-in 0.25s ease both;
++}
++
 +/* ---- The listening bar ---------------------------------------------------- */
 +
 +.ptt-bar {
@@ -2300,7 +2323,6 @@ index 0000000..a9e7fdd
 +  align-items: center;
 +  gap: 0.625rem;
 +  min-width: 0;
-+  height: 2rem;
 +  /* Clear of the mic button, which grows and gets a halo while you talk. */
 +  margin-right: 0.5rem;
 +  padding-left: 0.25rem;
@@ -2495,7 +2517,7 @@ index 0000000..a9e7fdd
 +  }
 +}
 diff --git a/web/src/shell/NewChatDialog.tsx b/web/src/shell/NewChatDialog.tsx
-index 937d858..75dafc4 100644
+index 937d858..d7401a7 100644
 --- a/web/src/shell/NewChatDialog.tsx
 +++ b/web/src/shell/NewChatDialog.tsx
 @@ -284,6 +284,7 @@ import {
@@ -2560,7 +2582,7 @@ index 937d858..75dafc4 100644
                keyboard={{ submitWithModEnter, preventsKeyboardSubmit }}
                className={cn(isDragActive && "ring-2 ring-ring ring-inset")}
                data-testid="new-chat-landing-composer"
-+              data-ptt-state={pushToTalk.phase}
++              data-ptt-state={pushToTalk.cardState}
                input={{
                  ref: textareaRef,
                  value: message,
