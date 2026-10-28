@@ -127,5 +127,7 @@ There's nothing to turn off: an agent shows a bar only for long work.
   server hasn't confirmed yet already starts a new turn, and **Working…**
   staying lit for a background task, such as a sub-agent, doesn't keep the
   ended turn's bar live), places each finished one at the end of the reply of the turn it
-  was set in, polls an open log every 1.5 seconds, and titles the tool's
+  was set in (it finds the turn by the time of your message, which a message
+  sent from another device gets when it arrives), polls an open log every
+  1.5 seconds, and titles the tool's
   calls in the chat by the bar's label.

@@ -22,6 +22,11 @@ GET /v1/sessions/{id}/progress/{bar}/log while open; they keep coming after
 the turn, e.g. from a dev server. The tool's calls are titled
 "Progress: <label>".
 
+A message sent from another device or tab arrives as session.input.consumed
+without a time, so chatStore stamps it when it arrives, as it stamps one
+sent here: without one it started no turn, and every later bar piled up at
+the end of the last reply.
+
 diff --git a/web/src/components/chat/AgentProgressCard.test.tsx b/web/src/components/chat/AgentProgressCard.test.tsx
 new file mode 100644
 index 0000000..0de4a26
@@ -1243,8 +1248,38 @@ index a00800d..4e9247f 100644
    /**
     * Per-MCP-server startup state for native harness sessions
     * (codex-native). Present while the harness boots its MCP servers or
+diff --git a/web/src/store/chatStore.test.ts b/web/src/store/chatStore.test.ts
+index 20eb2e1..2d7c217 100644
+--- a/web/src/store/chatStore.test.ts
++++ b/web/src/store/chatStore.test.ts
+@@ -7902,6 +7902,25 @@ describe("chatStore — handleSessionEvent (session.* events)", () => {
+       expect(promoted.ctx.createdBy).toBe("bob@example.com");
+     });
+ 
++    it("stamps a cross-client user message with when it arrived", () => {
++      // The event carries no time; the agent's progress bars (this
++      // deployment) find their turn by the message's.
++      vi.spyOn(Date, "now").mockReturnValue(1_700_000_123_900);
++      useChatStore.setState({ blocks: [], pendingUserMessages: [] });
++
++      handleSessionEvent({
++        type: "session_input_consumed",
++        itemId: "msg_from_phone",
++        itemType: "message",
++        data: { role: "user", content: [{ type: "input_text", text: "from my phone" }] },
++      });
++
++      const promoted = useChatStore.getState().blocks[0] as UserMessageBlock;
++      expect(promoted.ctx.clientCreatedAtS).toBe(1_700_000_123);
++      expect(promoted.ctx.createdAtS).toBeUndefined();
++      vi.restoreAllMocks();
++    });
++
+     it("leaves ctx.createdBy unset when the event omits an author", () => {
+       // No created_by (agent/system items, single-user "local") must not
+       // produce a label; ctx.createdBy stays undefined rather than null.
 diff --git a/web/src/store/chatStore.ts b/web/src/store/chatStore.ts
-index 85fb7b9..3de5a39 100644
+index 85fb7b9..b7e69d2 100644
 --- a/web/src/store/chatStore.ts
 +++ b/web/src/store/chatStore.ts
 @@ -158,6 +158,7 @@ import { rateLimitsFromLabels, type RateLimits } from "@/lib/rateLimits";
@@ -1312,6 +1347,29 @@ index 85fb7b9..3de5a39 100644
      case "session_sandbox_status":
        // Advance the managed-sandbox provisioning indicator. `ready`
        // clears it — from then on the session looks like any
+@@ -7908,12 +7924,20 @@ export function handleSessionEvent(event: StreamEvent, streamConversationId?: st
+         }
+ 
+         // 3. Nothing pending (or a marker that owns no bubble) — render the
+-        //    event payload fresh.
++        //    event payload fresh. Stamped when it arrives, as a message sent
++        //    here is when it's sent: the event carries no time, and the agent's
++        //    progress bars (this deployment) find their turn by it.
+         if (eventContent === null) return {};
+         return {
+           blocks: [
+             ...s.blocks,
+-            committedUserBlock(event.itemId, eventContent, undefined, event.createdBy),
++            committedUserBlock(
++              event.itemId,
++              eventContent,
++              undefined,
++              event.createdBy,
++              Math.floor(Date.now() / 1000),
++            ),
+           ],
+         };
+       });
 diff --git a/web/src/store/conversationState.ts b/web/src/store/conversationState.ts
 index 157b7a2..87244f9 100644
 --- a/web/src/store/conversationState.ts
