@@ -14,19 +14,20 @@ the start failed. While open it polls GET /v1/sessions/{id}/environment every
 Its actions: Copy SSH command; Keep running (Usual idle timeout, For 2 hours,
 For 8 hours, Until I stop it, ticking the choice in force, saved with PUT
 .../environment/keep-running; not offered once the agent has exited, since its
-runner is what keeps the Pod); Restart agent (stop_session, keeps the Pod);
-Start agent when the agent has exited but the Pod is up; Stop sandbox (the
-shared StopSandboxDialog); Start now (stopped) and Try again (failed), which
-need a resumable host; Cancel start while a stopped sandbox wakes; and Copy
-error details. Start now, Try again and Start agent use retry_session, which
-wakes a resumable host or starts the runner on a live one without adding
-anything to the transcript. The state comes from the session's launch stage,
-its liveness and whether a turn is running; after an action the menu shows
-where it's heading until the ~10s liveness poll catches up. Controls are
-greyed out for anyone but the session's owner, and in read-only sessions. A
-new sandbox session shows the menu while it launches, before its host is
-bound. Sessions on other hosts, and on sandbox providers other than
-agent_sandbox, keep upstream's menu. Spacing is scoped to
+runner is what keeps the Pod; on a phone its choices replace the menu, with a
+Back row, since a flyout beside the menu would open off the screen); Restart
+agent (stop_session, keeps the Pod); Start agent when the agent has exited but
+the Pod is up; Stop sandbox (the shared StopSandboxDialog); Start now
+(stopped) and Try again (failed), which need a resumable host; Cancel start
+while a stopped sandbox wakes; and Copy error details. Start now, Try again
+and Start agent use retry_session, which wakes a resumable host or starts the
+runner on a live one without adding anything to the transcript. The state
+comes from the session's launch stage, its liveness and whether a turn is
+running; after an action the menu shows where it's heading until the ~10s
+liveness poll catches up. Controls are greyed out for anyone but the session's
+owner, and in read-only sessions. A new sandbox session shows the menu while
+it launches, before its host is bound. Sessions on other hosts, and on sandbox
+providers other than agent_sandbox, keep upstream's menu. Spacing is scoped to
 .environment-menu in index.css: every block sits 16px from the menu edge or
 the nearest divider, and labels use text-box trimming so icons line up with
 their capitals. agent_sandbox is named "Agent Sandbox" instead of
@@ -447,10 +448,10 @@ index 0b39295..c57be6d 100644
    return (
 diff --git a/web/src/components/composer/EnvironmentMenu.stories.tsx b/web/src/components/composer/EnvironmentMenu.stories.tsx
 new file mode 100644
-index 0000000..8160264
+index 0000000..f3c6f65
 --- /dev/null
 +++ b/web/src/components/composer/EnvironmentMenu.stories.tsx
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,250 @@
 +import type { Meta, StoryObj } from "@storybook/react-vite";
 +import { ArrowUpIcon, FolderIcon, GitBranchIcon, PlusIcon } from "lucide-react";
 +import type { ReactNode } from "react";
@@ -684,12 +685,29 @@ index 0000000..8160264
 +  render: () => <Scene view={{ state: "idle", status: IDLE, tailscaleHost: null }} />,
 +};
 +export const Mobile: Story = { render: () => <Scene view={{ state: "running" }} mobile /> };
++/** On a phone, Keep running's choices replace the menu: a flyout would open off the screen. */
++export const MobileKeepRunning: Story = {
++  render: () => (
++    <Scene
++      view={{
++        state: "idle",
++        status: {
++          ...IDLE,
++          agent_exits_at: NOW + 8 * 60 * MINUTE,
++          keep_running_until: NOW + 8 * 60 * MINUTE,
++          keep_running_hours: 8,
++        },
++      }}
++      mobile
++    />
++  ),
++};
 diff --git a/web/src/components/composer/EnvironmentMenu.test.tsx b/web/src/components/composer/EnvironmentMenu.test.tsx
 new file mode 100644
-index 0000000..0374a73
+index 0000000..2a429af
 --- /dev/null
 +++ b/web/src/components/composer/EnvironmentMenu.test.tsx
-@@ -0,0 +1,465 @@
+@@ -0,0 +1,486 @@
 +import {
 +  act,
 +  cleanup,
@@ -718,12 +736,14 @@ index 0000000..0374a73
 +  copyText: vi.fn((_text: string) => Promise.resolve()),
 +  retrySession: vi.fn((_id: string) => Promise.resolve({ queued: false })),
 +  keepRunning: { mutate: vi.fn() },
++  isMobile: false,
 +}));
 +
 +vi.mock("@/hooks/useConversations", () => ({ useStopSession: () => mocks.stop }));
 +vi.mock("@/lib/clipboard", () => ({ copyText: (text: string) => mocks.copyText(text) }));
 +vi.mock("@/lib/sessionsApi", () => ({ retrySession: (id: string) => mocks.retrySession(id) }));
 +vi.mock("@/hooks/useSessionEnvironment", () => ({ useSetKeepRunning: () => mocks.keepRunning }));
++vi.mock("@/hooks/useIsMobileViewport", () => ({ useIsMobileViewport: () => mocks.isMobile }));
 +
 +import {
 +  deriveEnvironmentState,
@@ -777,6 +797,7 @@ index 0000000..0374a73
 +  mocks.stop.mutate.mockReset();
 +  mocks.stop.reset.mockReset();
 +  mocks.copyText.mockClear();
++  mocks.isMobile = false;
 +});
 +
 +afterEach(() => cleanup());
@@ -1081,6 +1102,24 @@ index 0000000..0374a73
 +    expect(mocks.keepRunning.mutate.mock.calls[0][0]).toEqual({ hours: 2 });
 +  });
 +
++  it("shows Keep running's choices in place of the menu on a phone, with a way back", () => {
++    mocks.isMobile = true;
++    renderMenu({ state: "idle" });
++    fireEvent.click(screen.getByTestId("environment-keep-running"));
++    const options = screen.getByTestId("environment-keep-running-menu");
++    // A flyout beside the menu would open off a phone's screen.
++    expect(options.closest('[data-testid="composer-host-menu"]')).not.toBeNull();
++    expect(screen.queryByTestId("environment-restart-agent")).toBeNull();
++    fireEvent.click(screen.getByTestId("environment-keep-running-back"));
++    expect(screen.queryByTestId("environment-keep-running-menu")).toBeNull();
++    expect(screen.getByTestId("environment-restart-agent")).toBeInTheDocument();
++    fireEvent.click(screen.getByTestId("environment-keep-running"));
++    fireEvent.click(
++      within(screen.getByTestId("environment-keep-running-menu")).getByText("For 8 hours"),
++    );
++    expect(mocks.keepRunning.mutate.mock.calls[0][0]).toEqual({ hours: 8 });
++  });
++
 +  it("shows how long it's kept running", () => {
 +    const until = Date.now() / 1000 + 8 * 3600;
 +    renderMenu({
@@ -1157,13 +1196,15 @@ index 0000000..0374a73
 +});
 diff --git a/web/src/components/composer/EnvironmentMenu.tsx b/web/src/components/composer/EnvironmentMenu.tsx
 new file mode 100644
-index 0000000..e09d7a1
+index 0000000..1ac9c14
 --- /dev/null
 +++ b/web/src/components/composer/EnvironmentMenu.tsx
-@@ -0,0 +1,969 @@
+@@ -0,0 +1,1067 @@
 +import { Fragment, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 +import {
 +  CheckIcon,
++  ChevronLeftIcon,
++  ChevronRightIcon,
 +  CircleStopIcon,
 +  CoffeeIcon,
 +  CopyIcon,
@@ -1196,6 +1237,7 @@ index 0000000..e09d7a1
 +  type KeepRunningChoice,
 +  type SessionEnvironment,
 +} from "@/hooks/useSessionEnvironment";
++import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 +import type { SessionLiveness } from "@/hooks/useSessionLiveness";
 +import { useStopSession } from "@/hooks/useConversations";
 +import { copyText } from "@/lib/clipboard";
@@ -1689,36 +1731,103 @@ index 0000000..e09d7a1
 +  );
 +}
 +
++/** Keep running's choices, ticking the one in force. Choosing one closes the menu. */
++function KeepRunningOptions({
++  sessionId,
++  status,
++}: {
++  sessionId: string;
++  status: SessionEnvironment | null | undefined;
++}) {
++  const setKeepRunning = useSetKeepRunning(sessionId);
++  const current = keepRunningLabel(status, Date.now() / 1000);
++  return (
++    <>
++      <div className="px-2.5 pt-2.5 pb-1.5 text-[11px] leading-4 whitespace-normal text-muted-foreground">
++        Don't stop this Pod when it's idle,
++        <br />
++        so dev servers keep running.
++      </div>
++      <DropdownMenuGroup>
++        {KEEP_RUNNING_OPTIONS.map(({ label, choice }) => (
++          <DropdownMenuItem
++            key={label}
++            className="gap-2"
++            data-checked={label === current || undefined}
++            onSelect={() =>
++              setKeepRunning.mutate(choice, {
++                onError: (error) =>
++                  toast.error(
++                    `Couldn't change Keep running${error instanceof Error && error.message ? `: ${error.message}` : ""}.`,
++                  ),
++              })
++            }
++          >
++            <span className="flex size-4 items-center justify-center">
++              {label === current && <CheckIcon className="size-3.5" />}
++            </span>
++            <span data-cap>{label}</span>
++          </DropdownMenuItem>
++        ))}
++      </DropdownMenuGroup>
++    </>
++  );
++}
++
 +/**
 + * "Keep running": don't stop the Pod when it's idle, for a while or until
 + * Stop sandbox, so dev servers in the agent's terminal keep running. The
 + * runner learns it with its next report and holds off its idle exit.
++ *
++ * On a phone a side flyout has no room next to the menu and opens off the
++ * screen, so there `onOpenPage` is set and the item swaps the menu to
++ * KeepRunningPage in place instead.
 + */
 +function KeepRunningMenu({
 +  sessionId,
 +  status,
 +  allowed,
++  onOpenPage,
 +}: {
 +  sessionId: string;
 +  status: SessionEnvironment | null | undefined;
 +  allowed: boolean;
++  onOpenPage?: () => void;
 +}) {
-+  const setKeepRunning = useSetKeepRunning(sessionId);
-+  const now = Date.now() / 1000;
-+  const kept = keptRunning(status, now);
-+  const current = keepRunningLabel(status, now);
-+  const trigger = (
-+    <DropdownMenuSubTrigger
-+      className="gap-2"
-+      disabled={!allowed}
-+      data-testid="environment-keep-running"
-+    >
++  const kept = keptRunning(status, Date.now() / 1000);
++  const content = (
++    <>
 +      <CoffeeIcon className="size-4" />
 +      {/* Grows so the hint sits by the chevron, whose own ml-auto would split the space. */}
 +      <span data-cap className="flex-1">
 +        Keep running
 +      </span>
 +      {kept !== null && <Hint>until {kept === "forever" ? "you stop it" : formatClock(kept)}</Hint>}
++    </>
++  );
++  if (onOpenPage) {
++    return (
++      <ControlItem
++        allowed={allowed}
++        className="gap-2"
++        data-testid="environment-keep-running"
++        onSelect={(event) => {
++          event.preventDefault();
++          onOpenPage();
++        }}
++      >
++        {content}
++        <ChevronRightIcon className="ml-auto" />
++      </ControlItem>
++    );
++  }
++  const trigger = (
++    <DropdownMenuSubTrigger
++      className="gap-2"
++      disabled={!allowed}
++      data-testid="environment-keep-running"
++    >
++      {content}
 +    </DropdownMenuSubTrigger>
 +  );
 +  if (!allowed) {
@@ -1741,35 +1850,43 @@ index 0000000..e09d7a1
 +        sideOffset={6}
 +        data-testid="environment-keep-running-menu"
 +      >
-+        <div className="px-2.5 pt-2.5 pb-1.5 text-[11px] leading-4 whitespace-normal text-muted-foreground">
-+          Don't stop this Pod when it's idle,
-+          <br />
-+          so dev servers keep running.
-+        </div>
-+        <DropdownMenuGroup>
-+          {KEEP_RUNNING_OPTIONS.map(({ label, choice }) => (
-+            <DropdownMenuItem
-+              key={label}
-+              className="gap-2"
-+              data-checked={label === current || undefined}
-+              onSelect={() =>
-+                setKeepRunning.mutate(choice, {
-+                  onError: (error) =>
-+                    toast.error(
-+                      `Couldn't change Keep running${error instanceof Error && error.message ? `: ${error.message}` : ""}.`,
-+                    ),
-+                })
-+              }
-+            >
-+              <span className="flex size-4 items-center justify-center">
-+                {label === current && <CheckIcon className="size-3.5" />}
-+              </span>
-+              <span data-cap>{label}</span>
-+            </DropdownMenuItem>
-+          ))}
-+        </DropdownMenuGroup>
++        <KeepRunningOptions sessionId={sessionId} status={status} />
 +      </DropdownMenuSubContent>
 +    </DropdownMenuSub>
++  );
++}
++
++/** Keep running's choices on a phone, in place of the menu, with a way back. */
++function KeepRunningPage({
++  sessionId,
++  status,
++  onBack,
++}: {
++  sessionId: string;
++  status: SessionEnvironment | null | undefined;
++  onBack: () => void;
++}) {
++  return (
++    <div
++      className="animate-in fade-in-0 slide-in-from-right-2 duration-150"
++      data-testid="environment-keep-running-menu"
++    >
++      <DropdownMenuGroup>
++        <DropdownMenuItem
++          className="gap-2"
++          data-testid="environment-keep-running-back"
++          onSelect={(event) => {
++            event.preventDefault();
++            onBack();
++          }}
++        >
++          <ChevronLeftIcon className="size-4" />
++          <span data-cap>Keep running</span>
++        </DropdownMenuItem>
++      </DropdownMenuGroup>
++      <DropdownMenuSeparator />
++      <KeepRunningOptions sessionId={sessionId} status={status} />
++    </div>
 +  );
 +}
 +
@@ -1862,6 +1979,9 @@ index 0000000..e09d7a1
 +}) {
 +  const stop = useStopSession();
 +  const [stopOpen, setStopOpen] = useState(false);
++  const isMobile = useIsMobileViewport();
++  // On a phone, Keep running's choices replace the menu until Back or it closes.
++  const [keepRunningPage, setKeepRunningPage] = useState(false);
 +  const [optimistic, setOptimistic] = useOptimisticState(view.state);
 +  const shown: EnvironmentView = optimistic
 +    ? {
@@ -1913,10 +2033,10 @@ index 0000000..e09d7a1
 +      },
 +    );
 +
++  // Keep running needs the agent up: its runner holds the Pod.
++  const keepRunning = up && state !== "agent_exited";
 +  const actions: { key: string; node: ReactNode }[] = [];
 +  if (up) {
-+    // Keep running needs the agent up: its runner holds the Pod.
-+    const keepRunning = state !== "agent_exited";
 +    if (sshCommand || keepRunning) {
 +      actions.push({
 +        key: "connect",
@@ -1936,6 +2056,7 @@ index 0000000..e09d7a1
 +                sessionId={sessionId}
 +                status={view.status}
 +                allowed={view.canControl}
++                onOpenPage={isMobile ? () => setKeepRunningPage(true) : undefined}
 +              />
 +            )}
 +          </DropdownMenuGroup>
@@ -2050,7 +2171,13 @@ index 0000000..e09d7a1
 +
 +  return (
 +    <>
-+      <DropdownMenu defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
++      <DropdownMenu
++        defaultOpen={defaultOpen}
++        onOpenChange={(open) => {
++          if (!open) setKeepRunningPage(false);
++          onOpenChange?.(open);
++        }}
++      >
 +        <DropdownMenuTrigger asChild>
 +          <ComposerHostTrigger
 +            label={`${view.providerLabel}, ${STATE_WORD[state].toLowerCase()}`}
@@ -2068,17 +2195,27 @@ index 0000000..e09d7a1
 +          data-testid="composer-host-menu"
 +          data-state-name={state}
 +        >
-+          <Header view={shown} />
-+          <DropdownMenuSeparator />
-+          <div className="py-1.5">
-+            <Body view={shown} />
-+          </div>
-+          {actions.map(({ key, node }) => (
-+            <Fragment key={key}>
++          {keepRunningPage && isMobile && keepRunning ? (
++            <KeepRunningPage
++              sessionId={sessionId}
++              status={view.status}
++              onBack={() => setKeepRunningPage(false)}
++            />
++          ) : (
++            <>
++              <Header view={shown} />
 +              <DropdownMenuSeparator />
-+              {node}
-+            </Fragment>
-+          ))}
++              <div className="py-1.5">
++                <Body view={shown} />
++              </div>
++              {actions.map(({ key, node }) => (
++                <Fragment key={key}>
++                  <DropdownMenuSeparator />
++                  {node}
++                </Fragment>
++              ))}
++            </>
++          )}
 +        </DropdownMenuContent>
 +      </DropdownMenu>
 +      <StopSandboxDialog

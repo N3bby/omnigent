@@ -34,7 +34,11 @@ The menu refreshes them every few seconds while it's open. Then:
   in the agent's terminal keep running: **For 2 hours**, **For 8 hours** or
   **Until I stop it**. **Usual idle timeout** goes back to normal. It isn't
   there once the agent has exited, because the agent's runner is what keeps
-  the Pod going; send a message first.
+  the Pod going; send a message first. On a phone, its choices replace the
+  menu, with **‹ Keep running** to go back:
+
+  ![On a phone, Keep running's choices in place of the menu, with For 8 hours ticked](../images/environment-menu-keep-running-mobile.webp)
+
 - **Restart agent** stops the agent and keeps the Pod, with everything
   running in it. Your next message starts the agent again. It's what you use
   to pick up another [subscription](subscriptions.md) account.
@@ -160,6 +164,10 @@ It's one patch per image: the server, the runner and the web UI. The
     which wakes a stopped sandbox, or starts the runner on a live Pod, as a
     message would. After Stop, Restart or a start, the menu shows where it's
     heading until the poll catches up.
+  - On a phone (narrower than 768px), Keep running swaps the menu for its
+    choices in place, as upstream's conversation menu does for Move session:
+    a side flyout has no room beside the menu there and opened off the
+    screen.
   - Renames the sidebar's item to **Stop sandbox** for sessions on the
     sandbox, sends the flag, and adds the confirmation dialog.
   - The spacing is scoped to `.environment-menu` in `index.css`, and labels
