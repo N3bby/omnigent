@@ -10,7 +10,8 @@
 # composers without a mic, the Claude permission hook's bearer refresh,
 # agents' progress bars, a turn Claude starts straight after Stop showing as
 # working, CORS for the glasses app, the always-on Hermes host running
-# Hermes sessions only, and push-to-talk, against a fresh, fully patched
+# Hermes sessions only, push-to-talk, and the chat holding still while
+# scrolling up through older messages, against a fresh, fully patched
 # upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
@@ -137,6 +138,8 @@ PY
       src/lib/sessionsApi.test.ts src/lib/toolTitle.test.ts \
       src/lib/pushToTalk.test.ts src/hooks/usePushToTalk.test.tsx \
       src/components/PushToTalkSettings.test.tsx src/lib/settingsPortability.test.ts \
+      src/components/chat/Transcript.measureAhead.test.tsx \
+      src/components/chat/Transcript.virtualList.test.tsx \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

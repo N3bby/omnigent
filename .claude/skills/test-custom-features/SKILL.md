@@ -1,6 +1,6 @@
 ---
 name: test-custom-features
-description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed upstream dictation, push-to-talk dictation through your speech server, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, progress bars from the agent, a session still showing Working… when Claude goes straight on after a reply or its background agent works on, your own Hermes as an agent with its approval prompts, the always-on Hermes host for Hermes sessions, Omnigent's sessions as MCP tools for your Hermes, and CORS for the Even G2 glasses app. Run it from an Omnigent session on the deployment under test.
+description: Test that this deployment's custom features on top of upstream Omnigent still work, typically after upgrading Omnigent (omnigent_commit in versions.yaml) or the runner's agent CLIs. Covers usage limits, fast mode from the chat, the model picker, fuzzy @ file search and inline @ mentions, root and containers in runners, runtimes from mise, no permission prompts, the GitHub repository picker, idle sessions, runners on the tailnet, Open in Gateway, the removed Share button, the removed sidebar pin and archive buttons, the removed upstream dictation, push-to-talk dictation through your speech server, the swipe menu on touch devices, the Codex theme, the runner description agents get, repository variables, a repository's own Git token, the repository picker's Repositories and Custom tabs with configured repositories on any host and a repository's SSH key, agent instructions and setup script, a repository's exit node, also only for its Git server, and MagicDNS in sessions, a project's repositories, subscriptions in Settings, MCP servers in Settings, the environment menu with Stop sandbox, the startup card, starting a session without a message, a first message that survives closing the app, the sandbox picker under the composer, images, video and audio in the chat with Copy image, Claude's questions reaching the web UI however long it has run, progress bars from the agent, a session still showing Working… when Claude goes straight on after a reply or its background agent works on, your own Hermes as an agent with its approval prompts, the always-on Hermes host for Hermes sessions, Omnigent's sessions as MCP tools for your Hermes, CORS for the Even G2 glasses app, and the chat holding still while you scroll up through older messages. Run it from an Omnigent session on the deployment under test.
 ---
 
 # Test the custom features
@@ -145,6 +145,7 @@ PASS  images/server/web-patches/0037-environment-exit-node.patch
 PASS  images/server/web-patches/0038-repo-exit-node-git-only.patch
 PASS  images/server/web-patches/0039-agent-progress.patch
 PASS  images/server/web-patches/0040-push-to-talk.patch
+PASS  images/server/web-patches/0041-transcript-measure-ahead.patch
 ```
 
 A `FAIL` lists the hunks that didn't apply: upstream changed the code under
@@ -216,7 +217,7 @@ patch sets, and runs the following suites against that source:
 
 | Suite | File in the patched upstream checkout | Expected on the pinned version |
 | --- | --- | --- |
-| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx`, `web/src/lib/agentProgress.test.ts`, `web/src/components/chat/AgentProgressCard.test.tsx`, `web/src/lib/sessionsApi.test.ts`, `web/src/lib/toolTitle.test.ts`, `web/src/lib/pushToTalk.test.ts`, `web/src/hooks/usePushToTalk.test.tsx`, `web/src/components/PushToTalkSettings.test.tsx`, `web/src/lib/settingsPortability.test.ts` | 2601 passed |
+| Frontend | `web/src/lib/fastMode.test.ts`, `web/src/store/chatStore.test.ts`, `web/src/pages/ChatPage.test.ts`, `web/src/lib/fuzzyPathMatch.test.ts`, `web/src/pages/ChatPage.mention.test.tsx`, `web/src/shell/ProjectSettingsDialog.test.tsx`, `web/src/shell/NewChatDialog.projectPrefill.test.tsx`, `web/src/components/composer/EnvironmentMenu.test.tsx`, `web/src/components/HostBadge.test.tsx`, `web/src/shell/Sidebar.stop.test.tsx`, `web/src/components/composer/ComposerSubscription.test.tsx`, `web/src/components/chat/SandboxStartupCard.test.tsx`, `web/src/lib/sandboxStartup.test.ts`, `web/src/shell/MainTerminalView.startup.test.tsx`, `web/src/shell/NewChatDialog.test.tsx`, `web/src/shell/NewChatDialog.flow.test.tsx`, `web/src/hooks/useIsAdmin.test.tsx`, `web/src/shell/WorkspacePanel.test.tsx`, `web/src/components/ui/kbd.test.tsx`, `web/src/pages/McpServersPage.test.tsx`, `web/src/lib/mcpServerIcons.test.ts`, `web/src/pages/RepoVariablesPage.test.tsx`, `web/src/shell/settingsNav.test.tsx`, `web/src/components/RepoEnvBadge.test.tsx`, `web/src/components/RepoCustomForm.test.tsx`, `web/src/lib/repoEnv.test.ts`, `web/src/components/blocks/ChatMarkdown.media.test.tsx`, `web/src/components/ImageLightbox.test.tsx`, `web/src/components/ai-elements/message.test.tsx`, `web/src/components/ai-elements/reasoning.test.tsx`, `web/src/lib/clipboard.test.ts`, `web/src/pages/ChatPage.composer.test.tsx`, `web/src/components/chat/SideChatPane.test.tsx`, `web/src/lib/agentProgress.test.ts`, `web/src/components/chat/AgentProgressCard.test.tsx`, `web/src/lib/sessionsApi.test.ts`, `web/src/lib/toolTitle.test.ts`, `web/src/lib/pushToTalk.test.ts`, `web/src/hooks/usePushToTalk.test.tsx`, `web/src/components/PushToTalkSettings.test.tsx`, `web/src/lib/settingsPortability.test.ts`, `web/src/components/chat/Transcript.measureAhead.test.tsx`, `web/src/components/chat/Transcript.virtualList.test.tsx` | 2611 passed |
 | Backend | `tests/runner/test_fast_mode_command.py`, `tests/server/test_fast_mode_command.py`, `tests/runner/test_file_index.py`, `tests/server/integration/test_file_index_route.py`, `tests/server/test_stop_sandbox.py`, `tests/server/integration/test_stop_sandbox.py`, `tests/server/test_cancel_start.py`, `tests/server/integration/test_session_environment.py`, `tests/onboarding/sandboxes/test_agent_sandbox_suspend.py`, `tests/onboarding/sandboxes/test_agent_sandbox_environment.py`, `tests/runner/test_environment_report.py`, `tests/runner/test_environment_report_exit_node.py`, `tests/server/integration/test_session_environment_exit_node.py`, `tests/onboarding/sandboxes/test_startup_progress_k8s.py`, `tests/server/test_startup_progress.py`, `tests/server/routes/test_codex_bypass_default.py`, `tests/server/routes/test_session_resources.py`, `tests/server/integration/test_message_waiting_for_sandbox.py`, `tests/harnesses/claude_native/test_permission_hook_auth_refresh.py`, `tests/server/test_agent_progress.py`, `tests/runner/test_session_progress_dispatch.py`, `tests/runner/test_progress_log.py`, `tests/runner/test_claude_native_turn_end_recheck.py`, `tests/runner/test_resource_registry.py`, `tests/server/test_cors_origins.py`, `tests/server/integration/test_hermes_host.py`, `tests/server/routes/test_push_to_talk_info.py` | 498 passed, 1 skipped |
 
 Most frontend cases are existing upstream tests. Fast mode adds 11 frontend
@@ -285,7 +286,14 @@ stream URL, the server's frames, and the socket with a fake WebSocket),
 the key, a tap, a shortcut, focus loss and sending on release) and
 `PushToTalkSettings.test.tsx` (5 cases), and runs upstream's
 `settingsPortability.test.ts` beside it. None of these talks to a real speech
-server or microphone; that's step 6. These are
+server or microphone; that's step 6. Holding the chat still while scrolling
+up through older messages (`0041-transcript-measure-ahead.patch`) adds
+`Transcript.measureAhead.test.tsx` (3 cases, on the real react-virtual with
+rows of a fixed height: a page of older messages is measured in the commit
+that lands it, the rest while the pane is still, and none while a finger is
+on it), and runs upstream's `Transcript.virtualList.test.tsx` (7 cases)
+beside it. Whether the reader's messages really stay put needs a browser;
+that's step 6. These are
 selected suites, not the entire upstream test suite. The environment menu's
 backend uses fake Kubernetes clients and stubbed suspends: a pass verifies the
 stop, cancel, report and keep-running logic, not a live cluster. So does the
@@ -308,7 +316,7 @@ uv and pnpm's home-directory caches speed up later runs. It uses no CLI login
 and does not change a live session's fast-mode setting.
 
 With the patches applied, upstream's **whole** web suite passes as well
-(11182 passed, 3 expected fail, 1 skipped on `v0.18.0`, 2026-10-21): patches that change
+(11231 passed, 3 expected fail, 1 skipped on `v0.18.0`, 2026-10-28): patches that change
 upstream behaviour, such as removing Share, update upstream's tests for it.
 To run it, keep the checkout of a failed run, or apply the patches to one
 yourself, and run `pnpm --dir <checkout>/web exec vitest run`. A failure there
@@ -1003,6 +1011,13 @@ after the next message it names `feature-check`. Switch back, then remove
     Settings → Speech, pick **Deepgram Nova-3** and talk: unsure words show
     dimmed, then settle. The speech server's own log shows each take end
     (`take from … ended`) within a second or two of letting go.
+26. **Scrolling up through older messages:** it's about how it feels under
+    your fingers, so it's left to you, on an iPhone and on a Mac. Open a
+    session with a long history, read the last reply for a few seconds, then
+    flick up steadily through **Loading earlier messages…** and the pages it
+    brings. The message under your eyes moves only as far as you scroll: it
+    doesn't jump up or down as older messages land or as you reach them, and
+    no message is drawn over another for a moment.
 
 ## 7. Clean up
 

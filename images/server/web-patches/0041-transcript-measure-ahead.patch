@@ -1,0 +1,387 @@
+Keep the chat still while scrolling up through older messages.
+
+The transcript is virtualized: a message it hasn't drawn yet counts as
+280px tall, and only gets its real height once it's drawn, which happens as
+the reader scrolls up to it. react-virtual then corrects the scroll offset
+by the difference, mid-scroll. On iOS it defers that correction until the
+fling ends, so the messages on screen jump by hundreds of pixels each time
+one above them is measured; a page of older messages is 20 unmeasured ones.
+Elsewhere a message drawn at its estimate overlaps the ones below it for a
+frame, and near the bottom the browser clamps the corrected offset to the
+list's old height, so the reader loses the rest of it.
+
+Messages are now measured before the reader gets to them. A page of older
+messages is drawn whole in the commit that lands it, so the existing hold
+on the reader's position works from real heights; the rest are drawn a few
+at a time while the pane is still (no scroll, touch, wheel, key or pointer
+press in the last 150 ms), nearest the window first, and dropped again once
+measured. And the list grows to its new height before an offset correction,
+so it's never clamped.
+
+Upstream bug: delete once upstream's VirtualBubbleList
+(web/src/components/chat/Transcript.tsx) measures rows before they scroll
+into the window, or react-virtual no longer moves the offset mid-scroll.
+
+diff --git a/web/src/components/chat/Transcript.measureAhead.test.tsx b/web/src/components/chat/Transcript.measureAhead.test.tsx
+new file mode 100644
+index 0000000..c718f5f
+--- /dev/null
++++ b/web/src/components/chat/Transcript.measureAhead.test.tsx
+@@ -0,0 +1,129 @@
++import { act, cleanup, render } from "@testing-library/react";
++import { afterEach, beforeEach, expect, it, vi } from "vitest";
++import type { Bubble } from "@/lib/renderItems";
++import { Conversation, ConversationContent } from "@/components/ai-elements/conversation";
++import { VirtualBubbleList } from "./Transcript";
++
++// test-setup replaces react-virtual with a pass-through that renders every
++// row; what's under test here is which rows the real one measures, so use it,
++// and give rows the size jsdom's lack of layout leaves out.
++vi.mock("@tanstack/react-virtual", async (importOriginal) => await importOriginal());
++
++// Every row is 100px tall, against the virtualizer's 280px estimate, so the
++// list's height tells how many rows have been measured.
++const ROW_PX = 100;
++const GAP_PX = 16;
++const measuredHeight = (rows: number) => rows * ROW_PX + (rows - 1) * GAP_PX;
++
++const user = (n: number): Bubble => ({
++  kind: "user",
++  itemId: `user-${n}`,
++  content: [{ type: "input_text", text: `message ${n}` }],
++});
++const users = (from: number, to: number) =>
++  Array.from({ length: to - from }, (_, i) => user(from + i));
++
++function scrollElement(): HTMLElement {
++  const el = document.createElement("div");
++  Object.defineProperties(el, {
++    scrollTop: { configurable: true, writable: true, value: 0 },
++    clientHeight: { configurable: true, value: 500 },
++    offsetHeight: { configurable: true, value: 500 },
++    offsetWidth: { configurable: true, value: 800 },
++    scrollHeight: { configurable: true, value: 100_000 },
++  });
++  el.getBoundingClientRect = () => ({ top: 0, height: 500 }) as DOMRect;
++  el.scrollTo = ((options: ScrollToOptions) => {
++    el.scrollTop = options.top ?? el.scrollTop;
++  }) as typeof el.scrollTo;
++  document.body.append(el);
++  return el;
++}
++
++function transcript(bubbles: Bubble[], scrollEl: HTMLElement) {
++  return (
++    <Conversation>
++      <ConversationContent>
++        <VirtualBubbleList
++          bubbles={bubbles}
++          scrollEl={scrollEl}
++          lastAssistantIndex={-1}
++          showsWorking={false}
++          sessionIdle
++          conversationId="conv-1"
++          hasTasks={false}
++          disableVirtualization={false}
++          onGeometryChange={vi.fn()}
++        />
++      </ConversationContent>
++    </Conversation>
++  );
++}
++
++function listHeight(view: ReturnType<typeof render>): number {
++  const row = view.container.querySelector<HTMLElement>("[data-index]")!;
++  return parseFloat(row.parentElement!.style.height);
++}
++
++beforeEach(() => {
++  vi.useFakeTimers();
++  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
++    this: HTMLElement,
++  ) {
++    return this.dataset.index === undefined ? 0 : ROW_PX;
++  });
++  const rect = HTMLElement.prototype.getBoundingClientRect;
++  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
++    this: HTMLElement,
++  ) {
++    return this.dataset.index === undefined
++      ? rect.call(this)
++      : ({ top: 0, height: ROW_PX, width: 800 } as DOMRect);
++  });
++});
++
++afterEach(() => {
++  cleanup();
++  vi.useRealTimers();
++  vi.restoreAllMocks();
++  document.body.innerHTML = "";
++});
++
++it("measures every row of a history page in the commit that lands it", () => {
++  const scrollEl = scrollElement();
++  const view = render(transcript(users(40, 43), scrollEl));
++  expect(listHeight(view)).toBe(measuredHeight(3));
++
++  // A page of 30 older rows lands. Most sit far outside the window, but the
++  // reader scrolls into them next, so none may be left at the estimate.
++  view.rerender(transcript(users(10, 43), scrollEl));
++
++  expect(listHeight(view)).toBe(measuredHeight(33));
++});
++
++it("measures the rows outside the window while the pane is idle", () => {
++  const scrollEl = scrollElement();
++  const view = render(transcript(users(0, 40), scrollEl));
++  const opened = listHeight(view);
++  expect(opened).toBeGreaterThan(measuredHeight(40));
++
++  act(() => vi.advanceTimersByTime(2_000));
++
++  expect(listHeight(view)).toBe(measuredHeight(40));
++  // Rows mounted only to be measured leave again.
++  expect(view.container.querySelectorAll("[data-index]").length).toBeLessThan(40);
++});
++
++it("leaves the measuring to after a touch on the pane ends", () => {
++  const scrollEl = scrollElement();
++  const view = render(transcript(users(0, 40), scrollEl));
++  const opened = listHeight(view);
++
++  scrollEl.dispatchEvent(new Event("touchstart"));
++  act(() => vi.advanceTimersByTime(2_000));
++  expect(listHeight(view)).toBe(opened);
++
++  scrollEl.dispatchEvent(new Event("touchend"));
++  act(() => vi.advanceTimersByTime(2_000));
++  expect(listHeight(view)).toBe(measuredHeight(40));
++});
+diff --git a/web/src/components/chat/Transcript.tsx b/web/src/components/chat/Transcript.tsx
+index a59c121..b21ff8b 100644
+--- a/web/src/components/chat/Transcript.tsx
++++ b/web/src/components/chat/Transcript.tsx
+@@ -1,6 +1,11 @@
+ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+ import { flushSync } from "react-dom";
+-import { useVirtualizer } from "@tanstack/react-virtual";
++import {
++  defaultRangeExtractor,
++  elementScroll,
++  type Range,
++  useVirtualizer,
++} from "@tanstack/react-virtual";
+ import { useStickToBottomContext } from "use-stick-to-bottom";
+ import {
+   Conversation,
+@@ -609,6 +614,14 @@ function rememberTranscriptView(convId: string, snap: TranscriptViewSnapshot): v
+ /** Physical "is this scroll element at (or within a hair of) its bottom". */
+ const BOTTOM_EPSILON_PX = 8;
+ const RESTORE_CANCEL_EVENTS = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
++/** Rows of a history page measured in the commit that lands it, at most. */
++const PREPEND_MEASURE_LIMIT = 60;
++/** Unmeasured rows mounted per idle pass, nearest the viewport first. */
++const IDLE_MEASURE_BATCH = 8;
++/** Quiet time before the first idle pass, so a pass never lands mid-gesture. */
++const IDLE_MEASURE_DELAY_MS = 150;
++/** Gap between the passes of one quiet stretch, enough for a frame to paint. */
++const IDLE_MEASURE_NEXT_MS = 20;
+ function isElAtBottom(el: HTMLElement): boolean {
+   return el.scrollHeight - el.clientHeight - el.scrollTop <= BOTTOM_EPSILON_PX;
+ }
+@@ -758,6 +771,30 @@ export function VirtualBubbleList({
+   // render leaves it alone: its offsets are pre-measure estimates, and the hold
+   // needs the offsets from before the page landed.
+   const rowSnapshotRef = useRef<{ key: string; start: number; end: number }[]>([]);
++  // Rows mounted outside the window only so the virtualizer measures them.
++  // Until a row is measured it sits at the 280px estimate, and correcting that
++  // mid-scroll moves the reader: on iOS react-virtual defers the scroll
++  // adjustment until the fling ends, so the rows on screen jump by the
++  // difference, and elsewhere a row painted at its estimate overlaps the ones
++  // below it for a frame. So rows are measured before the reader reaches them:
++  // a history page in the commit that lands it, the rest while the pane is idle.
++  const measureAheadRef = useRef<readonly number[]>([]);
++  const [measureAheadVersion, setMeasureAheadVersion] = useState(0);
++  // Row keys an idle pass has mounted. A row exactly as tall as the estimate
++  // never enters react-virtual's size cache, so this is what ends the passes.
++  const idleMeasuredRef = useRef(new Set<string>());
++  const rangeExtractor = useCallback(
++    (range: Range) => {
++      const indexes = defaultRangeExtractor(range);
++      const ahead = measureAheadRef.current.filter((index) => index < range.count);
++      if (ahead.length === 0) return indexes;
++      return [...new Set([...ahead, ...indexes])].sort((a, b) => a - b);
++    },
++    // The version is the extractor's identity, so react-virtual re-runs it.
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++    [measureAheadVersion],
++  );
++
+   // The list is reused across conversation switches; every baseline here
+   // (row keys, offsets, the list's own offset) describes one conversation.
+   const baselineConversationRef = useRef(conversationId);
+@@ -770,6 +807,8 @@ export function VirtualBubbleList({
+     renderedFirstKeyRef.current = undefined;
+     rowSnapshotRef.current = [];
+     prevFirstKeyRef.current = undefined;
++    measureAheadRef.current = [];
++    idleMeasuredRef.current.clear();
+   }
+ 
+   const virtualizer = useVirtualizer({
+@@ -788,6 +827,16 @@ export function VirtualBubbleList({
+     gap: 16,
+     overscan: 6,
+     scrollMargin,
++    rangeExtractor,
++    // A row measured above the viewport moves the offset before React renders
++    // the list at its new height, so near the bottom the browser would clamp
++    // the write to the old height and the reader's rows would jump by the
++    // rest. Grow the list first.
++    scrollToFn: (offset, options, instance) => {
++      const wrapper = wrapperRef.current;
++      if (wrapper) wrapper.style.height = `${instance.getTotalSize()}px`;
++      elementScroll(offset, options, instance);
++    },
+   });
+ 
+   // An assistant bubble is keyed by its first item, so a history page that
+@@ -832,6 +881,26 @@ export function VirtualBubbleList({
+     for (const key of aliases.keys()) {
+       if (!currentKeys.has(key)) aliases.delete(key);
+     }
++    // Mount the page's rows in this commit, wherever the window is, so the hold
++    // below measures every one of them: the reader then scrolls into rows of
++    // known size. The page sits above the row that was first, which a rename
++    // may have grown, so that row is measured again too.
++    const previousFirstKey = renderedFirstKeyRef.current;
++    const previousFirst = bubbles.findIndex((bubble) => {
++      const key = bubbleKey(bubble);
++      return key === previousFirstKey || aliases.get(key) === previousFirstKey;
++    });
++    const pageRows: number[] = [];
++    for (
++      let index = previousFirst < 0 ? bubbles.length - 1 : previousFirst;
++      index >= 0 && pageRows.length < PREPEND_MEASURE_LIMIT;
++      index--
++    ) {
++      const key = bubbleKey(bubbles[index]!);
++      const row = aliases.get(key) ?? key;
++      if (!virtualizer.itemSizeCache.has(row) || renamed.has(row)) pageRows.push(index);
++    }
++    measureAheadRef.current = pageRows;
+   }
+   renderedFirstKeyRef.current = firstBubbleKey;
+   renderedBubblesRef.current = bubbles;
+@@ -967,6 +1036,11 @@ export function VirtualBubbleList({
+ 
+   const totalSize = virtualizer.getTotalSize();
+   const range = virtualizer.range;
++  // scrollToFn sets the list's height outside React; React only writes the
++  // style when its own value changes, so put back the rendered one each commit.
++  useLayoutEffect(() => {
++    if (wrapperRef.current) wrapperRef.current.style.height = `${totalSize}px`;
++  });
+ 
+   // The user turn owning the viewport midpoint, from the virtualizer's model —
+   // NOT the windowed DOM. `getVirtualItemForOffset` maps a scroll offset to a
+@@ -1008,7 +1082,8 @@ export function VirtualBubbleList({
+     // snap. Measure them now instead (resizeItem has no such skip), along with
+     // the renamed rows the page grew; with the prepend flag still set the
+     // library adjusts nothing, the hold below works from real sizes, and the
+-    // re-render this queues lands before paint.
++    // re-render this queues lands before paint. The whole page is mounted in
++    // this commit (see measureAheadRef), so that's every row it brought.
+     const wrapper = wrapperRef.current;
+     if (wrapper && prependCommitRef.current) {
+       for (const node of wrapper.querySelectorAll<HTMLElement>("[data-index]")) {
+@@ -1017,6 +1092,8 @@ export function VirtualBubbleList({
+         if (virtualizer.itemSizeCache.has(key) && !renamedRowKeysRef.current.has(key)) continue;
+         virtualizer.resizeItem(Number(node.dataset.index), node.getBoundingClientRect().height);
+       }
++      // Measured: the next render's window drops the rows outside it.
++      measureAheadRef.current = [];
+     }
+     prependCommitRef.current = false;
+     virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined;
+@@ -1063,6 +1140,80 @@ export function VirtualBubbleList({
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [bubbles, scrollEl, virtualizer]);
+ 
++  // Until when the reader may be starting a scroll: a finger on the pane (a
++  // fling may follow; react-virtual defers iOS scroll adjustments then too), or
++  // a wheel, key or pointer press whose scroll may not have begun yet. WebKit
++  // drops a scroll offset written as its wheel animation starts.
++  const inputUntilRef = useRef(0);
++  useEffect(() => {
++    if (!scrollEl) return;
++    const touchStart = () => (inputUntilRef.current = Number.POSITIVE_INFINITY);
++    const input = () => (inputUntilRef.current = performance.now() + IDLE_MEASURE_DELAY_MS);
++    const events = ["touchend", "touchcancel", "wheel", "keydown", "pointerdown"] as const;
++    scrollEl.addEventListener("touchstart", touchStart, { passive: true });
++    for (const type of events) scrollEl.addEventListener(type, input, { passive: true });
++    return () => {
++      inputUntilRef.current = 0;
++      scrollEl.removeEventListener("touchstart", touchStart);
++      for (const type of events) scrollEl.removeEventListener(type, input);
++    };
++  }, [scrollEl]);
++
++  // Measure the rows the reader hasn't reached yet while the pane is still: a
++  // few at a time, nearest the window first and above it before below, since
++  // the reader scrolls up into history. Mounted while idle, a row is measured
++  // as it mounts and react-virtual moves the scroll offset in the same commit,
++  // so nothing on screen moves. Each pass waits for quiet, so a gesture that
++  // starts mid-pass leaves the rest for after it.
++  const scrolling = virtualizer.isScrolling;
++  useEffect(() => {
++    if (disableVirtualization || !scrollEl) return;
++    if (scrolling) {
++      // Rows mounted now would only be measured after paint; let them go.
++      if (measureAheadRef.current.length > 0) {
++        measureAheadRef.current = [];
++        setMeasureAheadVersion((version) => version + 1);
++      }
++      return;
++    }
++    let timer: ReturnType<typeof setTimeout>;
++    const pass = () => {
++      const v = virtualizerRef.current;
++      if (performance.now() < inputUntilRef.current || v.isScrolling || prependCommitRef.current) {
++        timer = setTimeout(pass, IDLE_MEASURE_DELAY_MS);
++        return;
++      }
++      const shown = v.range;
++      const all = bubblesRef.current;
++      const next: number[] = [];
++      if (shown) {
++        const unmeasured = (index: number) => {
++          const key = rowKey(all[index]!);
++          return !v.itemSizeCache.has(key) && !idleMeasuredRef.current.has(key);
++        };
++        for (let i = shown.startIndex - 1; i >= 0 && next.length < IDLE_MEASURE_BATCH; i--) {
++          if (unmeasured(i)) next.push(i);
++        }
++        for (let i = shown.endIndex + 1; i < all.length && next.length < IDLE_MEASURE_BATCH; i++) {
++          if (unmeasured(i)) next.push(i);
++        }
++      }
++      if (next.length === 0 && measureAheadRef.current.length === 0) return;
++      for (const index of next) idleMeasuredRef.current.add(rowKey(all[index]!));
++      measureAheadRef.current = next;
++      // Commit in this task, while the pane is known to be still: a wheel event
++      // can't slip in between the check above and the scroll offset moving.
++      flushSync(() => setMeasureAheadVersion((version) => version + 1));
++    };
++    // A pass that just mounted rows means the pane was already quiet.
++    timer = setTimeout(
++      pass,
++      measureAheadRef.current.length > 0 ? IDLE_MEASURE_NEXT_MS : IDLE_MEASURE_DELAY_MS,
++    );
++    return () => clearTimeout(timer);
++    // `bubbles` changing is what brings unmeasured rows.
++  }, [bubbles, scrolling, measureAheadVersion, disableVirtualization, scrollEl]);
++
+   // Publish geometry (scroll handle, active turn, range nonce) up to the rail
+   // and spacer. rangeNonce bumps on any mounted-range change so a windowed-out
+   // spacer anchor that has remounted gets a fresh measure.
