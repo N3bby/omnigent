@@ -10,10 +10,10 @@ use it; or just the name when tailscaled didn't answer. Without an exit node
 there's no row.
 Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0035.
 diff --git a/web/src/components/composer/EnvironmentMenu.test.tsx b/web/src/components/composer/EnvironmentMenu.test.tsx
-index 0374a73..6391187 100644
+index 2a429af..9127c97 100644
 --- a/web/src/components/composer/EnvironmentMenu.test.tsx
 +++ b/web/src/components/composer/EnvironmentMenu.test.tsx
-@@ -353,6 +353,73 @@ describe("EnvironmentMenu status rows", () => {
+@@ -356,6 +356,73 @@ describe("EnvironmentMenu status rows", () => {
    });
  });
  
@@ -88,10 +88,10 @@ index 0374a73..6391187 100644
    it("starts a stopped sandbox without a message", async () => {
      renderMenu({ state: "stopped" });
 diff --git a/web/src/components/composer/EnvironmentMenu.tsx b/web/src/components/composer/EnvironmentMenu.tsx
-index e09d7a1..142b504 100644
+index 1ac9c14..1c6a698 100644
 --- a/web/src/components/composer/EnvironmentMenu.tsx
 +++ b/web/src/components/composer/EnvironmentMenu.tsx
-@@ -404,6 +404,63 @@ function PodRow({ view, now }: { view: EnvironmentView; now: number }) {
+@@ -407,6 +407,63 @@ function PodRow({ view, now }: { view: EnvironmentView; now: number }) {
    );
  }
  
@@ -155,7 +155,7 @@ index e09d7a1..142b504 100644
  /** "Keep running" in force: `"forever"`, the time it ends, or `null`. */
  function keptRunning(status: SessionEnvironment | null | undefined, now: number) {
    if (status?.keep_running_forever) return "forever" as const;
-@@ -457,6 +514,7 @@ function Body({ view }: { view: EnvironmentView }) {
+@@ -460,6 +517,7 @@ function Body({ view }: { view: EnvironmentView }) {
          <>
            <AgentRow view={view} now={now} />
            <PodRow view={view} now={now} />
