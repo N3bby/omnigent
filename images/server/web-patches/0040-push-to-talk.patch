@@ -27,6 +27,9 @@ The waveform keeps its bars when listening turns to finishing, so they
 trail off to silence instead of blanking when you let go. The
 draft is drawn by the composer's highlight backdrop so the words can fade
 in; Deepgram's words that may still change are dimmed.
+Once the draft is taller than the composer, the textarea scrolls to keep
+the newest words in view, as typing would: the words are set, not typed, and
+the textarea isn't focused while the mic button is held.
 
 Settings → Speech (components/PushToTalkSettings.tsx) picks the model, the
 key, the words to listen for (Mistral's context bias and Deepgram's
@@ -761,10 +764,10 @@ index 7f0211c..72314b4 100644
          // A right group holding a control that can truncate, like the
 diff --git a/web/src/hooks/usePushToTalk.test.tsx b/web/src/hooks/usePushToTalk.test.tsx
 new file mode 100644
-index 0000000..310e772
+index 0000000..f23efa5
 --- /dev/null
 +++ b/web/src/hooks/usePushToTalk.test.tsx
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,249 @@
 +// Tests for usePushToTalk: words stream into the draft at the caret, Esc puts
 +// the draft back, a tap is dropped, and letting go ends the stream.
 +
@@ -954,6 +957,58 @@ index 0000000..310e772
 +    expect(onSend).toHaveBeenCalledTimes(1);
 +  });
 +
++  describe("past the composer's height", () => {
++    // jsdom has no layout: 10 characters to a 20px line, in a 60px box.
++    beforeEach(() => {
++      const scrolled = new WeakMap<Element, number>();
++      vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (
++        this: Element,
++      ) {
++        return this instanceof HTMLTextAreaElement ? Math.ceil(this.value.length / 10) * 20 : 0;
++      });
++      vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(60);
++      vi.spyOn(Element.prototype, "scrollTop", "get").mockImplementation(function (this: Element) {
++        return scrolled.get(this) ?? 0;
++      });
++      vi.spyOn(Element.prototype, "scrollTop", "set").mockImplementation(function (
++        this: Element,
++        top: number,
++      ) {
++        scrolled.set(this, top);
++      });
++    });
++
++    it("scrolls to the newest words as they arrive, with the mic button held", async () => {
++      const box = renderComposer();
++      act(() => box.ptt!.start("pointer", true));
++      act(() => streams.last!.events.onText("Look at the runner pods"));
++      expect(box.ta!.scrollTop).toBe(0);
++      act(() => streams.last!.events.onText(" that take long to start"));
++      // 47 characters: five lines, 100px, in the 60px box.
++      expect(box.ta!.scrollTop).toBe(40);
++      act(() => streams.last!.events.onText(" on a cold node"));
++      expect(box.ta!.scrollTop).toBe(80);
++
++      now += 2000;
++      act(() => box.ptt!.release());
++      await act(async () => streams.last!.finish());
++      expect(box.ta!.scrollTop).toBe(80);
++    });
++
++    it("scrolls to words dictated mid-draft, not to the end", () => {
++      const box = renderComposer(`Intro. ${"x".repeat(93)}`);
++      act(() => {
++        box.ta!.focus();
++        box.ta!.setSelectionRange(7, 7);
++      });
++      act(() => box.ptt!.start("key"));
++      act(() => streams.last!.events.onText(" and a long aside about the pods"));
++      // The text up to the words is 38 characters, four lines: 80px.
++      expect(box.ta!.selectionStart).toBe(38);
++      expect(box.ta!.scrollTop).toBe(20);
++    });
++  });
++
 +  it("stays off without a speech server", () => {
 +    serverInfo.push_to_talk_url = null;
 +    const box = renderComposer();
@@ -964,10 +1019,10 @@ index 0000000..310e772
 +});
 diff --git a/web/src/hooks/usePushToTalk.ts b/web/src/hooks/usePushToTalk.ts
 new file mode 100644
-index 0000000..44fc0f7
+index 0000000..f145f23
 --- /dev/null
 +++ b/web/src/hooks/usePushToTalk.ts
-@@ -0,0 +1,430 @@
+@@ -0,0 +1,450 @@
 +// Push-to-talk in a composer: hold a key or the mic button, talk, let go.
 +//
 +// The words stream into the draft at the caret while the person talks (see
@@ -1148,13 +1203,15 @@ index 0000000..44fc0f7
 +    setValue(built.value);
 +  }, [setValue]);
 +
-+  // Keep the caret right after the words while they arrive, where it's visible.
++  // Keep the caret right after the words while they arrive, and keep them in
++  // view: past its cap the textarea scrolls, and only typing would follow.
 +  useLayoutEffect(() => {
 +    const caret = caretRef.current;
 +    const ta = textareaRef.current;
-+    if (caret === null || !ta || ta !== document.activeElement) return;
++    if (caret === null || !ta) return;
 +    caretRef.current = null;
-+    ta.setSelectionRange(caret, caret);
++    if (ta === document.activeElement) ta.setSelectionRange(caret, caret);
++    revealOffset(ta, caret);
 +  });
 +
 +  const clearTimers = useCallback(() => {
@@ -1381,6 +1438,24 @@ index 0000000..44fc0f7
 +    cancel,
 +    level,
 +  };
++}
++
++/** Scroll *ta* down just far enough that the line ending at *offset* shows. */
++function revealOffset(ta: HTMLTextAreaElement, offset: number): void {
++  if (ta.scrollHeight <= ta.clientHeight) return;
++  let bottom = ta.scrollHeight;
++  if (offset < ta.value.length) {
++    // Words dictated mid-draft: measure the text up to them in a copy of the
++    // textarea, beside it so the composer's styles still apply.
++    const probe = ta.cloneNode() as HTMLTextAreaElement;
++    probe.removeAttribute("id");
++    probe.style.cssText += `;position:absolute;visibility:hidden;height:0;min-height:0;width:${ta.offsetWidth}px`;
++    probe.value = ta.value.slice(0, offset);
++    ta.after(probe);
++    bottom = probe.scrollHeight;
++    probe.remove();
++  }
++  ta.scrollTop = Math.max(ta.scrollTop, bottom - ta.clientHeight);
 +}
 +
 +/** Whether the push-to-talk key may start a take while focus is on *target*. */

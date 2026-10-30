@@ -18,6 +18,7 @@ your voice on to Mistral's or Deepgram's cloud.
   a waveform that follows your voice, which model is listening, and how to
   cancel. The mic button turns solid, with a soft halo that grows when
   you're loud. The words appear at the caret and fade in as they arrive.
+  Once they fill the composer, it scrolls to keep the newest ones in view.
 - **Let go**, and the bar says **Finishing** while the last words arrive:
   about 0.8 seconds later with Voxtral on your server. The text stays in the
   composer for you to check and send, or goes straight out if you turn on
