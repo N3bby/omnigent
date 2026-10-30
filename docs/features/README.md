@@ -39,6 +39,7 @@ What agents can do in their session, and what happens to it when you leave.
 | [Runtimes from mise](mise-runtimes.md) | `node`, `python` and others follow a project's `.mise.toml` or `.tool-versions` | No |
 | [No permission prompts](no-permission-prompts.md) | Agents work without waiting for approval | Yes, one setting per agent |
 | [Idle sessions stop](idle-sessions.md) | Idle sessions free their CPU and memory, and keep their files | You can change the timing |
+| [Archiving frees disk](archive-frees-disk.md) | Archiving a session keeps its conversation and deletes its sandbox and files; unarchive it and its next message starts a fresh one | No |
 | [Agents know where they're running](runner-instructions.md) | Agents know what the session can do, link files you can open, show screenshots in the chat, and give tailnet addresses | You can change the text |
 | [MCP servers in Settings](mcp-servers.md) | Give sessions' Claude Code and Codex MCP servers, such as Figma, with their keys: for every session or for some repositories, which you can add to later | Nothing to turn off until you add a server |
 

@@ -42,5 +42,6 @@ All the documentation is listed in [docs/](docs/README.md).
   how that's kept contained.
 - **Agents don't ask for permission** before running commands.
   [You can turn that off](docs/features/no-permission-prompts.md).
-- **Sessions keep using disk until you delete them**, even once they're idle.
+- **Sessions keep using disk until you archive or delete them**, even once
+  they're idle.
   See [idle sessions](docs/features/idle-sessions.md).

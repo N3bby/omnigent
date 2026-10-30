@@ -21,7 +21,8 @@ choose **Keep running** in the environment menu.
 
 **Kept:** the home directory, `/home/omnigent`. Your repositories,
 uncommitted changes, agent state and container images are where you left
-them. The home directory is only deleted when you delete the session.
+them. The home directory is only deleted when you delete or
+[archive](archive-frees-disk.md) the session.
 
 **Not kept:** everything outside the home directory starts fresh when a
 stopped Pod wakes, including packages from `apt-get install`. To keep a tool,
@@ -31,8 +32,8 @@ have the agent install it into the home directory, for example with
 ## Good to know
 
 - **Stopped sessions still use disk.** The home directory's size limit,
-  `runner_home_limit`, isn't enforced by `local-path`, so delete sessions
-  you're done with.
+  `runner_home_limit`, isn't enforced by `local-path`, so archive or delete
+  sessions you're done with.
 - **`mise run status` lists every session's volume.** Stopped sessions show
   as `Ready=False`, `SandboxExpired`.
 - **An idle Pod still counts** towards `runner_max_concurrency` and the VM's
@@ -71,4 +72,5 @@ Set these in `environments/production.toml` and deploy:
   `OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE` in `scripts/render` puts the home
   directory on a per-session `local-path` volume instead of an `emptyDir`.
 - **Deleting the session deletes the Sandbox**, and Kubernetes deletes its
-  volume with it.
+  volume with it. [Archiving it](archive-frees-disk.md) does too, and keeps
+  the conversation.

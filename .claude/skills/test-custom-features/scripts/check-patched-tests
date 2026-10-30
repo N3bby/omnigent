@@ -11,9 +11,9 @@
 # agents' progress bars, a turn Claude starts straight after Stop showing as
 # working, CORS for the glasses app, the always-on Hermes host running
 # Hermes sessions only, push-to-talk, the chat holding still while
-# scrolling up through older messages, and Project settings scrolling on a
-# phone, against a fresh, fully patched upstream checkout. Keep logs and
-# JUnit reports.
+# scrolling up through older messages, Project settings scrolling on a
+# phone, and archiving deleting a session's sandbox, against a fresh, fully
+# patched upstream checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -112,7 +112,7 @@ PY
       tests/runner/test_progress_log.py \
       tests/runner/test_claude_native_turn_end_recheck.py tests/runner/test_resource_registry.py \
       tests/server/test_cors_origins.py tests/server/integration/test_hermes_host.py \
-      tests/server/routes/test_push_to_talk_info.py \
+      tests/server/routes/test_push_to_talk_info.py tests/server/test_archive_deletes_sandbox.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \

@@ -1,0 +1,468 @@
+Delete an archived session's sandbox, and its home volume, and keep the
+conversation.
+
+A stopped agent-sandbox keeps its Sandbox and home volume until the session
+is deleted, and local-path doesn't cap that volume, so archived sessions kept
+filling the node's disk until the kubelet evicted the server, Postgres and
+Vault. The archive teardown, which runs once the Undo window has passed, now
+also deletes the session's managed sandbox
+(_delete_archived_session_sandbox), the same way deleting the session does.
+It leaves the host row alone, so an unarchived session reads as asleep: its
+next message tries to wake the sandbox, finds it gone, and starts a fresh one
+with upstream's "workspace reset" notice and the session's repository cloned
+again. Only providers that keep a stopped sandbox are touched, and a host
+another unarchived session is bound to is skipped. On every start, the server
+also does this for sessions that are already archived
+(delete_archived_session_sandboxes), which covers sessions archived before
+this patch.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0025-push-to-talk.patch.
+diff --git a/omnigent/server/app.py b/omnigent/server/app.py
+index 29296b655..427c412ef 100644
+--- a/omnigent/server/app.py
++++ b/omnigent/server/app.py
+@@ -1813,11 +1813,41 @@ def create_app(
+                 app_inst.state.managed_sandbox_reaper = managed_sandbox_reaper
+                 await managed_sandbox_reaper.start()
+ 
++        # Archived sessions keep their conversation but not their sandbox; this
++        # catches the ones archived before that, or whose teardown didn't run.
++        archived_sandbox_sweep: asyncio.Task[int] | None = None
++        if sandbox_config is not None and host_store is not None:
++            from omnigent.server.routes._sessions.orchestration import (
++                delete_archived_session_sandboxes,
++            )
++
++            archived_sandbox_sweep = asyncio.create_task(
++                delete_archived_session_sandboxes(conversation_store, host_store, sandbox_config),
++                name="archived-sandbox-sweep",
++            )
++
++            def _log_archived_sandbox_sweep(task: asyncio.Task[int]) -> None:
++                if task.cancelled():
++                    return
++                if task.exception() is not None:
++                    _logger.warning(
++                        "Deleting archived sessions' sandboxes failed",
++                        exc_info=task.exception(),
++                    )
++                elif task.result():
++                    _logger.info("Deleted the sandboxes of %s archived session(s)", task.result())
++
++            archived_sandbox_sweep.add_done_callback(_log_archived_sandbox_sweep)
++
+         try:
+             yield
+         finally:
+             if managed_sandbox_reaper is not None:
+                 await managed_sandbox_reaper.shutdown()
++            if archived_sandbox_sweep is not None:
++                archived_sandbox_sweep.cancel()
++                with suppress(asyncio.CancelledError):
++                    await archived_sandbox_sweep
+             # Run completion is event-driven (the _publish_status hook) plus a
+             # lazy-on-read stale backstop — there is no run-reconciler task to
+             # cancel. Only the per-job scheduler holds timers that need stopping.
+diff --git a/omnigent/server/routes/_sessions/orchestration.py b/omnigent/server/routes/_sessions/orchestration.py
+index d30355ded..16972b488 100644
+--- a/omnigent/server/routes/_sessions/orchestration.py
++++ b/omnigent/server/routes/_sessions/orchestration.py
+@@ -885,6 +885,8 @@ async def _archive_stop(
+     host_registry: Any,
+     *,
+     delete_worktree: bool = False,
++    host_store: Any = None,
++    sandbox_config: Any = None,
+ ) -> None:
+     """
+     Stop an archived session and tear down its host-launched runner.
+@@ -915,6 +917,11 @@ async def _archive_stop(
+         tunnels, or ``None`` when host support is not wired.
+     :param delete_worktree: After the stop, also remove the session's
+         server-created worktree directory (the branch is kept).
++    :param host_store: Persistent host registrations, or ``None``. With
++        ``sandbox_config``, lets the stop delete the session's managed
++        sandbox (:func:`_delete_archived_session_sandbox`).
++    :param sandbox_config: The deployment's managed-sandbox config, or
++        ``None``.
+     """
+     # Resolve through the facade so a test's monkeypatch is honored here.
+     from omnigent.server.routes import sessions as _facade
+@@ -991,6 +998,10 @@ async def _archive_stop(
+                 exc_info=True,
+                 extra={"session_id": session_id},
+             )
++    # Archive keeps the conversation, not the sandbox's files.
++    await _delete_archived_session_sandbox(
++        session_id, conv, conversation_store, host_store, sandbox_config
++    )
+ 
+ 
+ def _spawn_archive_stop(
+@@ -1000,6 +1011,8 @@ def _spawn_archive_stop(
+     host_registry: Any = None,
+     *,
+     delete_worktree: bool = False,
++    host_store: Any = None,
++    sandbox_config: Any = None,
+ ) -> None:
+     """
+     Defer :func:`_archive_stop` past the undo grace, as a retained task.
+@@ -1028,6 +1041,8 @@ def _spawn_archive_stop(
+     :param host_registry: The ``HostRegistry`` tracking live host
+         tunnels, or ``None`` when host support is not wired.
+     :param delete_worktree: Forwarded to :func:`_archive_stop`.
++    :param host_store: Forwarded to :func:`_archive_stop`.
++    :param sandbox_config: Forwarded to :func:`_archive_stop`.
+     """
+     # Replace any pending stop from an earlier archive of this session.
+     _cancel_pending_archive_stop(session_id)
+@@ -1047,6 +1062,8 @@ def _spawn_archive_stop(
+             runner_router,
+             host_registry,
+             delete_worktree=delete_worktree,
++            host_store=host_store,
++            sandbox_config=sandbox_config,
+         )
+ 
+     task = asyncio.create_task(_stop_after_grace())
+@@ -1083,6 +1100,120 @@ def _cancel_pending_archive_stop(session_id: str) -> None:
+         task.cancel()
+ 
+ 
++async def _delete_archived_session_sandbox(
++    session_id: str,
++    conv: Any,
++    conversation_store: ConversationStore,
++    host_store: Any,
++    sandbox_config: Any,
++) -> bool:
++    """
++    Delete an archived session's managed sandbox, keeping the conversation.
++
++    A stopped sandbox keeps its home volume until the session is deleted, so
++    archived sessions would otherwise keep using the node's disk. Only
++    providers that keep a stopped sandbox (``resume_stopped``) are touched;
++    the others have nothing left once the runner stops.
++
++    The host row is left as it is, so an unarchived session still reads as
++    asleep: its next message tries to wake the sandbox, finds it gone, and
++    starts a fresh one with the workspace-reset notice
++    (:func:`_run_managed_wake`).
++
++    Skipped while another unarchived session is bound to the same host, such
++    as one a terminal was moved to.
++
++    :param session_id: The archived session's id.
++    :param conv: Its conversation row.
++    :param conversation_store: Store for the shared-host check.
++    :param host_store: Persistent host registrations, or ``None``.
++    :param sandbox_config: The deployment's managed-sandbox config, or
++        ``None``.
++    :returns: ``True`` when a sandbox was deleted.
++    """
++    from omnigent.server.managed_hosts import _launcher_for_teardown
++
++    if conv.host_id is None or host_store is None or sandbox_config is None:
++        return False
++    try:
++        host = await asyncio.to_thread(host_store.get_host, conv.host_id)
++        if host is None or host.sandbox_provider is None or host.sandbox_id is None:
++            return False
++        launcher = _launcher_for_teardown(host, sandbox_config)
++        if launcher is None or not launcher.capabilities.resume_stopped:
++            return False
++        # Every workspace is absolute, so "/" with subdirectories covers the host.
++        if await asyncio.to_thread(
++            conversation_store.has_other_live_session_in_workspace,
++            host_id=conv.host_id,
++            workspace="/",
++            exclude_conversation_id=session_id,
++            include_subdirectories=True,
++        ):
++            return False
++        await asyncio.to_thread(launcher.terminate, host.sandbox_id)
++    except Exception:  # noqa: BLE001 — the session stays archived either way.
++        _logger.warning(
++            "Could not delete the sandbox of archived session %s",
++            session_id,
++            exc_info=True,
++            extra={"session_id": session_id},
++        )
++        return False
++    _logger.info(
++        "Deleted sandbox %s of archived session %s",
++        host.sandbox_id,
++        session_id,
++        extra={"session_id": session_id},
++    )
++    return True
++
++
++async def delete_archived_session_sandboxes(
++    conversation_store: ConversationStore,
++    host_store: Any,
++    sandbox_config: Any,
++) -> int:
++    """
++    Delete the managed sandboxes of every session that is already archived.
++
++    Covers sessions archived before archiving deleted the sandbox, and any
++    whose teardown didn't run, such as a server restart inside the Undo
++    window. Deleting a sandbox that's already gone succeeds, so this is safe
++    to run on every start.
++
++    :param conversation_store: Store to list archived sessions from.
++    :param host_store: Persistent host registrations.
++    :param sandbox_config: The deployment's managed-sandbox config.
++    :returns: How many sessions it deleted a sandbox for.
++    """
++    deleted = 0
++    after: str | None = None
++    while True:
++        page = await asyncio.to_thread(
++            conversation_store.list_conversations,
++            limit=100,
++            after=after,
++            kind=None,
++            include_archived=True,
++            archived_only=True,
++        )
++        for conv in page.data:
++            if conv.host_id is None:
++                continue
++            # Unarchived since the page was read: leave its sandbox alone.
++            current = await asyncio.to_thread(conversation_store.get_conversation, conv.id)
++            if current is None or not current.archived:
++                continue
++            if await _delete_archived_session_sandbox(
++                conv.id, current, conversation_store, host_store, sandbox_config
++            ):
++                deleted += 1
++        if not page.has_more or page.last_id is None:
++            return deleted
++        after = page.last_id
++
++
+ # Codex flags that pick an approval or sandbox stance of their own.
+ _CODEX_PERMISSION_FLAGS = ("--sandbox", "-s", "--ask-for-approval", "-a", "--full-auto")
+ 
+diff --git a/omnigent/server/routes/sessions/routes_core.py b/omnigent/server/routes/sessions/routes_core.py
+index 7852a9387..89b9f02ea 100644
+--- a/omnigent/server/routes/sessions/routes_core.py
++++ b/omnigent/server/routes/sessions/routes_core.py
+@@ -2846,13 +2846,16 @@ def register_core_routes(
+             # wedged or asleep runner). The teardown sleeps past the Undo
+             # window, then re-reads the archived flag and skips if undone, so
+             # undoing keeps the runner alive. Archive has no client-side stop,
+-            # so this also carries the host-runner teardown.
++            # so this also carries the host-runner teardown, and deletes a
++            # managed sandbox so the archived session stops using disk.
+             _spawn_archive_stop(
+                 session_id,
+                 conversation_store,
+                 runner_router,
+                 getattr(request.app.state, "host_registry", None),
+                 delete_worktree=body.delete_worktree,
++                host_store=getattr(request.app.state, "host_store", None),
++                sandbox_config=getattr(request.app.state, "sandbox_config", None),
+             )
+         elif body.archived is False:
+             # Unarchive (including Undo, which re-PATCHes archived=false within
+diff --git a/tests/server/test_archive_deletes_sandbox.py b/tests/server/test_archive_deletes_sandbox.py
+new file mode 100644
+index 000000000..c4f5f5cda
+--- /dev/null
++++ b/tests/server/test_archive_deletes_sandbox.py
+@@ -0,0 +1,192 @@
++"""Archiving a session deletes its managed sandbox and keeps the conversation.
++
++A stopped agent-sandbox keeps its home volume until the session is deleted, so
++archive deletes the sandbox too. The host row stays, so an unarchived session
++reads as asleep and its next message starts a fresh sandbox.
++"""
++
++from __future__ import annotations
++
++import uuid
++from typing import Any, ClassVar
++from unittest.mock import AsyncMock, patch
++
++import pytest
++
++from omnigent.db.utils import now_epoch
++from omnigent.server.managed_hosts import ManagedSandboxConfig, ManagedSandboxDeployment
++from omnigent.server.routes import sessions as _sessions_facade
++from omnigent.server.routes._sessions import orchestration
++from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
++from omnigent.stores.host_store import HostStore
++from tests.server.helpers import FakeSandboxLauncher
++
++pytestmark = pytest.mark.asyncio
++
++_OWNER = "alice@example.com"
++
++
++class _Launcher(FakeSandboxLauncher):
++    """A provider that keeps stopped sandboxes, like agent-sandbox."""
++
++    provider: ClassVar[str] = "islo"
++
++    def __init__(self, fail: bool = False, **kwargs: Any) -> None:
++        super().__init__(**kwargs)
++        self._fail = fail
++
++    def terminate(self, sandbox_id: str) -> None:
++        if self._fail:
++            raise RuntimeError("API server unavailable")
++        super().terminate(sandbox_id)
++
++
++def _config(launcher: FakeSandboxLauncher) -> ManagedSandboxDeployment:
++    return ManagedSandboxDeployment.single(
++        ManagedSandboxConfig(
++            server_url="https://srv.example.com",
++            launcher_factory=lambda: launcher,
++            token_ttl_s=3600,
++        )
++    )
++
++
++def _session(
++    conv_store: SqlAlchemyConversationStore,
++    host_store: HostStore,
++    sandbox_id: str,
++    *,
++    archived: bool = True,
++    host_id: str | None = None,
++) -> tuple[str, str]:
++    """Create a session bound to a managed host; returns (session id, host id)."""
++    if host_id is None:
++        host_id = uuid.uuid4().hex
++        host_store.register_managed_host(
++            host_id=host_id,
++            name=f"managed-{sandbox_id}",
++            user_id=_OWNER,
++            token=f"tok-{sandbox_id}",
++            provider="islo",
++            sandbox_id=sandbox_id,
++            token_expires_at=now_epoch() + 3600,
++        )
++    conv = conv_store.create_conversation(host_id=host_id, workspace="/root")
++    if archived:
++        conv_store.update_conversation(conv.id, archived=True)
++    return conv.id, host_id
++
++
++async def _delete(
++    conv_store: SqlAlchemyConversationStore,
++    host_store: HostStore,
++    session_id: str,
++    config: ManagedSandboxDeployment | None,
++) -> bool:
++    conv = conv_store.get_conversation(session_id)
++    return await orchestration._delete_archived_session_sandbox(
++        session_id, conv, conv_store, host_store, config
++    )
++
++
++async def test_archive_deletes_the_sandbox_and_keeps_the_host(db_uri: str) -> None:
++    """The host row keeps its sandbox id, so the session still reads as asleep."""
++    conv_store, host_store = SqlAlchemyConversationStore(db_uri), HostStore(db_uri)
++    session_id, host_id = _session(conv_store, host_store, "sb-archived")
++    launcher = _Launcher(can_resume=True)
++
++    assert await _delete(conv_store, host_store, session_id, _config(launcher))
++
++    assert launcher.terminated == ["sb-archived"]
++    host = host_store.get_host(host_id)
++    assert host is not None and host.sandbox_id == "sb-archived"
++    assert conv_store.get_conversation(session_id) is not None
++
++
++async def test_only_sandboxes_a_message_can_recreate(db_uri: str) -> None:
++    """Providers without stop/resume, CLI hosts and no sandbox config are left alone."""
++    conv_store, host_store = SqlAlchemyConversationStore(db_uri), HostStore(db_uri)
++    session_id, _ = _session(conv_store, host_store, "sb-modal")
++    launcher = _Launcher(can_resume=False)
++
++    assert not await _delete(conv_store, host_store, session_id, _config(launcher))
++    assert not await _delete(conv_store, host_store, session_id, None)
++    cli = conv_store.create_conversation(host_id="f" * 32, workspace="/home/me")
++    assert not await _delete(conv_store, host_store, cli.id, _config(launcher))
++    assert launcher.terminated == []
++
++
++async def test_a_host_another_live_session_uses_is_kept(db_uri: str) -> None:
++    """Such as a session a terminal was moved to; once it's archived too, it goes."""
++    conv_store, host_store = SqlAlchemyConversationStore(db_uri), HostStore(db_uri)
++    session_id, host_id = _session(conv_store, host_store, "sb-shared")
++    other, _ = _session(conv_store, host_store, "", archived=False, host_id=host_id)
++    launcher = _Launcher(can_resume=True)
++
++    assert not await _delete(conv_store, host_store, session_id, _config(launcher))
++    assert launcher.terminated == []
++
++    conv_store.update_conversation(other, archived=True)
++    assert await _delete(conv_store, host_store, session_id, _config(launcher))
++    assert launcher.terminated == ["sb-shared"]
++
++
++async def test_a_failed_delete_is_logged_not_raised(db_uri: str) -> None:
++    conv_store, host_store = SqlAlchemyConversationStore(db_uri), HostStore(db_uri)
++    session_id, _ = _session(conv_store, host_store, "sb-fails")
++
++    assert not await _delete(
++        conv_store, host_store, session_id, _config(_Launcher(fail=True, can_resume=True))
++    )
++
++
++async def test_the_archive_teardown_deletes_the_sandbox(db_uri: str) -> None:
++    conv_store, host_store = SqlAlchemyConversationStore(db_uri), HostStore(db_uri)
++    session_id, _ = _session(conv_store, host_store, "sb-teardown")
++    launcher = _Launcher(can_resume=True)
++
++    with patch.object(_sessions_facade, "_best_effort_stop", AsyncMock()):
++        await orchestration._archive_stop(
++            session_id,
++            conv_store,
++            runner_router=None,
++            host_registry=None,
++            host_store=host_store,
++            sandbox_config=_config(launcher),
++        )
++
++    assert launcher.terminated == ["sb-teardown"]
++
++
++async def test_the_teardown_keeps_an_unarchived_sessions_sandbox(db_uri: str) -> None:
++    """Undo landed before the teardown fired."""
++    conv_store, host_store = SqlAlchemyConversationStore(db_uri), HostStore(db_uri)
++    session_id, _ = _session(conv_store, host_store, "sb-undone", archived=False)
++    launcher = _Launcher(can_resume=True)
++
++    with patch.object(_sessions_facade, "_best_effort_stop", AsyncMock()):
++        await orchestration._archive_stop(
++            session_id,
++            conv_store,
++            runner_router=None,
++            host_registry=None,
++            host_store=host_store,
++            sandbox_config=_config(launcher),
++        )
++
++    assert launcher.terminated == []
++
++
++async def test_the_startup_sweep_covers_every_archived_session(db_uri: str) -> None:
++    """Sessions archived before this existed lose their sandbox; live ones keep it."""
++    conv_store, host_store = SqlAlchemyConversationStore(db_uri), HostStore(db_uri)
++    archived = [_session(conv_store, host_store, f"sb-old-{i}")[0] for i in range(3)]
++    _session(conv_store, host_store, "sb-live", archived=False)
++    launcher = _Launcher(can_resume=True)
++
++    deleted = await orchestration.delete_archived_session_sandboxes(
++        conv_store, host_store, _config(launcher)
++    )
++
++    assert deleted == len(archived)
++    assert sorted(launcher.terminated) == ["sb-old-0", "sb-old-1", "sb-old-2"]
