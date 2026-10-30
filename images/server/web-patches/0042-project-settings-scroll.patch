@@ -1,0 +1,133 @@
+Let Project settings scroll on a phone.
+
+The dialog had no height cap, and its fields stack on a narrow screen, so on
+a phone it's taller than the screen: centred on it, its description and its
+Save and Cancel buttons sit off the top and bottom, and the Dialog's
+scroll-lock keeps the page from scrolling to them. A sandbox project's
+Repositories field makes it taller still.
+
+The dialog is now capped at 85% of the viewport, as upstream's Add agent
+dialog is, and the form scrolls between the header and the Save and Cancel
+buttons, which move out of it and submit it by its id. A dialog that fits,
+as on a desktop, is unchanged.
+
+Upstream bug: delete once upstream's ProjectSettingsDialog
+(web/src/shell/ProjectSettingsDialog.tsx) caps its height and scrolls its
+fields.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0041.
+
+diff --git a/web/src/shell/ProjectSettingsDialog.test.tsx b/web/src/shell/ProjectSettingsDialog.test.tsx
+index 139e083..91e907f 100644
+--- a/web/src/shell/ProjectSettingsDialog.test.tsx
++++ b/web/src/shell/ProjectSettingsDialog.test.tsx
+@@ -105,6 +105,22 @@ beforeEach(() => {
+ afterEach(cleanup);
+ 
+ describe("ProjectSettingsDialog", () => {
++  it("scrolls the fields inside a dialog capped to the screen, with Save below them", async () => {
++    // On a phone the fields are taller than the screen and the Dialog's
++    // scroll-lock keeps the page from scrolling, so the dialog itself must.
++    getProjectMock.mockResolvedValue({ id: "p_1", name: "Work", config: {} });
++    renderDialog();
++    const fields = screen.getByTestId("project-settings-fields");
++    expect(fields.closest('[data-slot="dialog-content"]')).toHaveClass("max-h-[85vh]", "flex-col");
++    // overflow-y-auto also clips horizontally, so px-1/-mx-1 keep focus rings.
++    expect(fields).toHaveClass("min-h-0", "flex-1", "overflow-y-auto", "px-1", "-mx-1");
++    expect(fields).toContainElement(screen.getByTestId("project-settings-host"));
++    const save = screen.getByTestId("project-settings-save");
++    expect(fields).not.toContainElement(save);
++    // Outside the form, Save still submits it.
++    expect((save as HTMLButtonElement).form).toBe(fields);
++  });
++
+   it("seeds fields from the project's stored config", async () => {
+     // No stored host → the working directory can't be chosen yet, so it shows
+     // the "pick a host first" placeholder rather than a path input / browser.
+@@ -306,7 +322,7 @@ describe("ProjectSettingsDialog", () => {
+     expect((screen.getByTestId("project-settings-save") as HTMLButtonElement).disabled).toBe(true);
+ 
+     // Even if a submit is forced, onSubmit bails — no clearing PATCH is sent.
+-    fireEvent.submit(screen.getByTestId("project-settings-save").closest("form")!);
++    fireEvent.submit((screen.getByTestId("project-settings-save") as HTMLButtonElement).form!);
+     expect(updateMock).not.toHaveBeenCalled();
+   });
+ 
+diff --git a/web/src/shell/ProjectSettingsDialog.tsx b/web/src/shell/ProjectSettingsDialog.tsx
+index 0a9a854..77188e0 100644
+--- a/web/src/shell/ProjectSettingsDialog.tsx
++++ b/web/src/shell/ProjectSettingsDialog.tsx
+@@ -526,7 +526,10 @@ export function ProjectSettingsDialog({
+     <Dialog open={open} onOpenChange={onOpenChange}>
+       <DialogContent
+         onClick={(e) => e.stopPropagation()}
+-        className="sm:max-w-lg"
++        // Capped to the screen so the fields scroll between the header and the
++        // footer: on a phone they're taller than the screen, and the Dialog's
++        // scroll-lock keeps the page from scrolling to them.
++        className="flex max-h-[85vh] flex-col gap-4 sm:max-w-lg"
+         // Keep a nested dropdown's dismiss (pick an option, or click the modal
+         // body while it's open) from closing the whole Dialog. See
+         // `guardDialogDismiss`; real backdrop clicks and Escape still close.
+@@ -540,7 +543,14 @@ export function ProjectSettingsDialog({
+             a starting point you can change per session; leave a field blank for no default.
+           </DialogDescription>
+         </DialogHeader>
+-        <form onSubmit={onSubmit} className="flex flex-col gap-4">
++        {/* px-1/-mx-1 give the fields' focus ring room to paint:
++            overflow-y-auto also clips horizontally at the padding box. */}
++        <form
++          id="project-settings-form"
++          onSubmit={onSubmit}
++          className="-mx-1 flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-1"
++          data-testid="project-settings-fields"
++        >
+           <Field label="Host" hint="Where new sessions run by default">
+             <Select
+               value={hostId}
+@@ -796,26 +806,27 @@ export function ProjectSettingsDialog({
+               {(updateConfig.error as Error).message}
+             </p>
+           )}
+-
+-          <DialogFooter className="border-t-0 bg-transparent">
+-            <Button
+-              type="button"
+-              variant="ghost"
+-              onClick={() => onOpenChange(false)}
+-              disabled={updateConfig.isPending}
+-            >
+-              Cancel
+-            </Button>
+-            <Button
+-              type="submit"
+-              data-testid="project-settings-save"
+-              loading={updateConfig.isPending}
+-              disabled={isLoading || loadFailed}
+-            >
+-              Save
+-            </Button>
+-          </DialogFooter>
+         </form>
++        <DialogFooter className="border-t-0 bg-transparent">
++          <Button
++            type="button"
++            variant="ghost"
++            onClick={() => onOpenChange(false)}
++            disabled={updateConfig.isPending}
++          >
++            Cancel
++          </Button>
++          <Button
++            type="submit"
++            // Outside the form, so the footer stays put while the fields scroll.
++            form="project-settings-form"
++            data-testid="project-settings-save"
++            loading={updateConfig.isPending}
++            disabled={isLoading || loadFailed}
++          >
++            Save
++          </Button>
++        </DialogFooter>
+       </DialogContent>
+     </Dialog>
+   );

@@ -10,9 +10,10 @@
 # composers without a mic, the Claude permission hook's bearer refresh,
 # agents' progress bars, a turn Claude starts straight after Stop showing as
 # working, CORS for the glasses app, the always-on Hermes host running
-# Hermes sessions only, push-to-talk, and the chat holding still while
-# scrolling up through older messages, against a fresh, fully patched
-# upstream checkout. Keep logs and JUnit reports.
+# Hermes sessions only, push-to-talk, the chat holding still while
+# scrolling up through older messages, and Project settings scrolling on a
+# phone, against a fresh, fully patched upstream checkout. Keep logs and
+# JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"

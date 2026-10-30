@@ -38,6 +38,8 @@ new-session form: the repositories are picked, with their branches.
   [added with its own token or SSH key](custom-repository.md). A pasted URL
   works too, but a token or key can only be given in the new-session form's
   Custom tab or in Settings.
+- **On a phone, the settings scroll** between the title and **Save**, which
+  stays in view.
 - **They're yours.** Projects belong to the user who made them, so other users
   don't see them.
 
@@ -62,3 +64,7 @@ Remove the project's repositories in **Project settings** and save.
 - `images/server/web-patches/0031-repo-picker-tabs.patch` adds the
   repositories configured in Settings to the dialog's picker, as in the
   new-session form.
+- `images/server/web-patches/0042-project-settings-scroll.patch` caps the
+  dialog to the screen and scrolls its fields, so it works on a phone.
+  Upstream's dialog doesn't scroll either; it's only taller with the
+  Repositories field.
