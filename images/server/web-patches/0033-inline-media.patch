@@ -22,6 +22,18 @@ workspace path could never load anyway: the file lives in the sandbox.
   keeps a zoomed image within its edges; pages through a grid's images, and
   a user message's attachments, with arrows, the arrow keys or a swipe; and
   closes with a downward swipe.
+- A loaded file stays in memory with the message that showed it
+  (lib/chatMediaCache), so the chat doesn't flash. It remounts a message's
+  media when a streamed reply is saved and when you come back to a session,
+  and each mount would download the file again behind a spinner. BubbleView
+  provides the bubble's stable key as ChatMediaScope, and a remount paints
+  the version the message showed in its first frame, without a download. A
+  message showing a path for the first time fetches it, so a reply showing a
+  file the agent overwrote shows the new version; mounts while a download is
+  in flight, or within a second of it, share it. An image is decoded before
+  it replaces its spinner. A file that failed stays a chip, retried in the
+  background after 10 seconds. Object URLs nothing shows are revoked past
+  300 files or 192 MiB.
 
 Upstream's two tests that remote images stay blocked now check that https
 renders and plain http doesn't.
@@ -1079,10 +1091,10 @@ index f642c24..2123577 100644
  
 diff --git a/web/src/components/blocks/ChatMarkdown.media.test.tsx b/web/src/components/blocks/ChatMarkdown.media.test.tsx
 new file mode 100644
-index 0000000..a5319c5
+index 0000000..6605fcc
 --- /dev/null
 +++ b/web/src/components/blocks/ChatMarkdown.media.test.tsx
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,244 @@
 +// Images, video and audio in chat markdown: workspace files load through the
 +// filesystem API, images in a row share a grid, and the lightbox pages
 +// through that grid.
@@ -1092,6 +1104,8 @@ index 0000000..a5319c5
 +import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 +import { parseMarkdownIntoMediaBlocks } from "@/components/ai-elements/streamdown-security";
 +import { ImageLightboxProvider } from "@/components/ImageLightbox";
++import { ChatMediaScope } from "@/components/chat/ChatMarkdownMedia";
++import { resetChatMediaCache } from "@/lib/chatMediaCache";
 +import { FileViewerContext } from "@/shell/FileViewerContext";
 +import { FilePathAwareMessageResponse } from "./ChatMarkdown";
 +
@@ -1130,15 +1144,24 @@ index 0000000..a5319c5
 +  );
 +});
 +
-+afterEach(cleanup);
++afterEach(() => {
++  cleanup();
++  resetChatMediaCache();
++});
 +
-+function renderMarkdown(markdown: string, viewer: typeof FILE_VIEWER = FILE_VIEWER) {
++function renderMarkdown(
++  markdown: string,
++  viewer: typeof FILE_VIEWER = FILE_VIEWER,
++  scope: string | null = null,
++) {
 +  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
 +  return render(
 +    <QueryClientProvider client={client}>
 +      <ImageLightboxProvider>
 +        <FileViewerContext.Provider value={viewer}>
-+          <FilePathAwareMessageResponse>{markdown}</FilePathAwareMessageResponse>
++          <ChatMediaScope.Provider value={scope}>
++            <FilePathAwareMessageResponse>{markdown}</FilePathAwareMessageResponse>
++          </ChatMediaScope.Provider>
 +        </FileViewerContext.Provider>
 +      </ImageLightboxProvider>
 +    </QueryClientProvider>,
@@ -1196,6 +1219,42 @@ index 0000000..a5319c5
 +    const chip = await screen.findByRole("img", { name: "missing" });
 +    expect(chip).toHaveAttribute("title", "Couldn't load /home/u/ws/gone.png");
 +    expect(chip.tagName).toBe("SPAN");
++  });
++
++  it("shows a remounted image in its first render, without a spinner or a second download", async () => {
++    const first = renderMarkdown("![shot](shots/a.png)", FILE_VIEWER, "assistant:a");
++    await screen.findByRole("img", { name: "shot" });
++    first.unmount();
++
++    // A streamed reply being saved, or coming back to the session, remounts it.
++    renderMarkdown("Saved:\n\n![shot](shots/a.png)", FILE_VIEWER, "assistant:a");
++
++    expect(screen.getByRole("img", { name: "shot" })).toHaveAttribute("src", "blob:media-0");
++    expect(screen.queryByRole("status")).toBeNull();
++    expect(fetchBlob).toHaveBeenCalledTimes(1);
++  });
++
++  it("downloads a file two messages show at the same time once", async () => {
++    renderMarkdown("![mine](shots/a.png)", FILE_VIEWER, "user:u");
++    renderMarkdown("![reply](./shots/a.png)", FILE_VIEWER, "assistant:a");
++
++    const images = await screen.findAllByRole("img", { name: /mine|reply/ });
++    await waitFor(() =>
++      images.forEach((img) => expect(img).toHaveAttribute("src", "blob:media-0")),
++    );
++    expect(fetchBlob).toHaveBeenCalledTimes(1);
++  });
++
++  it("keeps a file that couldn't be loaded a chip when remounted", async () => {
++    fetchBlob.mockRejectedValue(new Error("503 Service Unavailable"));
++    const first = renderMarkdown("![missing](gone.png)", FILE_VIEWER, "assistant:a");
++    expect((await screen.findByRole("img", { name: "missing" })).tagName).toBe("SPAN");
++    first.unmount();
++
++    renderMarkdown("![missing](gone.png)", FILE_VIEWER, "assistant:a");
++
++    expect(screen.getByRole("img", { name: "missing" }).tagName).toBe("SPAN");
++    expect(screen.queryByRole("status")).toBeNull();
 +  });
 +
 +  it("names a workspace image outside a session, where nothing can load it", async () => {
@@ -1330,10 +1389,10 @@ index 5df1da6..d0acf3a 100644
  
 diff --git a/web/src/components/chat/ChatMarkdownMedia.tsx b/web/src/components/chat/ChatMarkdownMedia.tsx
 new file mode 100644
-index 0000000..64a0362
+index 0000000..2d5b639
 --- /dev/null
 +++ b/web/src/components/chat/ChatMarkdownMedia.tsx
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,178 @@
 +// Images, video and audio in chat markdown (`![alt](path-or-url)`), shown
 +// inline. An image opens in the shared lightbox, and paging through the others
 +// when it sits in a grid of them (see groupMediaGalleries).
@@ -1343,17 +1402,27 @@ index 0000000..64a0362
 +// as a Blob rather than as an `<img src>` to the API, because the download
 +// endpoint has no range requests, without which Safari won't play a video, and
 +// because an embedding host or native shell needs its own auth on the request.
++// Each message keeps the files it showed in memory (lib/chatMediaCache), so a
++// remount, such as when a streamed reply is saved or you come back to the
++// session, doesn't flash.
 +
 +import type React from "react";
-+import { useEffect, useState } from "react";
++import { createContext, useContext, useEffect, useReducer, useState } from "react";
 +import { FileAudioIcon, FileVideoIcon, ImageIcon } from "lucide-react";
 +import { WORKSPACE_MEDIA_ATTR } from "@/components/ai-elements/streamdown-security";
 +import { ZoomableImage } from "@/components/ImageLightbox";
 +import { Spinner } from "@/components/ui/spinner";
 +import { mediaKind, type MediaKind } from "@/lib/mediaKind";
 +import { fetchWorkspaceFileBlob } from "@/hooks/useFileContent";
++import { loadChatMedia, peekChatMedia, retainChatMedia } from "@/lib/chatMediaCache";
 +import { resolveChatFilePath } from "@/hooks/useWorkspaceChangedFiles";
 +import { useFileViewerConversationId, useWorkspacePaths } from "@/shell/FileViewerContext";
++
++/**
++ * The message whose media renders below: a bubble's stable key, e.g.
++ * ``"assistant:resp_1"``. It keeps the files it showed across remounts.
++ */
++export const ChatMediaScope = createContext<string | null>(null);
 +
 +function fileName(pathOrUrl: string): string {
 +  const path = pathOrUrl.split(/[?#]/)[0].replace(/\/+$/, "");
@@ -1365,35 +1434,34 @@ index 0000000..64a0362
 +/**
 + * Where the browser can load a markdown image's media from: the URL as
 + * written, or an object URL for the bytes of the workspace file it names,
-+ * revoked once the media unmounts.
++ * shared with every other mount that shows it. A file loaded before is ready
++ * in the first render.
 + */
 +function useMediaSource(workspacePath: string | null, src: string | undefined): MediaSource {
 +  const conversationId = useFileViewerConversationId();
++  const scope = useContext(ChatMediaScope);
 +  const { root, home } = useWorkspacePaths();
 +  // `./shot.png` is as relative as `shot.png`; the resolver rejects `.`.
 +  const cited = workspacePath?.replace(/^(?:\.\/)+/, "") ?? null;
 +  const filePath = cited ? (resolveChatFilePath(cited, root, home)?.path ?? null) : null;
 +  const key = conversationId && filePath ? `${conversationId}\0${filePath}` : null;
-+  const [loaded, setLoaded] = useState<{ key: string; url: string | null } | null>(null);
++  const [, settled] = useReducer((n: number) => n + 1, 0);
 +
 +  useEffect(() => {
 +    if (!conversationId || !filePath || !key) return;
 +    let cancelled = false;
-+    let objectUrl: string | null = null;
-+    fetchWorkspaceFileBlob(conversationId, filePath)
-+      .then((blob) => {
-+        if (cancelled) return;
-+        objectUrl = URL.createObjectURL(blob);
-+        setLoaded({ key, url: objectUrl });
-+      })
-+      .catch(() => {
-+        if (!cancelled) setLoaded({ key, url: null });
-+      });
++    const before = peekChatMedia(scope, key);
++    void loadChatMedia(scope, key, () => fetchWorkspaceFileBlob(conversationId, filePath)).then(
++      (url) => {
++        if (!cancelled && url !== before) settled();
++      },
++    );
++    const release = retainChatMedia(scope, key);
 +    return () => {
 +      cancelled = true;
-+      if (objectUrl) URL.revokeObjectURL(objectUrl);
++      release();
 +    };
-+  }, [conversationId, filePath, key]);
++  }, [conversationId, filePath, key, scope]);
 +
 +  if (workspacePath === null) return src ? { status: "ready", url: src } : { status: "error" };
 +  if (!key) {
@@ -1402,8 +1470,9 @@ index 0000000..64a0362
 +    const rootPending = root === null && /^[/~]/.test(cited ?? "");
 +    return rootPending && conversationId ? { status: "loading" } : { status: "error" };
 +  }
-+  if (loaded?.key !== key) return { status: "loading" };
-+  return loaded.url ? { status: "ready", url: loaded.url } : { status: "error" };
++  const url = peekChatMedia(scope, key);
++  if (url === undefined) return { status: "loading" };
++  return url ? { status: "ready", url } : { status: "error" };
 +}
 +
 +const KIND_ICONS = { image: ImageIcon, video: FileVideoIcon, audio: FileAudioIcon };
@@ -1503,10 +1572,122 @@ index 0000000..64a0362
 +  );
 +}
 diff --git a/web/src/components/chat/chatBubbleParts.tsx b/web/src/components/chat/chatBubbleParts.tsx
-index cc75555..22f0c5f 100644
+index cc75555..d74d02f 100644
 --- a/web/src/components/chat/chatBubbleParts.tsx
 +++ b/web/src/components/chat/chatBubbleParts.tsx
-@@ -795,7 +795,8 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
+@@ -2,6 +2,7 @@
+ // chat transcript. Extracted from ChatPage.tsx so <Transcript> can import them
+ // without the ChatPage ↔ Transcript module cycle. ChatPage re-exports these for
+ // existing importers (tests + components) and imports back the few it renders.
++import { ChatMediaScope } from "@/components/chat/ChatMarkdownMedia";
+ import {
+   createContext,
+   memo,
+@@ -9,6 +10,7 @@ import {
+   useContext,
+   useEffect,
+   useLayoutEffect,
++  useMemo,
+   useRef,
+   useState,
+ } from "react";
+@@ -547,6 +549,50 @@ function formatBubbleTimestamp(epochSeconds: number | undefined): string | null
+   return `${date}, ${time}`;
+ }
+ 
++/** A message in the transcript, by kind. */
++function BubbleBody({
++  bubble,
++  isLastAssistant,
++  showsWorking,
++  actionsPersistent,
++  recoveryDisabled,
++}: {
++  bubble: Bubble;
++  isLastAssistant: boolean;
++  showsWorking: boolean;
++  actionsPersistent: boolean;
++  recoveryDisabled: boolean;
++}) {
++  if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
++  if (bubble.kind === "compaction_loading") {
++    return <CompactionLoadingIndicator createdAtS={bubble.createdAtS} />;
++  }
++  if (bubble.kind === "compaction") return <CompactionMarker />;
++  if (bubble.kind === "subagent_activity") {
++    return <SubagentActivityMessage data={bubble.data} />;
++  }
++  if (bubble.kind === "routing_decision") {
++    return (
++      <RoutingDecisionCard
++        model={bubble.model}
++        applied={bubble.applied}
++        rationale={bubble.rationale}
++        agent={bubble.agent}
++        routing={bubble.routing}
++      />
++    );
++  }
++  return (
++    <AssistantBubble
++      bubble={bubble}
++      isLastAssistant={isLastAssistant}
++      showsWorking={showsWorking}
++      actionsPersistent={actionsPersistent}
++      recoveryDisabled={recoveryDisabled}
++    />
++  );
++}
++
+ // Memoized so a streaming delta (which rebuilds the whole bubble array) only
+ // re-renders the bubble that actually changed, not every prior message's
+ // markdown/syntax-highlighting subtree. See `bubblesEqual`.
+@@ -565,33 +611,18 @@ export const BubbleView = memo(
+     /** Hide retry/recovery controls when the surrounding session is sealed. */
+     recoveryDisabled?: boolean;
+   }) {
+-    if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
+-    if (bubble.kind === "compaction_loading") {
+-      return <CompactionLoadingIndicator createdAtS={bubble.createdAtS} />;
+-    }
+-    if (bubble.kind === "compaction") return <CompactionMarker />;
+-    if (bubble.kind === "subagent_activity") {
+-      return <SubagentActivityMessage data={bubble.data} />;
+-    }
+-    if (bubble.kind === "routing_decision") {
+-      return (
+-        <RoutingDecisionCard
+-          model={bubble.model}
+-          applied={bubble.applied}
+-          rationale={bubble.rationale}
+-          agent={bubble.agent}
+-          routing={bubble.routing}
+-        />
+-      );
+-    }
++    // The files a message shows stay with it across remounts (ChatMediaScope).
++    const mediaScope = useMemo(() => bubbleKey(bubble), [bubble]);
+     return (
+-      <AssistantBubble
+-        bubble={bubble}
+-        isLastAssistant={isLastAssistant}
+-        showsWorking={showsWorking}
+-        actionsPersistent={actionsPersistent}
+-        recoveryDisabled={recoveryDisabled}
+-      />
++      <ChatMediaScope.Provider value={mediaScope}>
++        <BubbleBody
++          bubble={bubble}
++          isLastAssistant={isLastAssistant}
++          showsWorking={showsWorking}
++          actionsPersistent={actionsPersistent}
++          recoveryDisabled={recoveryDisabled}
++        />
++      </ChatMediaScope.Provider>
+     );
+   },
+   (prev, next) =>
+@@ -795,7 +826,8 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
                  non-wrapping strip would sit off-screen in the overflow and
                  look like it never rendered. */}
              {images.length > 0 && (
@@ -1642,6 +1823,337 @@ index 370ad4a..345d11d 100644
  /* Use the usable chat column so side panels and split views keep narrow prose. */
  .chat-conversation-content {
    container: chat-column / inline-size;
+diff --git a/web/src/lib/chatMediaCache.test.ts b/web/src/lib/chatMediaCache.test.ts
+new file mode 100644
+index 0000000..24d889b
+--- /dev/null
++++ b/web/src/lib/chatMediaCache.test.ts
+@@ -0,0 +1,114 @@
++// The in-memory files the chat shows: each message keeps the version it first
++// showed, a new message fetches its own unless another just did, a failure
++// stays a chip while it's retried, and unused files are revoked past the
++// limits.
++
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import {
++  MAX_ENTRIES,
++  RETRY_AFTER_MS,
++  SHARE_MS,
++  loadChatMedia,
++  peekChatMedia,
++  resetChatMediaCache,
++  retainChatMedia,
++} from "./chatMediaCache";
++
++let next = 0;
++const revoked: string[] = [];
++
++beforeEach(() => {
++  next = 0;
++  revoked.length = 0;
++  vi.stubGlobal(
++    "URL",
++    Object.assign(URL, {
++      createObjectURL: () => `blob:media-${next++}`,
++      revokeObjectURL: (url: string) => revoked.push(url),
++    }),
++  );
++});
++
++afterEach(() => {
++  resetChatMediaCache();
++});
++
++const KEY = "conv_1\0shot.png";
++const blob = () => vi.fn(async () => new Blob(["png"], { type: "image/png" }));
++
++describe("chat media cache", () => {
++  it("keeps the version a message showed, without a second download", async () => {
++    const fetchBlob = blob();
++
++    expect(peekChatMedia("assistant:a", KEY)).toBeUndefined();
++    expect(await loadChatMedia("assistant:a", KEY, fetchBlob)).toBe("blob:media-0");
++    // Remounted: ready in the first render.
++    expect(peekChatMedia("assistant:a", KEY)).toBe("blob:media-0");
++    expect(await loadChatMedia("assistant:a", KEY, fetchBlob)).toBe("blob:media-0");
++    expect(fetchBlob).toHaveBeenCalledTimes(1);
++  });
++
++  it("shares a load with a message showing the file at the same time", async () => {
++    const fetchBlob = blob();
++    const [mine, reply] = await Promise.all([
++      loadChatMedia("user:u", KEY, fetchBlob),
++      loadChatMedia("assistant:a", KEY, fetchBlob),
++    ]);
++    expect([mine, reply]).toEqual(["blob:media-0", "blob:media-0"]);
++    // One that mounts just after shows it in its first render.
++    expect(peekChatMedia("assistant:b", KEY)).toBe("blob:media-0");
++    expect(fetchBlob).toHaveBeenCalledTimes(1);
++  });
++
++  it("fetches a later message's own, so an overwritten file shows its new version", async () => {
++    const fetchBlob = blob();
++    await loadChatMedia("assistant:a", KEY, fetchBlob);
++    const later = Date.now() + SHARE_MS + 1000;
++
++    expect(peekChatMedia("assistant:b", KEY, later)).toBeUndefined();
++    expect(await loadChatMedia("assistant:b", KEY, fetchBlob, later)).toBe("blob:media-1");
++    expect(peekChatMedia("assistant:a", KEY)).toBe("blob:media-0");
++    expect(fetchBlob).toHaveBeenCalledTimes(2);
++  });
++
++  it("keeps a failure a chip and retries it in the background after a while", async () => {
++    const fetchBlob = vi.fn(async (): Promise<Blob> => {
++      throw new Error("503");
++    });
++    expect(await loadChatMedia("assistant:a", KEY, fetchBlob)).toBeNull();
++    expect(peekChatMedia("assistant:a", KEY)).toBeNull();
++
++    await loadChatMedia("assistant:a", KEY, fetchBlob, Date.now() + RETRY_AFTER_MS - 1000);
++    expect(fetchBlob).toHaveBeenCalledTimes(1);
++
++    let finish!: (b: Blob) => void;
++    fetchBlob.mockImplementation(
++      () =>
++        new Promise<Blob>((resolve) => {
++          finish = resolve;
++        }),
++    );
++    const retry = loadChatMedia("assistant:a", KEY, fetchBlob, Date.now() + RETRY_AFTER_MS + 1);
++    expect(fetchBlob).toHaveBeenCalledTimes(2);
++    expect(peekChatMedia("assistant:a", KEY)).toBeNull(); // still a chip, never a spinner
++    finish(new Blob(["png"]));
++    expect(await retry).toBe("blob:media-0");
++    expect(peekChatMedia("assistant:a", KEY)).toBe("blob:media-0");
++  });
++
++  it("revokes the least recently shown unused files past the limit, never a shown one", async () => {
++    await loadChatMedia("assistant:shown", "conv_1\0shown.png", blob());
++    const release = retainChatMedia("assistant:shown", "conv_1\0shown.png");
++    const keys = Array.from({ length: MAX_ENTRIES + 5 }, (_, i) => `conv_1\0${i}.png`);
++    await Promise.all(keys.map((key) => loadChatMedia(`assistant:${key}`, key, blob())));
++    keys.forEach((key) => retainChatMedia(`assistant:${key}`, key)());
++
++    expect(peekChatMedia("assistant:shown", "conv_1\0shown.png")).toBe("blob:media-0");
++    expect(revoked).not.toContain("blob:media-0");
++    expect(revoked.length).toBeGreaterThan(0);
++    expect(peekChatMedia(`assistant:${keys[0]}`, keys[0], Date.now() + SHARE_MS)).toBeUndefined();
++    const last = keys[keys.length - 1];
++    expect(peekChatMedia(`assistant:${last}`, last)).not.toBeUndefined();
++    release();
++  });
++});
+diff --git a/web/src/lib/chatMediaCache.ts b/web/src/lib/chatMediaCache.ts
+new file mode 100644
+index 0000000..843c276
+--- /dev/null
++++ b/web/src/lib/chatMediaCache.ts
+@@ -0,0 +1,205 @@
++// The files agents show in the chat, kept in memory once loaded, so the chat
++// doesn't flash when it remounts them.
++//
++// The chat remounts a message's media more often than it looks: when a
++// streamed reply is saved, when you come back to a session, when a virtualized
++// row scrolls back into view. Each mount used to download the file again
++// behind a spinner. Here each message (its scope: the bubble's stable key)
++// keeps the version of a file it first showed, so a remount paints it in its
++// first frame without a download. A message showing a path for the first time
++// fetches it fresh, so after the agent overwrites `shot.png`, a new reply
++// shows the new one. Messages mounting while a download is in flight, or
++// within SHARE_MS after it, as a page's transcript does, share that one.
++//
++// A file that couldn't be loaded stays a chip, without a spinner, and is tried
++// again in the background once the failure is older than RETRY_AFTER_MS, as
++// the server may have a copy by then. Object URLs nothing shows are revoked,
++// least recently shown first, past MAX_ENTRIES or MAX_UNUSED_BYTES.
++
++export const SHARE_MS = 1_000;
++export const RETRY_AFTER_MS = 10_000;
++export const MAX_ENTRIES = 300;
++export const MAX_UNUSED_BYTES = 192 * 1024 * 1024;
++const MAX_SCOPES = 2_000;
++
++/** One download of a file. */
++interface Version {
++  /** An object URL once loaded, `null` once it failed, `undefined` until either. */
++  url: string | null | undefined;
++  promise: Promise<Version>;
++  loadedAt: number;
++  bytes: number;
++  /** Mounted media showing it. */
++  users: number;
++  usedAt: number;
++  revoked: boolean;
++}
++
++/** The newest download per session and path, for sharing and eviction. */
++const latest = new Map<string, Version>();
++/** Every download not yet revoked. */
++const versions = new Set<Version>();
++/** The version each message shows per session and path. */
++const scopes = new Map<string, Map<string, Version>>();
++
++function shown(scope: string | null, key: string): Version | undefined {
++  const version = scope === null ? undefined : scopes.get(scope)?.get(key);
++  return version?.revoked ? undefined : version;
++}
++
++function show(scope: string | null, key: string, version: Version): void {
++  if (scope === null) return;
++  let files = scopes.get(scope);
++  if (!files) {
++    files = new Map();
++    scopes.set(scope, files);
++    if (scopes.size > MAX_SCOPES) scopes.delete(scopes.keys().next().value!);
++  }
++  files.set(key, version);
++}
++
++/**
++ * The newest download, if this message may share it rather than fetch its
++ * own: one in flight, one that just loaded, or a failure not due a retry.
++ */
++function shareable(key: string, now: number): Version | undefined {
++  const version = latest.get(key);
++  if (!version || version.revoked) return undefined;
++  if (version.url === undefined) return version;
++  const age = now - version.loadedAt;
++  return age < (version.url === null ? RETRY_AFTER_MS : SHARE_MS) ? version : undefined;
++}
++
++/**
++ * What a message shows of a file now: its object URL, `null` when it couldn't
++ * be loaded, or `undefined` before its first load settles. A failed file being
++ * tried again still reads `null`, so its chip doesn't turn into a spinner.
++ *
++ * :param scope: The message, e.g. ``"assistant:resp_1"``; `null` for none.
++ * :param key: The session and the path, e.g. ``"conv_1\0shots/a.png"``.
++ */
++export function peekChatMedia(
++  scope: string | null,
++  key: string,
++  now: number = Date.now(),
++): string | null | undefined {
++  const own = shown(scope, key);
++  if (own) return own.url;
++  // A message about to share a settled load shows it in its first render.
++  const shared = shareable(key, now);
++  if (shared && shared.url !== undefined) show(scope, key, shared);
++  return shared?.url;
++}
++
++/**
++ * Load a file for a message: resolves to its object URL, or `null`.
++ *
++ * :param fetchBlob: Downloads the file.
++ */
++export function loadChatMedia(
++  scope: string | null,
++  key: string,
++  fetchBlob: () => Promise<Blob>,
++  now: number = Date.now(),
++): Promise<string | null> {
++  const own = shown(scope, key);
++  if (own && (own.url !== null || now - own.loadedAt < RETRY_AFTER_MS)) {
++    return own.promise.then((version) => version.url ?? null);
++  }
++  const shared = own ? undefined : shareable(key, now);
++  const version = shared ?? download(key, fetchBlob, now);
++  return version.promise.then((loaded) => {
++    // A retry that failed again leaves the chip; one that worked replaces it.
++    if (!own || loaded.url !== null) show(scope, key, loaded);
++    else own.loadedAt = loaded.loadedAt;
++    return loaded.url ?? null;
++  });
++}
++
++function download(key: string, fetchBlob: () => Promise<Blob>, now: number): Version {
++  const version: Version = {
++    url: undefined,
++    promise: Promise.resolve(null as unknown as Version),
++    loadedAt: now,
++    bytes: 0,
++    users: 0,
++    usedAt: now,
++    revoked: false,
++  };
++  version.promise = fetchBlob().then(
++    async (blob) => {
++      const url = URL.createObjectURL(blob);
++      await decodeImage(url, blob.type);
++      version.url = url;
++      version.bytes = blob.size;
++      version.loadedAt = Date.now();
++      evict();
++      return version;
++    },
++    () => {
++      version.url = null;
++      version.loadedAt = Date.now();
++      return version;
++    },
++  );
++  latest.set(key, version);
++  versions.add(version);
++  return version;
++}
++
++/**
++ * Mark the version a message shows as on screen, so it isn't revoked.
++ *
++ * :returns: Releases it, when the media unmounts.
++ */
++export function retainChatMedia(scope: string | null, key: string): () => void {
++  const version = shown(scope, key) ?? latest.get(key);
++  if (!version) return () => {};
++  version.users += 1;
++  let released = false;
++  return () => {
++    if (released) return;
++    released = true;
++    version.users -= 1;
++    version.usedAt = Date.now();
++    evict();
++  };
++}
++
++/**
++ * Decode an image before it's handed out, so its `<img>` paints in the frame
++ * that replaces the spinner rather than one frame later. Best effort: a file
++ * the browser can't decode still goes to the `<img>`, which reports it.
++ */
++async function decodeImage(url: string, type: string): Promise<void> {
++  if (!type.startsWith("image/") || typeof Image === "undefined") return;
++  const image = new Image();
++  if (typeof image.decode !== "function") return;
++  image.src = url;
++  await image.decode().catch(() => undefined);
++}
++
++function evict(): void {
++  const unused = [...versions]
++    .filter((version) => version.users === 0 && version.url !== undefined)
++    .sort((a, b) => a.usedAt - b.usedAt);
++  let unusedBytes = unused.reduce((sum, version) => sum + version.bytes, 0);
++  for (const version of unused) {
++    if (versions.size <= MAX_ENTRIES && unusedBytes <= MAX_UNUSED_BYTES) break;
++    versions.delete(version);
++    unusedBytes -= version.bytes;
++    version.revoked = true;
++    if (version.url) URL.revokeObjectURL(version.url);
++  }
++}
++
++/** Forget everything, revoking every object URL; for tests. */
++export function resetChatMediaCache(): void {
++  for (const version of versions) {
++    version.revoked = true;
++    if (version.url) URL.revokeObjectURL(version.url);
++  }
++  versions.clear();
++  latest.clear();
++  scopes.clear();
++}
 diff --git a/web/src/lib/mediaKind.ts b/web/src/lib/mediaKind.ts
 new file mode 100644
 index 0000000..6d37dec

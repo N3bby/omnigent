@@ -25,7 +25,8 @@ session, so every archived session went on using the VM's disk.
 
 Push your work before you archive a session. Uncommitted changes, other
 files in the home directory and installed tools are gone once the Undo pill
-is.
+is. The screenshots and other files the agent showed in the
+chat stay: the server [keeps a copy](inline-media.md) of them.
 
 ## Can you turn it off?
 

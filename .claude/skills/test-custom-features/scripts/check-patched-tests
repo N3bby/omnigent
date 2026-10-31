@@ -12,8 +12,9 @@
 # working, CORS for the glasses app, the always-on Hermes host running
 # Hermes sessions only, push-to-talk, the chat holding still while
 # scrolling up through older messages, Project settings scrolling on a
-# phone, and archiving deleting a session's sandbox, against a fresh, fully
-# patched upstream checkout. Keep logs and JUnit reports.
+# phone, archiving deleting a session's sandbox, and the server's copies of
+# the files agents show in the chat, against a fresh, fully patched upstream
+# checkout. Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -113,6 +114,7 @@ PY
       tests/runner/test_claude_native_turn_end_recheck.py tests/runner/test_resource_registry.py \
       tests/server/test_cors_origins.py tests/server/integration/test_hermes_host.py \
       tests/server/routes/test_push_to_talk_info.py tests/server/test_archive_deletes_sandbox.py \
+      tests/server/test_chat_media.py \
       -q --tb=short --junitxml="$reports/backend.xml"
   )
   mise exec "node@$node_version" "pnpm@$pnpm_version" -- \
@@ -141,6 +143,7 @@ PY
       src/components/PushToTalkSettings.test.tsx src/lib/settingsPortability.test.ts \
       src/components/chat/Transcript.measureAhead.test.tsx \
       src/components/chat/Transcript.virtualList.test.tsx \
+      src/lib/chatMediaCache.test.ts \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 

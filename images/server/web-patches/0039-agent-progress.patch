@@ -592,7 +592,7 @@ index 88d902e..a59c121 100644
                showsWorking={showsWorking && item.index === lastAssistantIndex}
                actionsPersistent={
 diff --git a/web/src/components/chat/chatBubbleParts.tsx b/web/src/components/chat/chatBubbleParts.tsx
-index 22f0c5f..79de6ed 100644
+index d74d02f..4356808 100644
 --- a/web/src/components/chat/chatBubbleParts.tsx
 +++ b/web/src/components/chat/chatBubbleParts.tsx
 @@ -2,6 +2,8 @@
@@ -601,10 +601,33 @@ index 22f0c5f..79de6ed 100644
  // existing importers (tests + components) and imports back the few it renders.
 +import type { AgentProgress } from "@/lib/agentProgress";
 +import { FinishedProgress } from "@/components/chat/AgentProgressCard";
+ import { ChatMediaScope } from "@/components/chat/ChatMarkdownMedia";
  import {
    createContext,
-   memo,
-@@ -557,6 +559,7 @@ export const BubbleView = memo(
+@@ -556,12 +558,14 @@ function BubbleBody({
+   showsWorking,
+   actionsPersistent,
+   recoveryDisabled,
++  progressBars,
+ }: {
+   bubble: Bubble;
+   isLastAssistant: boolean;
+   showsWorking: boolean;
+   actionsPersistent: boolean;
+   recoveryDisabled: boolean;
++  progressBars?: readonly AgentProgress[];
+ }) {
+   if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
+   if (bubble.kind === "compaction_loading") {
+@@ -589,6 +593,7 @@ function BubbleBody({
+       showsWorking={showsWorking}
+       actionsPersistent={actionsPersistent}
+       recoveryDisabled={recoveryDisabled}
++      progressBars={progressBars}
+     />
+   );
+ }
+@@ -603,6 +608,7 @@ export const BubbleView = memo(
      showsWorking = false,
      actionsPersistent = false,
      recoveryDisabled = false,
@@ -612,21 +635,22 @@ index 22f0c5f..79de6ed 100644
    }: {
      bubble: Bubble;
      isLastAssistant?: boolean;
-@@ -564,6 +567,8 @@ export const BubbleView = memo(
+@@ -610,6 +616,8 @@ export const BubbleView = memo(
      actionsPersistent?: boolean;
      /** Hide retry/recovery controls when the surrounding session is sealed. */
      recoveryDisabled?: boolean;
 +    /** Finished progress bars of the turn this reply ends (this deployment). */
 +    progressBars?: readonly AgentProgress[];
    }) {
-     if (bubble.kind === "user") return <UserBubble bubble={bubble} />;
-     if (bubble.kind === "compaction_loading") {
-@@ -591,10 +596,12 @@ export const BubbleView = memo(
-         showsWorking={showsWorking}
-         actionsPersistent={actionsPersistent}
-         recoveryDisabled={recoveryDisabled}
-+        progressBars={progressBars}
-       />
+     // The files a message shows stay with it across remounts (ChatMediaScope).
+     const mediaScope = useMemo(() => bubbleKey(bubble), [bubble]);
+@@ -621,11 +629,13 @@ export const BubbleView = memo(
+           showsWorking={showsWorking}
+           actionsPersistent={actionsPersistent}
+           recoveryDisabled={recoveryDisabled}
++          progressBars={progressBars}
+         />
+       </ChatMediaScope.Provider>
      );
    },
    (prev, next) =>
@@ -634,7 +658,7 @@ index 22f0c5f..79de6ed 100644
      (prev.isLastAssistant ?? false) === (next.isLastAssistant ?? false) &&
      (prev.showsWorking ?? false) === (next.showsWorking ?? false) &&
      (prev.actionsPersistent ?? false) === (next.actionsPersistent ?? false) &&
-@@ -946,18 +953,28 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
+@@ -977,18 +987,28 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
    );
  }
  
@@ -663,7 +687,7 @@ index 22f0c5f..79de6ed 100644
  }) {
    // The walker only emits an assistant bubble when at least one assistant-side
    // block exists. The "Working…" shimmer for the empty-items / streaming gap
-@@ -1108,6 +1125,7 @@ function AssistantBubble({
+@@ -1139,6 +1159,7 @@ function AssistantBubble({
              <span>Interrupted</span>
            </p>
          )}

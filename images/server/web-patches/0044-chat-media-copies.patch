@@ -1,0 +1,210 @@
+Load the files agents show in the chat through the server's chat media route.
+
+With this deployment's server (images/server/patches/0027-chat-media-copies.patch),
+GET /v1/sessions/{id}/chat-media serves a file a reply shows from the
+session's sandbox while it runs, and from the server's copy once the sandbox
+is asleep or gone, as after archiving. ChatMarkdownMedia asks it for the
+path as the reply wrote it (decoded, without a leading ./), and the server
+resolves it against the workspace, so an absolute or ~ path no longer waits
+for the environment metadata, which a sleeping sandbox can't give. This
+replaces 0033's fetchWorkspaceFileBlob, the filesystem route's download.
+
+diff --git a/web/src/components/blocks/ChatMarkdown.media.test.tsx b/web/src/components/blocks/ChatMarkdown.media.test.tsx
+index 6605fcc..76dd122 100644
+--- a/web/src/components/blocks/ChatMarkdown.media.test.tsx
++++ b/web/src/components/blocks/ChatMarkdown.media.test.tsx
+@@ -1,5 +1,5 @@
+ // Images, video and audio in chat markdown: workspace files load through the
+-// filesystem API, images in a row share a grid, and the lightbox pages
++// chat media route, images in a row share a grid, and the lightbox pages
+ // through that grid.
+ 
+ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+@@ -19,11 +19,11 @@ vi.mock("@/lib/host", async (importOriginal) => ({
+ 
+ vi.mock("@/hooks/useFileContent", async (importOriginal) => ({
+   ...(await importOriginal<object>()),
+-  fetchWorkspaceFileBlob: vi.fn(),
++  fetchChatMediaBlob: vi.fn(),
+ }));
+-import { fetchWorkspaceFileBlob } from "@/hooks/useFileContent";
++import { fetchChatMediaBlob } from "@/hooks/useFileContent";
+ 
+-const fetchBlob = vi.mocked(fetchWorkspaceFileBlob);
++const fetchBlob = vi.mocked(fetchChatMediaBlob);
+ 
+ const FILE_VIEWER = {
+   openFile: () => {},
+@@ -72,16 +72,16 @@ function renderMarkdown(
+ }
+ 
+ describe("workspace media in chat markdown", () => {
+-  it("loads an absolute workspace image through the filesystem API", async () => {
++  it("loads an absolute workspace image through the chat media route", async () => {
+     renderMarkdown("![after](/home/u/ws/shots/after.png)");
+ 
+     const img = await screen.findByRole("img", { name: "after" });
+     expect(img).toHaveAttribute("src", expect.stringMatching(/^blob:media-/));
+-    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "shots/after.png");
++    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "/home/u/ws/shots/after.png");
+     expect(screen.queryByText(/Image blocked/)).toBeNull();
+   });
+ 
+-  it("resolves a relative path against the workspace root", async () => {
++  it("asks for a relative path decoded and without its leading ./", async () => {
+     renderMarkdown("![shot](./my%20shot.png)");
+ 
+     await screen.findByRole("img", { name: "shot" });
+@@ -92,7 +92,15 @@ describe("workspace media in chat markdown", () => {
+     renderMarkdown("![shot](file:///home/u/ws/a.png)");
+ 
+     await screen.findByRole("img", { name: "shot" });
+-    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "a.png");
++    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "/home/u/ws/a.png");
++  });
++
++  it("loads an absolute path while the sandbox sleeps and the workspace root is unknown", async () => {
++    renderMarkdown("![kept](/home/u/shot.png)", { ...FILE_VIEWER, workspaceRoot: null });
++
++    const img = await screen.findByRole("img", { name: "kept" });
++    expect(img).toHaveAttribute("src", expect.stringMatching(/^blob:media-/));
++    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "/home/u/shot.png");
+   });
+ 
+   it("plays a video file in a native player", async () => {
+@@ -102,7 +110,7 @@ describe("workspace media in chat markdown", () => {
+     const video = container.querySelector("video")!;
+     expect(video).toHaveAttribute("src", expect.stringMatching(/^blob:media-/));
+     expect(video).toHaveAttribute("controls");
+-    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "demo.mp4");
++    expect(fetchBlob).toHaveBeenCalledWith("conv_1", "/home/u/ws/demo.mp4");
+   });
+ 
+   it("plays an audio file in a native player", async () => {
+diff --git a/web/src/components/chat/ChatMarkdownMedia.tsx b/web/src/components/chat/ChatMarkdownMedia.tsx
+index 2d5b639..5a1e3e6 100644
+--- a/web/src/components/chat/ChatMarkdownMedia.tsx
++++ b/web/src/components/chat/ChatMarkdownMedia.tsx
+@@ -2,14 +2,14 @@
+ // inline. An image opens in the shared lightbox, and paging through the others
+ // when it sits in a grid of them (see groupMediaGalleries).
+ //
+-// A workspace path is loaded through the session's filesystem API: the file
+-// lives in the sandbox, which the browser can't reach directly. The bytes come
+-// as a Blob rather than as an `<img src>` to the API, because the download
+-// endpoint has no range requests, without which Safari won't play a video, and
+-// because an embedding host or native shell needs its own auth on the request.
+-// Each message keeps the files it showed in memory (lib/chatMediaCache), so a
+-// remount, such as when a streamed reply is saved or you come back to the
+-// session, doesn't flash.
++// A workspace path is loaded through the server's chat media route: the file
++// lives in the sandbox, which the browser can't reach directly, and the server
++// keeps a copy for when the sandbox is asleep or gone. The bytes come as a Blob
++// rather than as an `<img src>` to the API, because the route has no range
++// requests, without which Safari won't play a video, and because an embedding
++// host or native shell needs its own auth on the request. Each message keeps
++// the files it showed in memory (lib/chatMediaCache), so a remount, such as
++// when a streamed reply is saved or you come back to the session, doesn't flash.
+ 
+ import type React from "react";
+ import { createContext, useContext, useEffect, useReducer, useState } from "react";
+@@ -18,10 +18,9 @@ import { WORKSPACE_MEDIA_ATTR } from "@/components/ai-elements/streamdown-securi
+ import { ZoomableImage } from "@/components/ImageLightbox";
+ import { Spinner } from "@/components/ui/spinner";
+ import { mediaKind, type MediaKind } from "@/lib/mediaKind";
+-import { fetchWorkspaceFileBlob } from "@/hooks/useFileContent";
++import { fetchChatMediaBlob } from "@/hooks/useFileContent";
+ import { loadChatMedia, peekChatMedia, retainChatMedia } from "@/lib/chatMediaCache";
+-import { resolveChatFilePath } from "@/hooks/useWorkspaceChangedFiles";
+-import { useFileViewerConversationId, useWorkspacePaths } from "@/shell/FileViewerContext";
++import { useFileViewerConversationId } from "@/shell/FileViewerContext";
+ 
+ /**
+  * The message whose media renders below: a bubble's stable key, e.g.
+@@ -40,41 +39,33 @@ type MediaSource = { status: "loading" } | { status: "error" } | { status: "read
+  * Where the browser can load a markdown image's media from: the URL as
+  * written, or an object URL for the bytes of the workspace file it names,
+  * shared with every other mount that shows it. A file loaded before is ready
+- * in the first render.
++ * in the first render. The server resolves the path.
+  */
+ function useMediaSource(workspacePath: string | null, src: string | undefined): MediaSource {
+   const conversationId = useFileViewerConversationId();
+   const scope = useContext(ChatMediaScope);
+-  const { root, home } = useWorkspacePaths();
+-  // `./shot.png` is as relative as `shot.png`; the resolver rejects `.`.
+-  const cited = workspacePath?.replace(/^(?:\.\/)+/, "") ?? null;
+-  const filePath = cited ? (resolveChatFilePath(cited, root, home)?.path ?? null) : null;
+-  const key = conversationId && filePath ? `${conversationId}\0${filePath}` : null;
++  // `./shot.png` is as relative as `shot.png`; the server keeps its copy
++  // under the path without it.
++  const cited = workspacePath?.replace(/^(?:\.\/)+/, "") || null;
++  const key = conversationId && cited ? `${conversationId}\0${cited}` : null;
+   const [, settled] = useReducer((n: number) => n + 1, 0);
+ 
+   useEffect(() => {
+-    if (!conversationId || !filePath || !key) return;
++    if (!conversationId || !cited || !key) return;
+     let cancelled = false;
+     const before = peekChatMedia(scope, key);
+-    void loadChatMedia(scope, key, () => fetchWorkspaceFileBlob(conversationId, filePath)).then(
+-      (url) => {
+-        if (!cancelled && url !== before) settled();
+-      },
+-    );
++    void loadChatMedia(scope, key, () => fetchChatMediaBlob(conversationId, cited)).then((url) => {
++      if (!cancelled && url !== before) settled();
++    });
+     const release = retainChatMedia(scope, key);
+     return () => {
+       cancelled = true;
+       release();
+     };
+-  }, [conversationId, filePath, key, scope]);
++  }, [conversationId, cited, key, scope]);
+ 
+   if (workspacePath === null) return src ? { status: "ready", url: src } : { status: "error" };
+-  if (!key) {
+-    // An absolute or `~` path can't be resolved until the workspace root is
+-    // known; it resolves once the environment metadata loads.
+-    const rootPending = root === null && /^[/~]/.test(cited ?? "");
+-    return rootPending && conversationId ? { status: "loading" } : { status: "error" };
+-  }
++  if (!key) return { status: "error" };
+   const url = peekChatMedia(scope, key);
+   if (url === undefined) return { status: "loading" };
+   return url ? { status: "ready", url } : { status: "error" };
+diff --git a/web/src/hooks/useFileContent.ts b/web/src/hooks/useFileContent.ts
+index f895351..c2f5f2c 100644
+--- a/web/src/hooks/useFileContent.ts
++++ b/web/src/hooks/useFileContent.ts
+@@ -91,19 +91,21 @@ export function fileContentToBlob(data: FileContentResponse): Blob {
+ }
+ 
+ /**
+- * Fetch a workspace file's complete bytes, for media shown inline in the chat.
++ * Fetch the bytes of a file an agent's reply shows with image syntax.
+  *
+- * Asks for the raw file (`download=true`) like {@link downloadWorkspaceFile},
+- * so a video isn't cut off at the viewer's read cap, and through
+- * `authenticatedFetch`, which also carries the auth an embedding host or a
+- * native shell needs. The Blob's type is the file's, from the server.
++ * The server reads it from the session's sandbox while it can, and keeps a
++ * copy it serves once the sandbox is asleep or gone, so a reply's images
++ * outlive the sandbox. The path goes as the reply wrote it: the server
++ * resolves it against the workspace, as `resolveChatFilePath` would, so
++ * an absolute path needn't wait for the environment metadata, which a
++ * sleeping sandbox can't give.
+  *
+  * :param conversationId: The session/conversation ID, e.g. ``"sess_abc123"``.
+- * :param path: Workspace-relative or host-absolute file path.
++ * :param path: The cited path, e.g. ``"shots/home.png"`` or ``"~/shot.png"``.
+  */
+-export async function fetchWorkspaceFileBlob(conversationId: string, path: string): Promise<Blob> {
++export async function fetchChatMediaBlob(conversationId: string, path: string): Promise<Blob> {
+   const res = await authenticatedFetch(
+-    workspaceFileUrl(conversationId, path, { download: "true" }),
++    `/v1/sessions/${encodeURIComponent(conversationId)}/chat-media?${new URLSearchParams({ path })}`,
+   );
+   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+   return await res.blob();

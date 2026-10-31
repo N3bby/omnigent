@@ -1,0 +1,410 @@
+Copies of the files agents show in the chat, kept by the server.
+
+The web UI loads a file a reply shows with image syntax from the session's
+sandbox (web-patches/0033-inline-media.patch), so an asleep or deleted
+sandbox, such as an archived session's, left a grey chip in its place.
+omnigent_chat_media (images/server/omnigent_chat_media.py) keeps a copy of
+each such file in the artifact store, and omnigent_chat_media_api, mounted
+here, serves GET /v1/sessions/{id}/chat-media?path=<path as the reply wrote
+it>: from the sandbox while it can be reached, refreshing the copy, and from
+the copy otherwise. A file outside the workspace is owner-only, as in the
+file viewer.
+
+_publish_status reports each change of a session's status to
+omnigent_chat_media.on_status. When a turn ends (idle or failed), the
+session's newest replies are scanned and every file they show without a copy
+as new as the reply is fetched and kept, so a reply nobody looked at while
+the sandbox ran still has its images. Deleting a session deletes its copies.
+
+diff --git a/omnigent/server/app.py b/omnigent/server/app.py
+index 427c412..428bf18 100644
+--- a/omnigent/server/app.py
++++ b/omnigent/server/app.py
+@@ -131,6 +131,7 @@ from omnigent_subscriptions_api import create_subscriptions_router
+ from omnigent_mcp_servers_api import create_settings_mcp_servers_router
+ import omnigent_progress as _progress
+ from omnigent_progress_api import create_progress_router
++from omnigent_chat_media_api import create_chat_media_router
+ from omnigent.server.routes.terminal_attach import create_terminal_attach_router
+ from omnigent.server.routes.usage import create_usage_router
+ from omnigent.server.runner_session_init import (
+@@ -3495,6 +3496,18 @@ def create_app(
+         )
+ 
+     _progress.set_publisher(_publish_progress)
++    # The files agents show in the chat, from the sandbox or the server's copy
++    # of them, which it takes at each turn's end (omnigent_chat_media_api).
++    app.include_router(
++        create_chat_media_router(
++            conversation_store=conversation_store,
++            artifact_store=artifact_store,
++            auth_provider=auth_provider,
++            permission_store=permission_store,
++        ),
++        prefix="/v1",
++        tags=["sessions"],
++    )
+     # First-class projects (owner-private session containers). Mounted only
+     # when a project store is wired; the endpoints self-scope to the caller.
+     if project_store is not None:
+diff --git a/omnigent/server/routes/_sessions/helpers.py b/omnigent/server/routes/_sessions/helpers.py
+index 003dff4..586b696 100644
+--- a/omnigent/server/routes/_sessions/helpers.py
++++ b/omnigent/server/routes/_sessions/helpers.py
+@@ -31,6 +31,7 @@ from pathlib import PurePath
+ from typing import Any, Final, Literal, cast
+ 
+ import httpx
++import omnigent_chat_media as _chat_media
+ import omnigent_progress as _progress
+ import omnigent_startup as _startup
+ from fastapi import (
+@@ -4936,6 +4937,12 @@ def _publish_status(
+     except Exception:  # noqa: BLE001 - a progress bar must never break a status
+         _logger.debug("progress bar for %s failed", session_id, exc_info=True)
+     if previous_status != status:
++        # A turn's end keeps copies of the files its replies showed
++        # (omnigent_chat_media).
++        try:
++            _chat_media.on_status(session_id, status)
++        except Exception:  # noqa: BLE001 - a missed copy must never break a status
++            _logger.debug("chat media for %s failed", session_id, exc_info=True)
+         _publish_child_status_to_parent(session_id, status)
+     # Mirror the transition onto the conversation row (best-effort,
+     # deduplicated, off-loop) so replicas that don't hold this session's
+diff --git a/omnigent/server/routes/sessions/routes_events.py b/omnigent/server/routes/sessions/routes_events.py
+index 51744f1..f592c69 100644
+--- a/omnigent/server/routes/sessions/routes_events.py
++++ b/omnigent/server/routes/sessions/routes_events.py
+@@ -13,6 +13,7 @@ from dataclasses import dataclass
+ from typing import Any, Literal, cast
+ 
+ import httpx
++import omnigent_chat_media as _chat_media
+ import omnigent_progress as _progress
+ import omnigent_startup as _startup
+ from fastapi import (
+@@ -3437,6 +3438,8 @@ def register_events_routes(
+                     failed_blob_count,
+                     len(orphaned_blob_keys),
+                 )
++        # The copies of the files its replies showed (omnigent_chat_media).
++        await asyncio.to_thread(_chat_media.forget, session_id)
+         _interrupt_fenced_sessions.discard(session_id)
+         _intentional_stop_sessions.pop(session_id, None)
+         deleted = await conversation_store.delete_conversation(session_id)
+diff --git a/tests/server/test_chat_media.py b/tests/server/test_chat_media.py
+new file mode 100644
+index 0000000..c72d201
+--- /dev/null
++++ b/tests/server/test_chat_media.py
+@@ -0,0 +1,309 @@
++"""Copies of the files agents show in the chat, kept by the server (this deployment).
++
++Runs the real app with header auth and a stub sandbox: the chat media route
++serving a file from the sandbox and keeping a copy, the copy once the sandbox
++is out of reach or the file is gone, a turn's end keeping what its replies
++showed, the owner-only rule for files outside the workspace, and deleting a
++session deleting its copies. Finding the paths and the copies themselves are
++tested in the deployment repo (tests/test_chat_media.py).
++"""
++
++from __future__ import annotations
++
++import asyncio
++from collections.abc import AsyncIterator, Iterator
++from pathlib import Path
++from typing import Any
++
++import httpx
++import omnigent_chat_media as chat_media
++import pytest
++import pytest_asyncio
++from fastapi import FastAPI, Response
++
++from omnigent.entities import Conversation
++from omnigent.entities.conversation import MessageData, NewConversationItem
++from omnigent.errors import ErrorCode, OmnigentError
++from omnigent.runtime import _globals, set_runner_client, set_runner_router
++from omnigent.runtime.agent_cache import AgentCache
++from omnigent.server.app import create_app
++from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ, UnifiedAuthProvider
++from omnigent.server.routes._sessions import helpers
++from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
++from omnigent.stores.artifact_store.local import LocalArtifactStore
++from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
++from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
++from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
++from tests.server.helpers import create_test_agent
++
++OWNER = "owner@example.test"
++READER = "reader@example.test"
++ROOT = "/home/omnigent/workspace/app"
++HOME = "/home/omnigent"
++
++
++class _Sandbox:
++    """A stub runner serving files from a dict, and whether it can be reached."""
++
++    def __init__(self) -> None:
++        self.files: dict[str, bytes] = {}
++        self.online = True
++        self.reads: list[str] = []
++        self.app = FastAPI()
++
++        @self.app.get("/v1/sessions/{session_id}/resources/environments/default")
++        async def environment(session_id: str) -> dict[str, Any]:
++            return {"id": "default", "metadata": {"root": ROOT, "home": HOME}}
++
++        @self.app.get(
++            "/v1/sessions/{session_id}/resources/environments/default/filesystem/{path:path}"
++        )
++        async def read(session_id: str, path: str, download: bool = False) -> Response:
++            assert download
++            self.reads.append(path)
++            if path not in self.files:
++                return Response(
++                    '{"error": {"code": "not_found", "message": "no such file"}}',
++                    status_code=404,
++                    media_type="application/json",
++                )
++            name = path.rsplit("/", 1)[-1]
++            return Response(
++                self.files[path],
++                media_type="image/png" if name.endswith(".png") else "video/mp4",
++                headers={"Content-Disposition": f'attachment; filename="{name}"'},
++            )
++
++
++class _Routed:
++    def __init__(self, client: httpx.AsyncClient) -> None:
++        self.runner_id = "runner_one"
++        self.client = client
++
++
++class _Router:
++    def __init__(self, sandbox: _Sandbox, client: httpx.AsyncClient) -> None:
++        self.sandbox = sandbox
++        self.client = client
++
++    def client_for_session_resources(
++        self, session_id: str, *, conversation: Conversation | None = None
++    ) -> _Routed:
++        if not self.sandbox.online:
++            raise OmnigentError("runner offline", code=ErrorCode.RUNNER_UNAVAILABLE)
++        return _Routed(self.client)
++
++
++@pytest.fixture
++def sandbox() -> Iterator[_Sandbox]:
++    prior_client, prior_router = _globals._runner_client, _globals._runner_router
++    set_runner_client(None)
++    yield _Sandbox()
++    set_runner_client(prior_client)
++    set_runner_router(prior_router)
++    chat_media.configure(None)
++
++
++@pytest.fixture
++def artifacts(tmp_path: Path) -> Path:
++    return tmp_path / "artifacts"
++
++
++@pytest.fixture
++def app(runtime_init: None, db_uri: str, tmp_path: Path, artifacts: Path) -> FastAPI:
++    artifact_store = LocalArtifactStore(str(artifacts))
++    return create_app(
++        agent_store=SqlAlchemyAgentStore(db_uri),
++        file_store=SqlAlchemyFileStore(db_uri),
++        conversation_store=SqlAlchemyConversationStore(db_uri),
++        artifact_store=artifact_store,
++        agent_cache=AgentCache(artifact_store=artifact_store, cache_dir=tmp_path / "cache"),
++        permission_store=SqlAlchemyPermissionStore(db_uri),
++        auth_provider=UnifiedAuthProvider(source="header", local_single_user=False),
++    )
++
++
++@pytest_asyncio.fixture
++async def client(app: FastAPI, sandbox: _Sandbox) -> AsyncIterator[httpx.AsyncClient]:
++    async with (
++        httpx.AsyncClient(
++            transport=httpx.ASGITransport(app=sandbox.app), base_url="http://runner"
++        ) as runner,
++        httpx.AsyncClient(
++            transport=httpx.ASGITransport(app=app),
++            base_url="http://test",
++            headers={"X-Forwarded-Email": OWNER},
++        ) as client,
++    ):
++        set_runner_router(_Router(sandbox, runner))  # type: ignore[arg-type]
++        yield client
++    await app.state.background_title_coordinator.shutdown()
++
++
++@pytest_asyncio.fixture
++async def session(db_uri: str, client: httpx.AsyncClient) -> Conversation:
++    agent = await create_test_agent(client)
++    session = SqlAlchemyConversationStore(db_uri).create_conversation(
++        kind="default", title="Screenshots", agent_id=agent["id"]
++    )
++    permissions = SqlAlchemyPermissionStore(db_uri)
++    permissions.grant(OWNER, session.id, LEVEL_OWNER)
++    permissions.grant(READER, session.id, LEVEL_READ)
++    return session
++
++
++def _reply(db_uri: str, session: Conversation, text: str) -> None:
++    SqlAlchemyConversationStore(db_uri).append(
++        session.id,
++        [
++            NewConversationItem(
++                type="message",
++                response_id="resp_1",
++                data=MessageData(
++                    role="assistant",
++                    agent="claude",
++                    content=[{"type": "output_text", "text": text}],
++                ),
++            )
++        ],
++    )
++
++
++async def _turn_ends(session: Conversation) -> None:
++    helpers._publish_status(session.id, "running")
++    helpers._publish_status(session.id, "idle")
++    await asyncio.gather(*list(chat_media._tasks))
++
++
++async def _load(client: httpx.AsyncClient, session: Conversation, path: str, **kw: Any):
++    return await client.get(f"/v1/sessions/{session.id}/chat-media", params={"path": path}, **kw)
++
++
++async def test_a_file_loads_from_the_sandbox_and_then_from_its_copy(
++    client: httpx.AsyncClient, session: Conversation, sandbox: _Sandbox
++) -> None:
++    sandbox.files["shots/home.png"] = b"PNG home"
++
++    live = await _load(client, session, "./shots/home.png")
++
++    assert live.status_code == 200, live.text
++    assert live.content == b"PNG home"
++    assert live.headers["content-type"] == "image/png"
++    assert live.headers["x-omnigent-chat-media"] == "live"
++    assert live.headers["x-content-type-options"] == "nosniff"
++    assert sandbox.reads == ["shots/home.png"]
++
++    sandbox.online = False
++    copy = await _load(client, session, "shots/home.png")
++
++    assert copy.status_code == 200, copy.text
++    assert copy.content == b"PNG home"
++    assert copy.headers["content-type"] == "image/png"
++    assert copy.headers["x-omnigent-chat-media"] == "copy"
++
++
++async def test_the_copy_follows_the_file_and_outlives_it(
++    client: httpx.AsyncClient, session: Conversation, sandbox: _Sandbox
++) -> None:
++    sandbox.files["shot.png"] = b"first"
++    await _load(client, session, "shot.png")
++    sandbox.files["shot.png"] = b"second"
++    assert (await _load(client, session, "shot.png")).content == b"second"
++
++    del sandbox.files["shot.png"]
++    gone = await _load(client, session, "shot.png")
++
++    assert gone.status_code == 200
++    assert gone.content == b"second"
++    assert gone.headers["x-omnigent-chat-media"] == "copy"
++
++
++async def test_a_file_never_seen_is_not_found_while_the_sandbox_sleeps(
++    client: httpx.AsyncClient, session: Conversation, sandbox: _Sandbox
++) -> None:
++    sandbox.files["shot.png"] = b"PNG"
++    sandbox.online = False
++
++    assert (await _load(client, session, "shot.png")).status_code == 404
++    assert (await _load(client, session, "../etc/passwd")).status_code == 404
++
++
++async def test_a_turns_end_keeps_what_its_replies_show(
++    client: httpx.AsyncClient, session: Conversation, sandbox: _Sandbox, db_uri: str
++) -> None:
++    sandbox.files["shots/a.png"] = b"A"
++    sandbox.files["/tmp/b.png"] = b"B"
++    sandbox.files["/home/omnigent/c.png"] = b"C"
++    sandbox.files["shots/fenced.png"] = b"F"
++    _reply(
++        db_uri,
++        session,
++        "Before and after:\n\n![A](shots/a.png)\n![B](file:///tmp/b.png)\n"
++        "![C](~/c.png) ![web](https://example.com/x.png)\n\n"
++        "```md\n![fenced](shots/fenced.png)\n```",
++    )
++
++    await _turn_ends(session)
++
++    assert sorted(sandbox.reads) == ["/home/omnigent/c.png", "/tmp/b.png", "shots/a.png"]
++    sandbox.online = False
++    for path, data in (("shots/a.png", b"A"), ("/tmp/b.png", b"B"), ("~/c.png", b"C")):
++        copy = await _load(client, session, path)
++        assert copy.status_code == 200, path
++        assert copy.content == data
++    assert (await _load(client, session, "shots/fenced.png")).status_code == 404
++
++    # A copy as new as the reply isn't fetched again at the next turn's end.
++    sandbox.online = True
++    sandbox.reads.clear()
++    await _turn_ends(session)
++    assert sandbox.reads == []
++
++
++async def test_a_reader_gets_workspace_files_but_not_the_owners_others(
++    client: httpx.AsyncClient, session: Conversation, sandbox: _Sandbox
++) -> None:
++    sandbox.files["shot.png"] = b"in"
++    sandbox.files["/tmp/secret.png"] = b"out"
++    await _load(client, session, "shot.png")
++    await _load(client, session, "/tmp/secret.png")
++    reader = {"X-Forwarded-Email": READER}
++
++    assert (await _load(client, session, "shot.png", headers=reader)).status_code == 200
++    assert (await _load(client, session, "/tmp/secret.png", headers=reader)).status_code == 403
++    sandbox.online = False
++    assert (await _load(client, session, "shot.png", headers=reader)).status_code == 200
++    assert (await _load(client, session, "/tmp/secret.png", headers=reader)).status_code == 403
++    stranger = {"X-Forwarded-Email": "stranger@example.test"}
++    assert (await _load(client, session, "shot.png", headers=stranger)).status_code == 404
++
++
++async def test_a_file_too_big_to_keep_still_loads(
++    client: httpx.AsyncClient,
++    session: Conversation,
++    sandbox: _Sandbox,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    monkeypatch.setattr(chat_media, "MAX_COPY_BYTES", 4)
++    sandbox.files["demo.mp4"] = b"0123456789"
++
++    live = await _load(client, session, "demo.mp4")
++
++    assert live.status_code == 200
++    assert live.content == b"0123456789"
++    sandbox.online = False
++    assert (await _load(client, session, "demo.mp4")).status_code == 404
++
++
++async def test_deleting_a_session_deletes_its_copies(
++    client: httpx.AsyncClient, session: Conversation, sandbox: _Sandbox, artifacts: Path
++) -> None:
++    sandbox.files["shot.png"] = b"PNG"
++    await _load(client, session, "shot.png")
++    kept = artifacts / "chat-media" / session.id
++    assert len(list(kept.iterdir())) == 2
++
++    deleted = await client.delete(f"/v1/sessions/{session.id}")
++
++    assert deleted.status_code == 200, deleted.text
++    assert list(kept.iterdir()) == []

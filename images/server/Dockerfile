@@ -43,7 +43,8 @@ RUN python -m pip install --no-cache-dir "hvac==${HVAC_VERSION}" \
 # omnigent_startup_api, for 0016-startup-progress.patch, and
 # omnigent_mcp_servers and omnigent_mcp_servers_api, for 0019-mcp-servers.patch,
 # omnigent_progress and omnigent_progress_api, for 0022-agent-progress.patch,
-# and omnigent_hermes_host, for 0024-hermes-host.patch.
+# omnigent_hermes_host, for 0024-hermes-host.patch, and omnigent_chat_media and
+# omnigent_chat_media_api, for 0027-chat-media-copies.patch.
 COPY patches/ /tmp/omnigent-patches/
 COPY omnigent_repo_env.py omnigent_repo_env_api.py /tmp/omnigent-modules/
 COPY omnigent_subscriptions.py omnigent_subscriptions_api.py omnigent_subscription_login.py /tmp/omnigent-modules/
@@ -51,6 +52,7 @@ COPY omnigent_startup.py omnigent_startup_api.py /tmp/omnigent-modules/
 COPY omnigent_mcp_servers.py omnigent_mcp_servers_api.py /tmp/omnigent-modules/
 COPY omnigent_progress.py omnigent_progress_api.py /tmp/omnigent-modules/
 COPY omnigent_hermes_host.py /tmp/omnigent-modules/
+COPY omnigent_chat_media.py omnigent_chat_media_api.py /tmp/omnigent-modules/
 RUN set -eu; \
     site="$(python -c 'import omnigent, pathlib; print(pathlib.Path(omnigent.__file__).parents[1])')"; \
     purelib="$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
@@ -64,7 +66,7 @@ RUN set -eu; \
     done; \
     apt-get purge -y --auto-remove patch; \
     rm -rf /var/lib/apt/lists/* /tmp/omnigent-patches; \
-    python -m compileall -q -f "$site/omnigent/server" "$site/omnigent/onboarding/sandboxes" "$purelib/omnigent_repo_env.py" "$purelib/omnigent_repo_env_api.py" "$purelib/omnigent_startup.py" "$purelib/omnigent_startup_api.py" "$purelib/omnigent_mcp_servers.py" "$purelib/omnigent_mcp_servers_api.py" "$purelib/omnigent_progress.py" "$purelib/omnigent_progress_api.py" "$purelib/omnigent_hermes_host.py"; \
+    python -m compileall -q -f "$site/omnigent/server" "$site/omnigent/onboarding/sandboxes" "$purelib/omnigent_repo_env.py" "$purelib/omnigent_repo_env_api.py" "$purelib/omnigent_startup.py" "$purelib/omnigent_startup_api.py" "$purelib/omnigent_mcp_servers.py" "$purelib/omnigent_mcp_servers_api.py" "$purelib/omnigent_progress.py" "$purelib/omnigent_progress_api.py" "$purelib/omnigent_hermes_host.py" "$purelib/omnigent_chat_media.py" "$purelib/omnigent_chat_media_api.py"; \
     python -c 'import omnigent.server.sandbox_catalog_fallback, omnigent.server.routes.sessions, omnigent.server.routes.hosts, omnigent.onboarding.sandboxes.agent_sandbox, omnigent.server.app'
 
 # The hermes-remote harness, from packages/omnigent-hermes-remote (the build's
