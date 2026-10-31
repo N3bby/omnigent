@@ -49,7 +49,9 @@ class SaveRepositoryRequest(BaseModel):
     """Body for ``PUT /v1/repo-env``.
 
     ``variables`` maps each name to its new value, or to ``null`` to keep the
-    current one. Names left out are removed. ``instructions`` and
+    current one. Names left out are removed. ``renamed`` maps a renamed
+    variable's new name to the name it had, so ``null`` keeps the value it
+    had under that name. ``instructions`` and
     ``setup_script`` are the whole text, or ``null`` or blank to remove it;
     left out, they stay as they are. ``ssh_key`` is a new private key, or
     ``null`` to remove it; left out, it stays. ``exit_node`` is a Tailscale
@@ -60,6 +62,7 @@ class SaveRepositoryRequest(BaseModel):
 
     repository: str
     variables: dict[str, str | None]
+    renamed: dict[str, str] = {}
     instructions: str | None = None
     setup_script: str | None = None
     ssh_key: str | None = None
@@ -213,7 +216,7 @@ def create_repo_env_router(
             texts["exit_node_git_only"] = body.exit_node_git_only
         return await _kubernetes(
             lambda: repo_env.save_repository(
-                core(), key, body.variables, updated_by=user_id, **texts
+                core(), key, body.variables, updated_by=user_id, renamed=body.renamed, **texts
             )
         )
 

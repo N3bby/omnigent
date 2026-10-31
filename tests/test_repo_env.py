@@ -465,6 +465,31 @@ class StoreTests(unittest.TestCase):
         repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None, "URL": "new", "ADDED": ""})
         self.assertEqual(decoded(self.core), {"TOKEN": "abc", "URL": "new", "ADDED": ""})
 
+    def test_a_renamed_variable_keeps_its_value(self) -> None:
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc", "URL": "u"}, ssh_key=openssh_key())
+        repo_env.save_repository(self.core, ROADPASS, {"NPM_TOKEN": None, "URL": None}, renamed={"NPM_TOKEN": "TOKEN"})
+        self.assertEqual({k: v for k, v in decoded(self.core).items() if k != "git-ssh-key"},
+                         {"NPM_TOKEN": "abc", "URL": "u"})
+        # Swapped, each gets the other's value; renamed with a value, it gets that.
+        repo_env.save_repository(self.core, ROADPASS, {"URL": None, "NPM_TOKEN": None},
+                                 renamed={"URL": "NPM_TOKEN", "NPM_TOKEN": "URL"})
+        self.assertEqual(decoded(self.core)["URL"], "abc")
+        self.assertEqual(decoded(self.core)["NPM_TOKEN"], "u")
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "new"}, renamed={"TOKEN": "URL"})
+        self.assertEqual(set(decoded(self.core)), {"TOKEN", "git-ssh-key"})
+        self.assertEqual(decoded(self.core)["TOKEN"], "new")
+
+    def test_rejects_renames_from_nothing_or_a_key_that_isnt_a_variable(self) -> None:
+        repo_env.save_repository(self.core, ROADPASS, {"TOKEN": "abc"}, ssh_key=openssh_key())
+        before = decoded(self.core)
+        with self.assertRaisesRegex(ValueError, "B is renamed from A, which has no value"):
+            repo_env.save_repository(self.core, ROADPASS, {"B": None}, renamed={"B": "A"})
+        with self.assertRaisesRegex(ValueError, "not a valid variable name"):
+            repo_env.save_repository(self.core, ROADPASS, {"KEY": None}, renamed={"KEY": "git-ssh-key"})
+        with self.assertRaisesRegex(ValueError, "isn't among the variables"):
+            repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None}, renamed={"OTHER": "TOKEN"})
+        self.assertEqual(decoded(self.core), before)
+
     def test_rejects_unknown_kept_names_bad_names_and_nothing(self) -> None:
         with self.assertRaisesRegex(ValueError, "TOKEN has no value yet"):
             repo_env.save_repository(self.core, ROADPASS, {"TOKEN": None})

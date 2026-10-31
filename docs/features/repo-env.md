@@ -27,6 +27,13 @@ repository's variables.
 
 ![Editing a repository: a blank value keeps the current one, a typed value replaces it](../images/repo-env-edit.webp)
 
+To rename a variable, edit its name. Left blank, its value moves to the new
+name, so you don't have to type it again; a typed value replaces it. A
+variable whose name you clear asks for a new one; remove it with its × button
+instead.
+
+![Renaming two variables: under each, "Renamed from GOVFLANDERS_NPM_TOKEN, keeping its value." and the same for NPM_CONFIG_REGISTRY](../images/repo-env-rename.webp)
+
 A repository's details, such as its variable count and when it was last
 changed, follow its name, or go on the line below when a long name leaves
 them no room.
@@ -122,7 +129,10 @@ There's nothing to turn off. A repository without variables starts as before.
   serves (mounted by `images/server/patches/0006-repo-env-routes.patch`).
   Listing returns names; saving sends each name with a new value, or `null`
   to keep the current one, and replaces the Secret only if nobody changed it
-  since it was read. Every route but the names lookup and the repository picker's list
+  since it was read. A renamed variable also goes in `renamed`, which maps
+  its new name to the old one, so `null` keeps the old name's value; the
+  server copies it inside the Secret
+  (`images/server/web-patches/0043-rename-repo-variables.patch`). Every route but the names lookup and the repository picker's list
   (`/v1/repo-env/repositories`) is admin-only.
 - **Permissions:** for the page, the server may get, list and update Secrets
   in `omnigent-sandboxes` (`kubernetes/platform/runner-rbac.yaml`). That's a

@@ -1,0 +1,270 @@
+Let Settings -> Repository variables rename a stored variable.
+
+A stored variable's name was read-only, so renaming one meant removing it and
+typing its value again under the new name. Now its name is editable like a
+new one's. Left blank, its value field still keeps the stored value, which
+moves to the new name: saving sends the new name with null in variables, and
+renamed maps it to the name it had, so PUT /v1/repo-env
+(images/server/omnigent_repo_env_api.py) copies the value inside the Secret
+and it never reaches the browser. A typed value replaces it as before.
+
+Under a renamed row, "Renamed from OLD, keeping its value." says so. A stored
+variable whose name is cleared asks for a name instead of quietly going; its
+x button still removes it. renamed is only sent when something is renamed,
+so a save without one is unchanged.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0042.
+diff --git a/web/src/hooks/useRepoEnv.ts b/web/src/hooks/useRepoEnv.ts
+index 926da9f..e746912 100644
+--- a/web/src/hooks/useRepoEnv.ts
++++ b/web/src/hooks/useRepoEnv.ts
+@@ -69,6 +69,8 @@ export function useSaveRepoEnv() {
+     mutationFn: (args: {
+       repository: string;
+       variables: Record<string, string | null>;
++      /** A renamed variable's new name and the name it had, keeping its value. */
++      renamed?: Record<string, string>;
+       instructions: string | null;
+       setup_script: string | null;
+       /** A new SSH key, null to remove it, or left out to keep it. */
+@@ -79,6 +81,7 @@ export function useSaveRepoEnv() {
+       exit_node_git_only?: boolean;
+     }) =>
+       saveRepoEnv(args.repository, args.variables, {
++        renamed: args.renamed,
+         instructions: args.instructions,
+         setup_script: args.setup_script,
+         ssh_key: args.ssh_key,
+diff --git a/web/src/lib/repoEnv.ts b/web/src/lib/repoEnv.ts
+index f306973..d622968 100644
+--- a/web/src/lib/repoEnv.ts
++++ b/web/src/lib/repoEnv.ts
+@@ -234,7 +234,8 @@ export async function fetchRepoEnvNames(repository: string): Promise<RepoEnvSumm
+  * Store a repository's variables, replacing what it had (admin only).
+  *
+  * @param variables Each name's new value, or null to keep the current one.
+- *   Names left out are removed.
++ *   Names left out are removed. A name in ``texts.renamed`` with null keeps
++ *   the value of the name it had.
+  * @param texts The agent instructions and setup script, each the whole text
+  *   or null to remove it, and the SSH key and the exit node: a new one, null
+  *   to remove it, or left out to keep it. Whether only the Git server uses the
+@@ -244,6 +245,8 @@ export async function saveRepoEnv(
+   repository: string,
+   variables: Record<string, string | null>,
+   texts: {
++    /** A renamed variable's new name and the name it had, keeping its value. */
++    renamed?: Record<string, string>;
+     instructions: string | null;
+     setup_script: string | null;
+     ssh_key?: string | null;
+diff --git a/web/src/pages/RepoVariablesPage.test.tsx b/web/src/pages/RepoVariablesPage.test.tsx
+index 7139941..0375261 100644
+--- a/web/src/pages/RepoVariablesPage.test.tsx
++++ b/web/src/pages/RepoVariablesPage.test.tsx
+@@ -67,11 +67,13 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
+   if (method === "PUT") {
+     const current = stored[body.repository] ?? {};
+     const next: Record<string, string> = {};
++    const renamed: Record<string, string> = body.renamed ?? {};
+     for (const [name, value] of Object.entries(body.variables as Record<string, string | null>)) {
+-      if (value === null && !(name in current)) {
++      const from = renamed[name] ?? name;
++      if (value === null && !(from in current)) {
+         return json(400, { error: { message: `${name} has no value yet` } });
+       }
+-      next[name] = value ?? current[name];
++      next[name] = value ?? current[from];
+     }
+     const kept = texts[body.repository] ?? { instructions: null, setup_script: null };
+     const nextTexts = { ...kept };
+@@ -206,6 +208,38 @@ describe("RepoVariablesPage", () => {
+     });
+   });
+ 
++  it("renames a variable, keeping its value unless a new one is typed", async () => {
++    renderPage();
++    const card = await screen.findByRole("article", { name: ROADPASS });
++    fireEvent.click(
++      within(card).getByRole("button", { name: "Edit variables for kunlabora/roadpass" }),
++    );
++    const [token, registry] = within(card).getAllByLabelText("Variable name");
++    const note = (text: string) => (_: string, el: Element | null) =>
++      el?.tagName === "P" && el.textContent === text;
++    fireEvent.change(token, { target: { value: "NPM_TOKEN" } });
++    expect(
++      within(card).getByText(note("Renamed from GOVFLANDERS_NPM_TOKEN, keeping its value.")),
++    ).toBeInTheDocument();
++    fireEvent.change(registry, { target: { value: "" } });
++    expect(
++      within(card).getByText("Give NPM_CONFIG_REGISTRY a name, or remove it."),
++    ).toBeInTheDocument();
++    expect(within(card).getByRole("button", { name: "Save" })).toBeDisabled();
++    fireEvent.change(registry, { target: { value: "REGISTRY" } });
++    fireEvent.change(within(card).getByLabelText("Value for REGISTRY"), {
++      target: { value: "https://new" },
++    });
++    expect(within(card).getByText(note("Renamed from NPM_CONFIG_REGISTRY."))).toBeInTheDocument();
++    fireEvent.click(within(card).getByRole("button", { name: "Save" }));
++    await waitFor(() => expect(requests.some((r) => r.method === "PUT")).toBe(true));
++    expect(requests.find((r) => r.method === "PUT")!.body).toMatchObject({
++      variables: { NPM_TOKEN: null, REGISTRY: "https://new" },
++      renamed: { NPM_TOKEN: "GOVFLANDERS_NPM_TOKEN" },
++    });
++    expect(stored[ROADPASS]).toEqual({ NPM_TOKEN: "secret-token", REGISTRY: "https://new" });
++  });
++
+   it("adds a repository from a clone URL and a pasted .env", async () => {
+     renderPage();
+     await screen.findByRole("article", { name: ROADPASS });
+diff --git a/web/src/pages/RepoVariablesPage.tsx b/web/src/pages/RepoVariablesPage.tsx
+index eb7f649..5f97883 100644
+--- a/web/src/pages/RepoVariablesPage.tsx
++++ b/web/src/pages/RepoVariablesPage.tsx
+@@ -5,11 +5,11 @@
+  *
+  * Sessions started on a repository get its variables in their agent's
+  * environment. Values are write-only: the server lists names, and editing
+- * keeps a value whose field is left blank. The server stores each repository
+- * as a Kubernetes Secret, which the runner Pod mounts. A repository's Git
+- * token is its ``GIT_TOKEN`` variable, shown and edited apart from the
+- * others, behind its own switch. Its SSH key, for its SSH URLs, has a switch
+- * too, and is write-only like a value.
++ * keeps a value whose field is left blank, also when its name changes. The
++ * server stores each repository as a Kubernetes Secret, which the runner Pod
++ * mounts. A repository's Git token is its ``GIT_TOKEN`` variable, shown and
++ * edited apart from the others, behind its own switch. Its SSH key, for its
++ * SSH URLs, has a switch too, and is write-only like a value.
+  *
+  * A repository can also have its own agent instructions, which the runner
+  * appends to its own, and a setup script, which runs in the checkout before
+@@ -571,18 +571,24 @@ interface Row {
+   id: number;
+   name: string;
+   value: string;
+-  /** Already stored: the name is fixed and a blank value keeps it. */
+-  existing: boolean;
++  /**
++   * The name it's stored under, or null for a new one. A blank value keeps
++   * the stored one, also when the name changes.
++   */
++  stored: string | null;
+ }
+ 
+ let nextRowId = 0;
+-function newRow(name = "", value = "", existing = false): Row {
++function newRow(name = "", value = "", stored: string | null = null): Row {
+   nextRowId += 1;
+-  return { id: nextRowId, name, value, existing };
++  return { id: nextRowId, name, value, stored };
+ }
+ 
+ function rowError(row: Row, rows: Row[], index: number): string | null {
+-  if (!row.name) return row.value ? "Give this value a name." : null;
++  if (!row.name) {
++    if (row.stored !== null) return `Give ${row.stored} a name, or remove it.`;
++    return row.value ? "Give this value a name." : null;
++  }
+   if (row.name === GIT_TOKEN) return "Set the Git token with its switch above.";
+   const nameError = variableNameError(row.name);
+   if (nameError) return nameError;
+@@ -610,7 +616,7 @@ function VariablesEditor({
+   const save = useSaveRepoEnv();
+   const [query, setQuery] = useState("");
+   const [rows, setRows] = useState<Row[]>(() =>
+-    entry ? splitToken(entry.names).variables.map((name) => newRow(name, "", true)) : [newRow()],
++    entry ? splitToken(entry.names).variables.map((name) => newRow(name, "", name)) : [newRow()],
+   );
+   // Already stored: a blank token field keeps it, and switching it off removes it.
+   const tokenStored = entry ? splitToken(entry.names).token : false;
+@@ -639,8 +645,8 @@ function VariablesEditor({
+   const key = entry ? entry.repository : repoKey(query);
+   const alreadyThere = !entry && key !== null && known.includes(key);
+   const errors = rows.map((row, i) => rowError(row, rows, i));
+-  const named = rows.filter((r) => r.name);
+-  const missingValue = named.some((r) => !r.existing && !r.value);
++  const named = rows.filter((r) => r.name || r.stored !== null);
++  const missingValue = named.some((r) => r.stored === null && !r.value);
+   const missingToken = tokenOn && !tokenStored && !token;
+   const missingSshKey = sshKeyOn && !sshKeyStored && !sshKey.trim();
+   const instructionsError = textError(instructionsOn, instructions, "instructions");
+@@ -722,13 +728,23 @@ function VariablesEditor({
+   function submit() {
+     if (!canSave || key === null) return;
+     const variables: Record<string, string | null> = {};
+-    for (const row of named) variables[row.name] = row.existing && !row.value ? null : row.value;
++    // A renamed variable left blank takes its value from the name it had.
++    const renamed: Record<string, string> = {};
++    for (const row of named) {
++      if (row.stored !== null && !row.value) {
++        variables[row.name] = null;
++        if (row.name !== row.stored) renamed[row.name] = row.stored;
++      } else {
++        variables[row.name] = row.value;
++      }
++    }
+     if (tokenOn) variables[GIT_TOKEN] = tokenStored && !token ? null : token;
+     setSaveError(null);
+     save.mutate(
+       {
+         repository: key,
+         variables,
++        ...(Object.keys(renamed).length ? { renamed } : {}),
+         instructions: instructionsOn ? instructions : null,
+         setup_script: scriptOn ? script : null,
+         // Left out, the stored key stays.
+@@ -886,24 +902,21 @@ function VariablesEditor({
+                 <Input
+                   value={row.name}
+                   onChange={(e) => update(row.id, { name: e.target.value.trim() })}
+-                  readOnly={row.existing}
+-                  placeholder="NAME"
++                  placeholder={row.stored ?? "NAME"}
+                   aria-label="Variable name"
+                   aria-invalid={errors[i] ? true : undefined}
+                   autoComplete="off"
+                   autoCapitalize="off"
+                   spellCheck={false}
+-                  className={cn(
+-                    "font-mono sm:w-64 sm:flex-none",
+-                    TOUCH_HEIGHT,
+-                    row.existing && "bg-muted/40",
+-                  )}
++                  className={cn("font-mono sm:w-64 sm:flex-none", TOUCH_HEIGHT)}
+                 />
+                 <Input
+                   type="password"
+                   value={row.value}
+                   onChange={(e) => update(row.id, { value: e.target.value })}
+-                  placeholder={row.existing ? "Leave blank to keep the current value" : "Value"}
++                  placeholder={
++                    row.stored !== null ? "Leave blank to keep the current value" : "Value"
++                  }
+                   aria-label={`Value for ${row.name || "new variable"}`}
+                   autoComplete="new-password"
+                   className={cn("col-span-2 min-w-0 sm:flex-1", TOUCH_HEIGHT)}
+@@ -913,13 +926,23 @@ function VariablesEditor({
+                   variant="ghost"
+                   size="icon-sm"
+                   onClick={() => removeRow(row.id)}
+-                  aria-label={`Remove ${row.name || "row"}`}
++                  aria-label={`Remove ${row.name || row.stored || "row"}`}
+                   className={cn("col-start-2 row-start-1", TOUCH_ICON_BUTTON)}
+                 >
+                   <XIcon className="ui-icon" />
+                 </Button>
+               </div>
+-              {errors[i] && <p className="text-sm text-destructive">{errors[i]}</p>}
++              {errors[i] ? (
++                <p className="text-sm text-destructive">{errors[i]}</p>
++              ) : (
++                row.stored !== null &&
++                row.name !== row.stored && (
++                  <p className="text-sm text-muted-foreground">
++                    Renamed from <span className="font-mono">{row.stored}</span>
++                    {row.value ? "." : ", keeping its value."}
++                  </p>
++                )
++              )}
+             </div>
+           ))
+         )}

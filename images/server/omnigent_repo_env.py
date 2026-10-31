@@ -706,13 +706,15 @@ def save_repository(
     ssh_key: str | None = KEEP,
     exit_node: str | None = KEEP,
     exit_node_git_only: bool = KEEP,
+    renamed: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """
     Store a repository's variables, replacing the ones it had.
 
     A name without a value (``None``) keeps that variable's current value, so
     a value never has to come back to the browser to be kept. Names that
-    aren't given are removed.
+    aren't given are removed. A renamed variable keeps its value the same
+    way, from the name it had.
 
     :param core: A Kubernetes ``CoreV1Api``.
     :param key: A key from :func:`repo_key`.
@@ -728,16 +730,26 @@ def save_repository(
     :param exit_node_git_only: Whether sessions send only their traffic to the
         repository's Git server through the exit node; :data:`KEEP` leaves it
         as it is. It goes with the exit node.
+    :param renamed: Each renamed variable's new name and the name it had,
+        e.g. ``{"NPM_TOKEN": "GOVFLANDERS_NPM_TOKEN"}``. A new name given
+        ``None`` in ``variables`` gets the value of the one it had; one
+        given a value just gets that.
     :returns: The repository's entry, as in :func:`list_repositories`.
     :raises ValueError: When there'd be nothing left to store (the
         repository's MCP servers count), on a name
         :func:`check_variable_name` rejects, ``None`` for a variable the
-        repository doesn't have, text over :data:`TEXT_LIMIT` bytes, an SSH
-        key :func:`check_ssh_key` rejects, or an exit node
-        :func:`check_exit_node` rejects.
+        repository doesn't have or one renamed from a name it doesn't have,
+        a renamed name missing from ``variables``, text over
+        :data:`TEXT_LIMIT` bytes, an SSH key :func:`check_ssh_key` rejects,
+        or an exit node :func:`check_exit_node` rejects.
     """
     for name in variables:
         check_variable_name(name)
+    renamed = dict(renamed or {})
+    for new, old in renamed.items():
+        check_variable_name(old)
+        if new not in variables:
+            raise ValueError(f"{new} is renamed from {old} but isn't among the variables")
     if ssh_key is not KEEP and ssh_key is not None:
         ssh_key = check_ssh_key(ssh_key)
     texts = {
@@ -755,10 +767,13 @@ def save_repository(
     current_data = (current.data or {}) if current is not None else {}
     data: dict[str, str] = {}
     for variable, value in variables.items():
+        stored = renamed.get(variable, variable)
         if value is not None:
             data[variable] = base64.b64encode(value.encode()).decode()
-        elif variable in current_data:
-            data[variable] = current_data[variable]
+        elif stored in current_data:
+            data[variable] = current_data[stored]
+        elif stored != variable:
+            raise ValueError(f"{variable} is renamed from {stored}, which has no value")
         else:
             raise ValueError(f"{variable} has no value yet")
     if MCP_SERVERS_KEY in current_data:

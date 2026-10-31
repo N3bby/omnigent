@@ -78,6 +78,12 @@ class RouteTests(unittest.TestCase):
         kept = self.call("PUT", "/v1/repo-env", json={"repository": ROADPASS, "variables": {"TOKEN": None}})
         self.assertEqual(kept.status_code, 200, kept.text)
         self.assertEqual(decoded(self.core), {"TOKEN": "abc"})
+        renamed = self.call("PUT", "/v1/repo-env", json={
+            "repository": ROADPASS, "variables": {"NPM_TOKEN": None}, "renamed": {"NPM_TOKEN": "TOKEN"},
+        })
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        self.assertEqual(renamed.json()["names"], ["NPM_TOKEN"])
+        self.assertEqual(decoded(self.core), {"NPM_TOKEN": "abc"})
         deleted = self.call("DELETE", "/v1/repo-env", params={"repository": "kunlabora/roadpass"})
         self.assertEqual(deleted.status_code, 200, deleted.text)
         self.assertEqual(self.core.secrets, {})
