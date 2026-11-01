@@ -32,8 +32,10 @@ the newest words in view, as typing would: the words are set, not typed, and
 the textarea isn't focused while the mic button is held.
 
 Settings → Speech (components/PushToTalkSettings.tsx) picks the model, the
-key, the words to listen for (Mistral's context bias and Deepgram's
-keyterms), and what letting go does, and shows whether the server answers.
+key, the language (English unless you pick Dutch or Detect it, since
+Deepgram drops words when it detects it; Parakeet always detects it), the
+words to listen for (Mistral's context bias and Deepgram's keyterms), and
+what letting go does, and shows whether the server answers.
 The choices are kept per browser and are part of Export settings.
 Both the session composer and the New session screen have it; the side
 chat doesn't.
@@ -378,10 +380,10 @@ index 0000000..76078f7
 +}
 diff --git a/web/src/components/PushToTalkSettings.test.tsx b/web/src/components/PushToTalkSettings.test.tsx
 new file mode 100644
-index 0000000..b80c029
+index 0000000..f24e115
 --- /dev/null
 +++ b/web/src/components/PushToTalkSettings.test.tsx
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,82 @@
 +// Tests for Settings → Speech: the model, the key, the words to listen for.
 +
 +import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -442,6 +444,16 @@ index 0000000..b80c029
 +    expect(readPushToTalkSettings().hints).toEqual(["Omnigent"]);
 +  });
 +
++  it("speaks English unless you pick another language", () => {
++    render(<PushToTalkSettingsBody />);
++    const language = screen.getByTestId("push-to-talk-language");
++    expect(language).toHaveTextContent("English");
++    fireEvent.click(language);
++    fireEvent.click(screen.getByRole("option", { name: "Dutch" }));
++    expect(readPushToTalkSettings().language).toBe("nl");
++    expect(screen.getByTestId("push-to-talk-language")).toHaveTextContent("Dutch");
++  });
++
 +  it("sends on release when switched on", () => {
 +    render(<PushToTalkSettingsBody />);
 +    fireEvent.click(screen.getByTestId("push-to-talk-send-toggle"));
@@ -456,10 +468,10 @@ index 0000000..b80c029
 +});
 diff --git a/web/src/components/PushToTalkSettings.tsx b/web/src/components/PushToTalkSettings.tsx
 new file mode 100644
-index 0000000..4b9d390
+index 0000000..e2038b2
 --- /dev/null
 +++ b/web/src/components/PushToTalkSettings.tsx
-@@ -0,0 +1,290 @@
+@@ -0,0 +1,336 @@
 +// Settings → Speech: which model listens, the push-to-talk key, the words to
 +// listen for, what letting go does, and whether the speech server answers.
 +// The choices are this browser's (lib/pushToTalk.ts); the server is the
@@ -471,17 +483,26 @@ index 0000000..4b9d390
 +import { SettingsLabel } from "@/components/SettingsLabel";
 +import { CardRadioGroup } from "@/components/theme/CardRadioGroup";
 +import { Button } from "@/components/ui/button";
++import {
++  Select,
++  SelectContent,
++  SelectItem,
++  SelectTrigger,
++  SelectValue,
++} from "@/components/ui/select";
 +import { Switch } from "@/components/ui/switch";
 +import { pushToTalkServerName } from "@/components/PushToTalk";
 +import { useServerInfo } from "@/lib/CapabilitiesContext";
 +import {
 +  PUSH_TO_TALK_ENGINES,
++  PUSH_TO_TALK_LANGUAGES,
 +  pushToTalkEngine,
 +  pushToTalkHttpUrl,
 +  pushToTalkKeyLabel,
 +  usePushToTalkSettings,
 +  writePushToTalkSettings,
 +  type PushToTalkEngine,
++  type PushToTalkLanguage,
 +} from "@/lib/pushToTalk";
 +import { cn } from "@/lib/utils";
 +
@@ -520,6 +541,7 @@ index 0000000..4b9d390
 +  const reachability = useReachability(server);
 +  const modelLabelId = useId();
 +  const keyLabelId = useId();
++  const languageLabelId = useId();
 +  const hintsLabelId = useId();
 +  const sendLabelId = useId();
 +  const [capturing, setCapturing] = useState(false);
@@ -640,6 +662,42 @@ index 0000000..4b9d390
 +              {capturing ? "Cancel" : "Change"}
 +            </Button>
 +          </div>
++        </div>
++        <div className="mt-4 flex items-start justify-between gap-6 border-t border-border pt-4">
++          <SettingsLabel
++            label="Language"
++            labelId={languageLabelId}
++            className="flex-1"
++            descriptionClassName="text-ui"
++            description={
++              settings.engine === "local"
++                ? "The language you speak, for Mistral's cloud and Deepgram. Parakeet works it out itself."
++                : "The language you speak. Detecting it makes Deepgram drop words, so pick yours if you can."
++            }
++          />
++          <Select
++            value={settings.language}
++            onValueChange={(value) =>
++              writePushToTalkSettings({ language: value as PushToTalkLanguage })
++            }
++            componentId="settings.speech.language"
++            valueHasNoPii
++          >
++            <SelectTrigger
++              className="h-8 w-32 shrink-0"
++              aria-labelledby={languageLabelId}
++              data-testid="push-to-talk-language"
++            >
++              <SelectValue />
++            </SelectTrigger>
++            <SelectContent>
++              {PUSH_TO_TALK_LANGUAGES.map((language) => (
++                <SelectItem key={language.id} value={language.id}>
++                  {language.name}
++                </SelectItem>
++              ))}
++            </SelectContent>
++          </Select>
 +        </div>
 +        <div className="mt-4 flex items-start justify-between gap-6 border-t border-border pt-4">
 +          <SettingsLabel
@@ -1523,10 +1581,10 @@ index 4e8b90f..5126e4c 100644
            agent_detail: data.agent_detail === true,
 diff --git a/web/src/lib/pushToTalk.test.ts b/web/src/lib/pushToTalk.test.ts
 new file mode 100644
-index 0000000..80698c4
+index 0000000..a9314e8
 --- /dev/null
 +++ b/web/src/lib/pushToTalk.test.ts
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,209 @@
 +// Tests for push-to-talk's settings and its socket to the speech server.
 +
 +import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1544,20 +1602,34 @@ index 0000000..80698c4
 +describe("push-to-talk settings", () => {
 +  beforeEach(() => localStorage.clear());
 +
-+  it("starts on Parakeet, Right ⌥ and keeping the words", () => {
++  it("starts on Parakeet, English, Right ⌥ and keeping the words", () => {
 +    expect(readPushToTalkSettings()).toEqual(DEFAULT_PUSH_TO_TALK_SETTINGS);
++    expect(DEFAULT_PUSH_TO_TALK_SETTINGS).toMatchObject({ engine: "local", language: "en" });
 +  });
 +
 +  it("keeps what's written, and ignores what it can't read", () => {
-+    writePushToTalkSettings({ engine: "deepgram", hints: ["Omnigent"], afterRelease: "send" });
++    writePushToTalkSettings({
++      engine: "deepgram",
++      hints: ["Omnigent"],
++      language: "nl",
++      afterRelease: "send",
++    });
 +    expect(readPushToTalkSettings()).toMatchObject({
 +      engine: "deepgram",
 +      hints: ["Omnigent"],
++      language: "nl",
 +      afterRelease: "send",
 +      key: { code: "AltRight" },
 +    });
-+    localStorage.setItem("omnigent:push-to-talk", '{"engine":"whisper","hints":[1,"k3s",""]}');
-+    expect(readPushToTalkSettings()).toMatchObject({ engine: "local", hints: ["k3s"] });
++    localStorage.setItem(
++      "omnigent:push-to-talk",
++      '{"engine":"whisper","hints":[1,"k3s",""],"language":"klingon"}',
++    );
++    expect(readPushToTalkSettings()).toMatchObject({
++      engine: "local",
++      hints: ["k3s"],
++      language: "en",
++    });
 +    localStorage.setItem("omnigent:push-to-talk", "not json");
 +    expect(readPushToTalkSettings()).toEqual(DEFAULT_PUSH_TO_TALK_SETTINGS);
 +  });
@@ -1570,7 +1642,7 @@ index 0000000..80698c4
 +});
 +
 +describe("the speech server's URLs", () => {
-+  it("asks for the chosen engine at Voxtral's 480 ms delay, with hints where they work", () => {
++  it("asks for the chosen engine and language at Voxtral's 480 ms delay, with hints where they work", () => {
 +    const local = new URL(
 +      pushToTalkStreamUrl("wss://mac-mini.tail.ts.net:8443/", {
 +        ...DEFAULT_PUSH_TO_TALK_SETTINGS,
@@ -1580,6 +1652,7 @@ index 0000000..80698c4
 +    expect(local.origin + local.pathname).toBe("wss://mac-mini.tail.ts.net:8443/stream");
 +    expect(local.searchParams.get("engines")).toBe("local");
 +    expect(local.searchParams.get("delay")).toBe("480");
++    expect(local.searchParams.get("language")).toBe("en");
 +    // Parakeet on the server can't take hints, so none are sent.
 +    expect(local.searchParams.getAll("hint")).toEqual([]);
 +
@@ -1588,9 +1661,11 @@ index 0000000..80698c4
 +        ...DEFAULT_PUSH_TO_TALK_SETTINGS,
 +        engine: "cloud",
 +        hints: ["Omnigent", "k3s"],
++        language: "auto",
 +      }),
 +    );
 +    expect(cloud.protocol).toBe("wss:");
++    expect(cloud.searchParams.get("language")).toBe("auto");
 +    expect(cloud.searchParams.getAll("hint")).toEqual(["Omnigent", "k3s"]);
 +  });
 +
@@ -1721,10 +1796,10 @@ index 0000000..80698c4
 +});
 diff --git a/web/src/lib/pushToTalk.ts b/web/src/lib/pushToTalk.ts
 new file mode 100644
-index 0000000..4b249d7
+index 0000000..c369012
 --- /dev/null
 +++ b/web/src/lib/pushToTalk.ts
-@@ -0,0 +1,538 @@
+@@ -0,0 +1,557 @@
 +// Push-to-talk dictation through this deployment's own speech server.
 +//
 +// The server (`push_to_talk_url` in the deployment's environment, advertised
@@ -1734,7 +1809,7 @@ index 0000000..4b249d7
 +// streams the words back as they're recognized. The browser talks to it
 +// directly over a WebSocket:
 +//
-+//   wss://<server>/stream?engines=local&delay=480&hint=Omnigent
++//   wss://<server>/stream?engines=local&delay=480&language=en&hint=Omnigent
 +//   → binary frames: 16 kHz mono s16le PCM, as it's recorded
 +//   → {"type": "stop"} when the person lets go
 +//   ← {"type": "ready"}, then per engine {"type": "text"|"partial"|"done"|"error", ...}
@@ -1796,6 +1871,16 @@ index 0000000..4b249d7
 +  return PUSH_TO_TALK_ENGINES.find((engine) => engine.id === id) ?? PUSH_TO_TALK_ENGINES[0];
 +}
 +
++/** The language you speak, for Mistral's cloud and Deepgram; Parakeet always works it out itself. */
++export type PushToTalkLanguage = "en" | "nl" | "auto";
++
++export const PUSH_TO_TALK_LANGUAGES: readonly { id: PushToTalkLanguage; name: string }[] = [
++  { id: "en", name: "English" },
++  { id: "nl", name: "Dutch" },
++  // Deepgram drops words when it has to detect the language, so it isn't the default.
++  { id: "auto", name: "Detect it" },
++];
++
 +export interface PushToTalkKey {
 +  /** KeyboardEvent.code, e.g. "AltRight". */
 +  code: string;
@@ -1807,6 +1892,7 @@ index 0000000..4b249d7
 +  key: PushToTalkKey;
 +  /** Names and jargon to listen for (Mistral's context bias, Deepgram's keyterms). */
 +  hints: string[];
++  language: PushToTalkLanguage;
 +  /** What letting go does: leave the words in the composer, or send them. */
 +  afterRelease: "keep" | "send";
 +}
@@ -1815,6 +1901,7 @@ index 0000000..4b249d7
 +  engine: "local",
 +  key: { code: "AltRight", label: "Right ⌥" },
 +  hints: [],
++  language: "en",
 +  afterRelease: "keep",
 +};
 +
@@ -1866,8 +1953,11 @@ index 0000000..4b249d7
 +    const hints = Array.isArray(data.hints)
 +      ? data.hints.filter((h): h is string => typeof h === "string" && h.trim() !== "")
 +      : [];
++    const language = PUSH_TO_TALK_LANGUAGES.some((l) => l.id === data.language)
++      ? (data.language as PushToTalkLanguage)
++      : DEFAULT_PUSH_TO_TALK_SETTINGS.language;
 +    const afterRelease = data.afterRelease === "send" ? "send" : "keep";
-+    return { engine, key, hints, afterRelease };
++    return { engine, key, hints, language, afterRelease };
 +  } catch {
 +    return DEFAULT_PUSH_TO_TALK_SETTINGS;
 +  }
@@ -1930,7 +2020,11 @@ index 0000000..4b249d7
 +/** The speech server's /stream URL for a take with these settings. */
 +export function pushToTalkStreamUrl(server: string, settings: PushToTalkSettings): string {
 +  const base = server.replace(/\/+$/, "").replace(/^http(s?):/, "ws$1:");
-+  const query = new URLSearchParams({ engines: settings.engine, delay: String(VOXTRAL_DELAY_MS) });
++  const query = new URLSearchParams({
++    engines: settings.engine,
++    delay: String(VOXTRAL_DELAY_MS),
++    language: settings.language,
++  });
 +  if (pushToTalkEngine(settings.engine).hints) {
 +    for (const hint of settings.hints.slice(0, 100)) query.append("hint", hint);
 +  }
