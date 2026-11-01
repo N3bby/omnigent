@@ -10,8 +10,7 @@
 # composers without a mic, the Claude permission hook's bearer refresh,
 # agents' progress bars, a turn Claude starts straight after Stop showing as
 # working, CORS for the glasses app, the always-on Hermes host running
-# Hermes sessions only, push-to-talk, the chat holding still while
-# scrolling up through older messages, Project settings scrolling on a
+# Hermes sessions only, push-to-talk, Project settings scrolling on a
 # phone, archiving deleting a session's sandbox, and the server's copies of
 # the files agents show in the chat, against a fresh, fully patched upstream
 # checkout. Keep logs and JUnit reports.
@@ -141,8 +140,6 @@ PY
       src/lib/sessionsApi.test.ts src/lib/toolTitle.test.ts \
       src/lib/pushToTalk.test.ts src/hooks/usePushToTalk.test.tsx \
       src/components/PushToTalkSettings.test.tsx src/lib/settingsPortability.test.ts \
-      src/components/chat/Transcript.measureAhead.test.tsx \
-      src/components/chat/Transcript.virtualList.test.tsx \
       src/lib/chatMediaCache.test.ts \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
