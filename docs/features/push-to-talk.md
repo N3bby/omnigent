@@ -2,11 +2,12 @@
 
 Hold a key, or the mic button next to Send, and talk: your words stream into
 the composer as you say them. Let go, and the last words land a moment
-later. The speech is recognized by your own speech server, a Voxtral
-Realtime server on your tailnet (such as a Mac mini), which can also pass
-your voice on to Mistral's or Deepgram's cloud.
+later. The speech is recognized by your own speech server on your tailnet
+(such as a Mac mini), with NVIDIA's Parakeet, and it can also pass your voice
+on to Mistral's or Deepgram's cloud. Parakeet knows Dutch, English and 23
+more European languages, and tells them apart by itself.
 
-![The New session composer while you talk: the words so far, and below them a red dot, the time, a live waveform, Voxtral · mac-mini and Esc cancels, next to the highlighted mic button](../images/push-to-talk-composer.webp)
+![The New session composer while you talk: the words so far, dimmed while they may still change, and below them a red dot, the time, a live waveform, Parakeet · mac-mini and Esc cancels, next to the highlighted mic button](../images/push-to-talk-composer.webp)
 
 ## What you'll notice
 
@@ -20,7 +21,7 @@ your voice on to Mistral's or Deepgram's cloud.
   you're loud. The words appear at the caret and fade in as they arrive.
   Once they fill the composer, it scrolls to keep the newest ones in view.
 - **Let go**, and the bar says **Finishing** while the last words arrive:
-  about 0.8 seconds later with Voxtral on your server. The text stays in the
+  about 0.3 seconds later with Parakeet on your server. The text stays in the
   composer for you to check and send, or goes straight out if you turn on
   **Send when you let go**.
 - **Esc cancels**, and puts the draft back as it was. On a phone, slide
@@ -31,14 +32,14 @@ your voice on to Mistral's or Deepgram's cloud.
 
 ## Settings → Speech
 
-![Settings → Speech: the three models with their cost, the push-to-talk key with a Change button, and Send when you let go](../images/push-to-talk-settings.webp)
+![Settings → Speech: the three models with their cost, the push-to-talk key with a Change button, Send when you let go, and the words to listen for, which Parakeet can't use](../images/push-to-talk-settings.webp)
 
 | Setting | What it does |
 | --- | --- |
-| **Transcription model** | **Voxtral on your server** runs on the speech server's own machine: free and private. **Voxtral on Mistral's cloud** is the same model on Mistral's servers. **Deepgram Nova-3** shows words while you're still saying them, dimmed, and corrects them. The two cloud ones are billed per minute of audio. |
+| **Transcription model** | **Parakeet on your server** runs on the speech server's own machine: free and private. **Voxtral on Mistral's cloud** is Mistral's Voxtral Realtime. **Parakeet** and **Deepgram Nova-3** show words while you're still saying them, dimmed, and correct them. The two cloud ones are billed per minute of audio. |
 | **Push-to-talk key** | The key you hold. **Change**, then press the key you want; Esc keeps the old one. Held together with another key, it's a shortcut instead, and the take is dropped. |
 | **Send when you let go** | Off: the words stay in the composer. On: they're sent straight away. |
-| **Words to listen for** | Names and jargon the cloud models should expect, such as `Omnigent` or `k3s`. Voxtral on your own server can't use them. |
+| **Words to listen for** | Names and jargon the cloud models should expect, such as `Omnigent` or `k3s`. Parakeet on your own server can't use them. |
 | **Speech server** | Where your voice goes, and whether this device can reach it. |
 
 These are saved in the browser, so set them once on each device. They're part
@@ -61,7 +62,7 @@ Deepgram either.
 
 ## Setting it up
 
-1. Run a Voxtral Realtime speech server on a machine on your tailnet, behind
+1. Run a speech server on a machine on your tailnet, behind
    `tailscale serve` so it has HTTPS. The one this was built with streams
    16 kHz PCM over `wss://<machine>/stream` and is described in its own
    `API.md`.
@@ -80,7 +81,7 @@ Deepgram either.
   server never sees the audio, so every device you dictate from must be on
   the tailnet. **Settings → Speech** says **Can't reach it from this
   device** when it isn't.
-- **One person at a time** can use Voxtral on your server; someone else
+- **One person at a time** can use Parakeet on your server; someone else
   talking at the same time gets "Someone else is already using this Mac's
   model."
 - **Both composers have it:** a session's and the New session screen's. The

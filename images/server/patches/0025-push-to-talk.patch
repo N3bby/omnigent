@@ -1,7 +1,7 @@
 Tell the web UI where this deployment's push-to-talk speech server is.
 
 push_to_talk_url in the environment file (OMNIGENT_PUSH_TO_TALK_URL) is a
-Voxtral Realtime server on the tailnet, such as
+speech server on the tailnet, such as
 wss://mac-mini.tail1234.ts.net:8443. GET /v1/info passes it on as
 push_to_talk_url, or null when it's unset; the composer's hold-to-talk mic
 button shows only when it's set, and streams the microphone straight to
