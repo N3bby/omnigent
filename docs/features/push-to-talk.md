@@ -32,12 +32,13 @@ more European languages, and tells them apart by itself.
 
 ## Settings → Speech
 
-![Settings → Speech: the three models with their cost, the push-to-talk key with a Change button, Send when you let go, and the words to listen for, which Parakeet can't use](../images/push-to-talk-settings.webp)
+![Settings → Speech: the three models with their cost, the push-to-talk key with a Change button, the language set to English, Send when you let go, and the words to listen for, which Parakeet can't use](../images/push-to-talk-settings.webp)
 
 | Setting | What it does |
 | --- | --- |
 | **Transcription model** | **Parakeet on your server** runs on the speech server's own machine: free and private. **Voxtral on Mistral's cloud** is Mistral's Voxtral Realtime. **Parakeet** and **Deepgram Nova-3** show words while you're still saying them, dimmed, and correct them. The two cloud ones are billed per minute of audio. |
 | **Push-to-talk key** | The key you hold. **Change**, then press the key you want; Esc keeps the old one. Held together with another key, it's a shortcut instead, and the take is dropped. |
+| **Language** | The language you speak: **English** unless you pick **Dutch** or **Detect it**. It's for Mistral's cloud and Deepgram; Parakeet works it out itself. Deepgram drops words when it has to detect the language, so pick yours. |
 | **Send when you let go** | Off: the words stay in the composer. On: they're sent straight away. |
 | **Words to listen for** | Names and jargon the cloud models should expect, such as `Omnigent` or `k3s`. Parakeet on your own server can't use them. |
 | **Speech server** | Where your voice goes, and whether this device can reach it. |
