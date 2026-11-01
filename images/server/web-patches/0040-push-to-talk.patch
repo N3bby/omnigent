@@ -8,9 +8,9 @@ stays in the composer, or is sent if Send when you let go is on. Esc, or
 sliding a finger off the button to the left, puts the draft back.
 
 The browser streams 16 kHz PCM straight to the server GET /v1/info names
-(push_to_talk_url, server patch 0025-push-to-talk.patch), a Voxtral
-Realtime server that transcribes on its own machine, or relays the audio to
-Mistral's hosted Voxtral or to Deepgram Nova-3 (lib/pushToTalk.ts). The
+(push_to_talk_url, server patch 0025-push-to-talk.patch), a speech server
+that transcribes with Parakeet on its own machine, or relays the audio to
+Mistral's hosted Voxtral Realtime or to Deepgram Nova-3 (lib/pushToTalk.ts). The
 socket and the microphone open together, and audio captured before the
 server is ready is held for it. A take also ends when the window loses
 focus or the tab is hidden (the key-up would never arrive), and after
@@ -26,7 +26,7 @@ back in underneath it, so the row is never empty for a frame.
 The waveform keeps its bars when listening turns to finishing, so they
 trail off to silence instead of blanking when you let go. The
 draft is drawn by the composer's highlight backdrop so the words can fade
-in; Deepgram's words that may still change are dimmed.
+in; words that may still change (Parakeet's and Deepgram's) are dimmed.
 Once the draft is taller than the composer, the textarea scrolls to keep
 the newest words in view, as typing would: the words are set, not typed, and
 the textarea isn't focused while the mic button is held.
@@ -40,7 +40,7 @@ chat doesn't.
 Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0039.
 diff --git a/web/src/components/PushToTalk.tsx b/web/src/components/PushToTalk.tsx
 new file mode 100644
-index 0000000..c87e24b
+index 0000000..76078f7
 --- /dev/null
 +++ b/web/src/components/PushToTalk.tsx
 @@ -0,0 +1,332 @@
@@ -78,12 +78,12 @@ index 0000000..c87e24b
 +  }
 +}
 +
-+/** "Voxtral · mac-mini", "Voxtral · Mistral", "Nova-3 · Deepgram". */
++/** "Parakeet · mac-mini", "Voxtral · Mistral", "Nova-3 · Deepgram". */
 +export function pushToTalkEngineLabel(engine: PushToTalkEngine, server: string | null): string {
 +  if (engine === "cloud") return "Voxtral · Mistral";
 +  if (engine === "deepgram") return "Nova-3 · Deepgram";
 +  const name = pushToTalkServerName(server);
-+  return name ? `Voxtral · ${name}` : "Voxtral";
++  return name ? `Parakeet · ${name}` : "Parakeet";
 +}
 +
 +const ENGINE_ICONS = { local: ServerIcon, cloud: CloudIcon, deepgram: ZapIcon } as const;
@@ -378,7 +378,7 @@ index 0000000..c87e24b
 +}
 diff --git a/web/src/components/PushToTalkSettings.test.tsx b/web/src/components/PushToTalkSettings.test.tsx
 new file mode 100644
-index 0000000..5aa1104
+index 0000000..b80c029
 --- /dev/null
 +++ b/web/src/components/PushToTalkSettings.test.tsx
 @@ -0,0 +1,72 @@
@@ -410,7 +410,7 @@ index 0000000..5aa1104
 +describe("Settings → Speech", () => {
 +  it("picks the model, named after the speech server's machine", async () => {
 +    render(<PushToTalkSettingsBody />);
-+    expect(screen.getByText("Voxtral on mac-mini")).toBeInTheDocument();
++    expect(screen.getByText("Parakeet on mac-mini")).toBeInTheDocument();
 +    expect(screen.getByTestId("push-to-talk-engine-local")).toHaveAttribute("aria-checked", "true");
 +    fireEvent.click(screen.getByTestId("push-to-talk-engine-deepgram"));
 +    expect(readPushToTalkSettings().engine).toBe("deepgram");
@@ -456,7 +456,7 @@ index 0000000..5aa1104
 +});
 diff --git a/web/src/components/PushToTalkSettings.tsx b/web/src/components/PushToTalkSettings.tsx
 new file mode 100644
-index 0000000..a419eb1
+index 0000000..4b9d390
 --- /dev/null
 +++ b/web/src/components/PushToTalkSettings.tsx
 @@ -0,0 +1,290 @@
@@ -590,7 +590,7 @@ index 0000000..a419eb1
 +                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
 +                    <span className="text-ui font-medium">
 +                      {option.id === "local" && serverName
-+                        ? `Voxtral on ${serverName}`
++                        ? `Parakeet on ${serverName}`
 +                        : option.name}
 +                    </span>
 +                    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -671,7 +671,7 @@ index 0000000..a419eb1
 +            description={
 +              engine.hints
 +                ? "Project names and terms the model should expect, such as Omnigent or k3s."
-+                : "Voxtral on your own server can't take hints, so these only help Mistral's cloud and Deepgram."
++                : "Parakeet on your own server can't take hints, so these only help Mistral's cloud and Deepgram."
 +            }
 +          />
 +          <div
@@ -1523,7 +1523,7 @@ index 4e8b90f..5126e4c 100644
            agent_detail: data.agent_detail === true,
 diff --git a/web/src/lib/pushToTalk.test.ts b/web/src/lib/pushToTalk.test.ts
 new file mode 100644
-index 0000000..31691d3
+index 0000000..80698c4
 --- /dev/null
 +++ b/web/src/lib/pushToTalk.test.ts
 @@ -0,0 +1,192 @@
@@ -1544,7 +1544,7 @@ index 0000000..31691d3
 +describe("push-to-talk settings", () => {
 +  beforeEach(() => localStorage.clear());
 +
-+  it("starts on Voxtral, Right ⌥ and keeping the words", () => {
++  it("starts on Parakeet, Right ⌥ and keeping the words", () => {
 +    expect(readPushToTalkSettings()).toEqual(DEFAULT_PUSH_TO_TALK_SETTINGS);
 +  });
 +
@@ -1580,7 +1580,7 @@ index 0000000..31691d3
 +    expect(local.origin + local.pathname).toBe("wss://mac-mini.tail.ts.net:8443/stream");
 +    expect(local.searchParams.get("engines")).toBe("local");
 +    expect(local.searchParams.get("delay")).toBe("480");
-+    // Voxtral on the server can't take hints, so none are sent.
++    // Parakeet on the server can't take hints, so none are sent.
 +    expect(local.searchParams.getAll("hint")).toEqual([]);
 +
 +    const cloud = new URL(
@@ -1721,16 +1721,16 @@ index 0000000..31691d3
 +});
 diff --git a/web/src/lib/pushToTalk.ts b/web/src/lib/pushToTalk.ts
 new file mode 100644
-index 0000000..db022af
+index 0000000..4b249d7
 --- /dev/null
 +++ b/web/src/lib/pushToTalk.ts
 @@ -0,0 +1,538 @@
 +// Push-to-talk dictation through this deployment's own speech server.
 +//
 +// The server (`push_to_talk_url` in the deployment's environment, advertised
-+// as `push_to_talk_url` by GET /v1/info) is a Voxtral Realtime server on the
-+// user's tailnet. It transcribes with Voxtral on its own machine, or relays
-+// the same audio to Mistral's hosted Voxtral or to Deepgram Nova-3, and
++// as `push_to_talk_url` by GET /v1/info) is a speech server on the user's
++// tailnet. It transcribes with Parakeet on its own machine, or relays the
++// same audio to Mistral's hosted Voxtral Realtime or to Deepgram Nova-3, and
 +// streams the words back as they're recognized. The browser talks to it
 +// directly over a WebSocket:
 +//
@@ -1753,7 +1753,7 @@ index 0000000..db022af
 +export interface PushToTalkEngineInfo {
 +  id: PushToTalkEngine;
 +  name: string;
-+  /** Short name for the listening bar, e.g. "Voxtral · Mac". */
++  /** Short name for the listening bar, e.g. "Parakeet · mac-mini". */
 +  short: string;
 +  description: string;
 +  /** Whether a take costs money (the server relays it to a paid service). */
@@ -1765,10 +1765,10 @@ index 0000000..db022af
 +export const PUSH_TO_TALK_ENGINES: readonly PushToTalkEngineInfo[] = [
 +  {
 +    id: "local",
-+    name: "Voxtral on your server",
-+    short: "Voxtral",
++    name: "Parakeet on your server",
++    short: "Parakeet",
 +    description:
-+      "Runs on the speech server's own machine, so it's free and stays private. Last words arrive about 0.8 s after you let go.",
++      "Runs on the speech server's own machine, so it's free and stays private. Shows words while you're still saying them, then corrects them. Last words arrive about 0.3 s after you let go.",
 +    billed: false,
 +    hints: false,
 +  },
@@ -1777,7 +1777,7 @@ index 0000000..db022af
 +    name: "Voxtral on Mistral's cloud",
 +    short: "Voxtral cloud",
 +    description:
-+      "The same model on Mistral's servers. It listens for your words below. Last words arrive about 1.3 s after you let go.",
++      "Mistral's Voxtral Realtime, on their servers. It listens for your words below. Last words arrive about 1.3 s after you let go.",
 +    billed: true,
 +    hints: true,
 +  },
@@ -1822,7 +1822,7 @@ index 0000000..db022af
 +export const PUSH_TO_TALK_MAX_TAKE_MS = 120_000;
 +/** A press shorter than this is a tap, not a take, and is dropped. */
 +export const PUSH_TO_TALK_MIN_TAKE_MS = 300;
-+/** The Voxtral delay: how far the text may trail the voice. 480 ms is Mistral's recommendation. */
++/** Voxtral's delay on Mistral's cloud: how far the text may trail the voice. 480 ms is Mistral's recommendation. */
 +const VOXTRAL_DELAY_MS = 480;
 +/** How long to wait for the last words after letting go before closing anyway. */
 +const STOP_TIMEOUT_MS = 10_000;
