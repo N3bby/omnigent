@@ -1,0 +1,334 @@
+Close other files or all files from a file tab's right-click menu.
+
+Right-click a file tab in the workspace rail for Close, Close other files
+and Close all files. Closing the active file activates its nearest
+remaining neighbour, as the tab's x does, and closing them all goes back to
+the scope view (the Changed or All list). Only file tabs close:
+shells, browsers and side chats stay open, since closing a shell kills it.
+Close other files is greyed out when only one file is open.
+
+AppShell's closeFile becomes closeFiles, which closes a list of tabs, and
+closeFile calls it with one.
+Base: omnigent v0.18.0 (a8676d23e88d), after 0001-0044.
+
+diff --git a/web/src/index.css.test.ts b/web/src/index.css.test.ts
+index 6490f2e..36793cb 100644
+--- a/web/src/index.css.test.ts
++++ b/web/src/index.css.test.ts
+@@ -530,6 +530,7 @@ describe("index.css native safe-area layout on the rendered WorkspacePanel", ()
+           openFiles: [],
+           openFileViewer: () => {},
+           onCloseFile: () => {},
++          onCloseFiles: () => {},
+           onShowScopeView: () => {},
+           onCommentsOpenChange: () => {},
+           openTerminalTab: () => {},
+diff --git a/web/src/shell/AppShell.test.tsx b/web/src/shell/AppShell.test.tsx
+index a296ef2..21d3ea5 100644
+--- a/web/src/shell/AppShell.test.tsx
++++ b/web/src/shell/AppShell.test.tsx
+@@ -3300,6 +3300,50 @@ describe("Right workspace card visibility", () => {
+     expect(screen.getByTestId("file-viewer-inline")).toHaveAttribute("data-path", "b.ts");
+   });
+ 
++  it("closes the other file tabs from a tab's right-click menu, keeping that one active", async () => {
++    writeSessionWorkspaceState("conv_closeothers", {
++      open: true,
++      openFiles: ["a.ts", "b.ts", "c.ts"],
++      selectedFilePath: "a.ts",
++    });
++    useEnvironmentMock.mockReturnValue({
++      data: { available: true, root: null, home: null },
++      isLoading: false,
++    } as unknown as ReturnType<typeof useWorkspaceEnvironment>);
++    mockConversations([{ id: "conv_closeothers", permission_level: null }]);
++
++    renderShell("/c/conv_closeothers");
++    fireEvent.contextMenu(screen.getByTitle("c.ts"));
++    fireEvent.click(await screen.findByRole("menuitem", { name: "Close other files" }));
++
++    // The active a.ts closed with the others, so the kept tab becomes active.
++    expect(screen.queryByTitle("a.ts")).toBeNull();
++    expect(screen.queryByTitle("b.ts")).toBeNull();
++    expect(screen.getByTitle("c.ts")).toBeInTheDocument();
++    expect(screen.getByTestId("file-viewer-inline")).toHaveAttribute("data-path", "c.ts");
++  });
++
++  it("closes every file tab from a tab's right-click menu, back to the scope view", async () => {
++    writeSessionWorkspaceState("conv_closeall", {
++      open: true,
++      openFiles: ["a.ts", "b.ts"],
++      selectedFilePath: "b.ts",
++    });
++    useEnvironmentMock.mockReturnValue({
++      data: { available: true, root: null, home: null },
++      isLoading: false,
++    } as unknown as ReturnType<typeof useWorkspaceEnvironment>);
++    mockConversations([{ id: "conv_closeall", permission_level: null }]);
++
++    renderShell("/c/conv_closeall");
++    fireEvent.contextMenu(screen.getByTitle("a.ts"));
++    fireEvent.click(await screen.findByRole("menuitem", { name: "Close all files" }));
++
++    expect(screen.queryByTitle("a.ts")).toBeNull();
++    expect(screen.queryByTitle("b.ts")).toBeNull();
++    expect(screen.queryByTestId("file-viewer-inline")).toBeNull();
++  });
++
+   it("restores the focused shell per session (switch away and back keeps its xterm)", () => {
+     // Tabs derive 1:1 from the live terminal list, so the strip itself needs no
+     // restoring — but which shell was FOCUSED persists per session. Seed a
+diff --git a/web/src/shell/AppShell.tsx b/web/src/shell/AppShell.tsx
+index b27e489..0e41c8f 100644
+--- a/web/src/shell/AppShell.tsx
++++ b/web/src/shell/AppShell.tsx
+@@ -1740,24 +1740,29 @@ export function AppShell() {
+     });
+   }, [clearFileViewerUrl]);
+ 
+-  // Close a single file tab. If the closed tab was the active one, activate
+-  // its neighbor (prefer the previous tab, else the next); when no tabs
+-  // remain, fall back to a scope view (clearing ?file=). Closing a
+-  // non-active tab leaves the active selection untouched.
+-  const closeFile = useCallback(
+-    (path: string) => {
++  // Close file tabs: one from its x, or several from a tab's right-click menu
++  // (Close other files / Close all files). If the active tab closes, activate
++  // its nearest remaining neighbor (prefer a previous tab, else a next one);
++  // when no tabs remain, fall back to a scope view (clearing ?file=). Closing
++  // only non-active tabs leaves the active selection untouched.
++  const closeFiles = useCallback(
++    (paths: readonly string[]) => {
++      const closing = new Set(paths);
+       setOpenFiles((prev) => {
+-        const idx = prev.indexOf(path);
+-        if (idx === -1) return prev;
+-        const next = prev.filter((p) => p !== path);
++        if (!prev.some((p) => closing.has(p))) return prev;
++        const next = prev.filter((p) => !closing.has(p));
+         setSelectedFilePath((active) => {
+-          if (active !== path) return active;
++          if (active === null || !closing.has(active)) return active;
+           if (next.length === 0) {
+             setFileViewerCommentsOpen(false);
+             clearFileViewerUrl();
+             return null;
+           }
+-          const neighbor = next[idx - 1] ?? next[idx] ?? next[0];
++          const idx = prev.indexOf(active);
++          const neighbor =
++            prev.slice(0, Math.max(idx, 0)).findLast((p) => !closing.has(p)) ??
++            prev.slice(idx + 1).find((p) => !closing.has(p)) ??
++            next[0];
+           setSearchParams(
+             (sp) => {
+               const params = new URLSearchParams(sp);
+@@ -1776,6 +1781,7 @@ export function AppShell() {
+     },
+     [clearFileViewerUrl, setSearchParams],
+   );
++  const closeFile = useCallback((path: string) => closeFiles([path]), [closeFiles]);
+ 
+   // Switch the workspace rail's tab. The side effect (closing any open
+   // file + its comments + URL) lives here, not in WorkspacePanel, so the
+@@ -2554,6 +2560,7 @@ export function AppShell() {
+                     openFiles={openFiles}
+                     openFileViewer={openFileViewer}
+                     onCloseFile={closeFile}
++                    onCloseFiles={closeFiles}
+                     onShowScopeView={showScopeView}
+                     onCommentsOpenChange={setFileViewerCommentsOpen}
+                     openTerminalTab={openTerminalTab}
+diff --git a/web/src/shell/WorkspacePanel.test.tsx b/web/src/shell/WorkspacePanel.test.tsx
+index 42a0df9..e5ac9c6 100644
+--- a/web/src/shell/WorkspacePanel.test.tsx
++++ b/web/src/shell/WorkspacePanel.test.tsx
+@@ -116,6 +116,7 @@ function renderWorkspace(
+ ) {
+   const openFileViewer = vi.fn();
+   const onCloseFile = vi.fn();
++  const onCloseFiles = vi.fn();
+   const onRightRailTabChange = vi.fn();
+   const onBrowserTabOpened = vi.fn();
+   const openTerminalTab = vi.fn();
+@@ -152,6 +153,7 @@ function renderWorkspace(
+         openFiles={overrides.openFiles ?? []}
+         openFileViewer={openFileViewer}
+         onCloseFile={onCloseFile}
++        onCloseFiles={onCloseFiles}
+         onShowScopeView={vi.fn()}
+         onCommentsOpenChange={vi.fn()}
+         openTerminalTab={openTerminalTab}
+@@ -175,6 +177,7 @@ function renderWorkspace(
+   return {
+     openFileViewer,
+     onCloseFile,
++    onCloseFiles,
+     onRightRailTabChange,
+     onBrowserTabOpened,
+     openTerminalTab,
+@@ -449,6 +452,55 @@ describe("WorkspacePanel open-file tabs", () => {
+     expect(onCloseFile).toHaveBeenCalledWith("src/App.tsx");
+     expect(openFileViewer).not.toHaveBeenCalled();
+   });
++
++  it("closes the other files from a file tab's right-click menu", async () => {
++    const { onCloseFiles, openFileViewer } = renderWorkspace({
++      openFiles: ["src/App.tsx", "docs/README.md", "src/main.tsx"],
++      openTerminals: ["terminal:terminal_zsh_u-g9qopr"],
++    });
++
++    fireEvent.contextMenu(screen.getByTitle("docs/README.md"));
++    fireEvent.click(await screen.findByRole("menuitem", { name: "Close other files" }));
++
++    // Only the other file tabs close, in strip order; the right-clicked tab
++    // stays, and the shell tab isn't touched (closing it would kill it).
++    expect(onCloseFiles).toHaveBeenCalledWith(["src/App.tsx", "src/main.tsx"]);
++    expect(openFileViewer).not.toHaveBeenCalled();
++  });
++
++  it("closes every file from a file tab's right-click menu", async () => {
++    const { onCloseFiles } = renderWorkspace({
++      openFiles: ["src/App.tsx", "docs/README.md"],
++    });
++
++    fireEvent.contextMenu(screen.getByTitle("src/App.tsx"));
++    fireEvent.click(await screen.findByRole("menuitem", { name: "Close all files" }));
++
++    expect(onCloseFiles).toHaveBeenCalledWith(["src/App.tsx", "docs/README.md"]);
++  });
++
++  it("closes just the right-clicked file from its menu's Close", async () => {
++    const { onCloseFile, onCloseFiles } = renderWorkspace({
++      openFiles: ["src/App.tsx", "docs/README.md"],
++    });
++
++    fireEvent.contextMenu(screen.getByTitle("docs/README.md"));
++    fireEvent.click(await screen.findByRole("menuitem", { name: "Close" }));
++
++    expect(onCloseFile).toHaveBeenCalledWith("docs/README.md");
++    expect(onCloseFiles).not.toHaveBeenCalled();
++  });
++
++  it("disables Close other files when only one file is open", async () => {
++    renderWorkspace({ openFiles: ["src/App.tsx"] });
++
++    fireEvent.contextMenu(screen.getByTitle("src/App.tsx"));
++
++    expect(await screen.findByRole("menuitem", { name: "Close other files" })).toHaveAttribute(
++      "aria-disabled",
++      "true",
++    );
++  });
+ });
+ 
+ describe("WorkspacePanel content area", () => {
+diff --git a/web/src/shell/WorkspacePanel.tsx b/web/src/shell/WorkspacePanel.tsx
+index e640379..7a60fb9 100644
+--- a/web/src/shell/WorkspacePanel.tsx
++++ b/web/src/shell/WorkspacePanel.tsx
+@@ -35,6 +35,13 @@ import { cn } from "@/lib/utils";
+ import { ALT_KEY, CompactShortcutKeys, MOD_KEY } from "@/components/KeyboardShortcut";
+ import { defaultWorkspaceTabs, readDefaultWorkspaceTab } from "@/lib/workspaceTabPreferences";
+ import { isEditorLevel, isOwnerLevel } from "@/lib/permissionsApi";
++import {
++  ContextMenu,
++  ContextMenuContent,
++  ContextMenuItem,
++  ContextMenuSeparator,
++  ContextMenuTrigger,
++} from "@/components/ui/context-menu";
+ import {
+   DropdownMenu,
+   DropdownMenuContent,
+@@ -363,8 +370,10 @@ function NewTabMenu({
+ // FileTabsStrip — open file tabs rendered in the top rail tab strip, as peers
+ // of the fixed Files/Terminals/Agents tabs. Each tab is a cell with the
+ // file's basename and an "x" close button. Clicking the cell activates the
+-// tab (opening its viewer); clicking the x closes it. No own scroll container
+-// or flex-1: the parent viewport scrolls the open tabs.
++// tab (opening its viewer); clicking the x closes it. Right-clicking it opens
++// a menu that closes it, the other files or all files (shells, browsers and
++// side chats stay open). No own scroll container or flex-1: the parent
++// viewport scrolls the open tabs.
+ // ---------------------------------------------------------------------------
+ 
+ function FileTabsStrip({
+@@ -372,6 +381,7 @@ function FileTabsStrip({
+   activeFilePath,
+   onFileSelect,
+   onCloseFile,
++  onCloseFiles,
+ }: {
+   /** Ordered list of open file paths. */
+   openFiles: string[];
+@@ -381,6 +391,8 @@ function FileTabsStrip({
+   onFileSelect: (path: string) => void;
+   /** Close a tab by path. */
+   onCloseFile: (path: string) => void;
++  /** Close several tabs by path at once. */
++  onCloseFiles: (paths: string[]) => void;
+ }) {
+   // Scroll the active tab into view when it changes (e.g. a newly opened file
+   // appended past the visible edge). `inline: "nearest"` scrolls whichever
+@@ -399,9 +411,8 @@ function FileTabsStrip({
+       {openFiles.map((path) => {
+         const name = path.split("/").pop() ?? path;
+         const active = path === activeFilePath;
+-        return (
++        const tab = (
+           <div
+-            key={path}
+             ref={active ? activeTabRef : undefined}
+             role="button"
+             tabIndex={0}
+@@ -459,6 +470,24 @@ function FileTabsStrip({
+             </span>
+           </div>
+         );
++        return (
++          <ContextMenu key={path}>
++            <ContextMenuTrigger asChild>{tab}</ContextMenuTrigger>
++            <ContextMenuContent className="min-w-40">
++              <ContextMenuItem onSelect={() => onCloseFile(path)}>Close</ContextMenuItem>
++              <ContextMenuSeparator />
++              <ContextMenuItem
++                disabled={openFiles.length < 2}
++                onSelect={() => onCloseFiles(openFiles.filter((p) => p !== path))}
++              >
++                Close other files
++              </ContextMenuItem>
++              <ContextMenuItem onSelect={() => onCloseFiles(openFiles)}>
++                Close all files
++              </ContextMenuItem>
++            </ContextMenuContent>
++          </ContextMenu>
++        );
+       })}
+     </div>
+   );
+@@ -682,6 +711,8 @@ interface WorkspacePanelProps {
+   openFileViewer: (path: string) => void;
+   /** Close a single open file tab by path. */
+   onCloseFile: (path: string) => void;
++  /** Close several open file tabs by path (a file tab's right-click menu). */
++  onCloseFiles: (paths: string[]) => void;
+   /** Deselect the active file tab to reveal the scope view (Changed/All). */
+   onShowScopeView: () => void;
+   /** Surface the file viewer's comments-open state up to AppShell (it
+@@ -776,6 +807,7 @@ function WorkspacePanelImpl({
+   openFiles,
+   openFileViewer,
+   onCloseFile,
++  onCloseFiles,
+   onShowScopeView,
+   onCommentsOpenChange,
+   openTerminalTab,
+@@ -1314,6 +1346,7 @@ function WorkspacePanelImpl({
+                   activeFilePath={selectedFilePath}
+                   onFileSelect={openFileViewer}
+                   onCloseFile={onCloseFile}
++                  onCloseFiles={onCloseFiles}
+                 />
+                 <TerminalTabsStrip
+                   openTerminals={openTerminals}

@@ -12,8 +12,9 @@
 # working, CORS for the glasses app, the always-on Hermes host running
 # Hermes sessions only, push-to-talk, Project settings scrolling on a
 # phone, archiving deleting a session's sandbox, and the server's copies of
-# the files agents show in the chat, against a fresh, fully patched upstream
-# checkout. Keep logs and JUnit reports.
+# the files agents show in the chat, and closing other or all file tabs from a
+# tab's right-click menu, against a fresh, fully patched upstream checkout.
+# Keep logs and JUnit reports.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
@@ -141,6 +142,7 @@ PY
       src/lib/pushToTalk.test.ts src/hooks/usePushToTalk.test.tsx \
       src/components/PushToTalkSettings.test.tsx src/lib/settingsPortability.test.ts \
       src/lib/chatMediaCache.test.ts \
+      src/shell/AppShell.test.tsx src/index.css.test.ts \
       --reporter=default --reporter=junit --outputFile="$reports/frontend.xml"
 }
 
