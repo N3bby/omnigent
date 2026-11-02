@@ -86,6 +86,7 @@ Changes to how the web UI looks and behaves.
 | --- | --- | --- |
 | [Codex theme](codex-theme.md) | A colour theme that looks like the Codex app, beyond just the colours | It's off until you pick it in Settings → Appearance |
 | [The sandbox picker under the composer](sandbox-picker.md) | On the New session screen, where the session runs is a named chip next to the repository | No |
+| [Close other or all file tabs](file-tab-menu.md) | Right-click a file tab in the workspace panel to close the other files, or all of them, at once | Nothing to turn off |
 | [Swipe for a session's menu](session-swipe-menu.md) | On a phone, swipe a session left for its menu; holding it down only moves it | No |
 | [No Share button](no-share-button.md) | Sessions can't be shared from the web UI | No |
 | [No pin or archive buttons in the sidebar](no-sidebar-quick-actions.md) | Hovering a session no longer shows buttons you can hit by accident; Pin and Archive are in its ⋯ menu | No |
