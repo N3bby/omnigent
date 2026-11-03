@@ -34,7 +34,8 @@ the textarea isn't focused while the mic button is held.
 Settings → Speech (components/PushToTalkSettings.tsx) picks the model, the
 key, the language (English unless you pick Dutch or Detect it, since
 Deepgram drops words when it detects it; Parakeet always detects it), the
-words to listen for (Mistral's context bias and Deepgram's keyterms), and
+words to listen for (Parakeet's word boosting, Mistral's context bias and
+Deepgram's keyterms, so every model gets them), and
 what letting go does, and shows whether the server answers.
 The choices are kept per browser and are part of Export settings.
 Both the session composer and the New session screen have it; the side
@@ -468,10 +469,10 @@ index 0000000..f24e115
 +});
 diff --git a/web/src/components/PushToTalkSettings.tsx b/web/src/components/PushToTalkSettings.tsx
 new file mode 100644
-index 0000000..e2038b2
+index 0000000..5869589
 --- /dev/null
 +++ b/web/src/components/PushToTalkSettings.tsx
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,330 @@
 +// Settings → Speech: which model listens, the push-to-talk key, the words to
 +// listen for, what letting go does, and whether the speech server answers.
 +// The choices are this browser's (lib/pushToTalk.ts); the server is the
@@ -496,7 +497,6 @@ index 0000000..e2038b2
 +import {
 +  PUSH_TO_TALK_ENGINES,
 +  PUSH_TO_TALK_LANGUAGES,
-+  pushToTalkEngine,
 +  pushToTalkHttpUrl,
 +  pushToTalkKeyLabel,
 +  usePushToTalkSettings,
@@ -546,7 +546,6 @@ index 0000000..e2038b2
 +  const sendLabelId = useId();
 +  const [capturing, setCapturing] = useState(false);
 +  const [hintDraft, setHintDraft] = useState("");
-+  const engine = pushToTalkEngine(settings.engine);
 +  const serverName = pushToTalkServerName(server);
 +
 +  // Changing the key: the next key pressed becomes it; Esc keeps the old one.
@@ -721,16 +720,12 @@ index 0000000..e2038b2
 +      </SettingsGroup>
 +
 +      <SettingsGroup title="Words to listen for" testId="push-to-talk-settings-hints">
-+        <div className={cn("flex flex-col gap-3", !engine.hints && "opacity-60")}>
++        <div className="flex flex-col gap-3">
 +          <SettingsLabel
 +            label="Names and jargon"
 +            labelId={hintsLabelId}
 +            descriptionClassName="text-ui"
-+            description={
-+              engine.hints
-+                ? "Project names and terms the model should expect, such as Omnigent or k3s."
-+                : "Parakeet on your own server can't take hints, so these only help Mistral's cloud and Deepgram."
-+            }
++            description="Project names and technical terms the model should expect, such as Omnigent, k3s or useEffect. Parakeet writes them just as you list them, so useEffect isn't written as use effect."
 +          />
 +          <div
 +            className="flex flex-wrap items-center gap-1.5 rounded-lg border border-border p-1.5"
@@ -1581,10 +1576,10 @@ index 4e8b90f..5126e4c 100644
            agent_detail: data.agent_detail === true,
 diff --git a/web/src/lib/pushToTalk.test.ts b/web/src/lib/pushToTalk.test.ts
 new file mode 100644
-index 0000000..a9314e8
+index 0000000..c80ef92
 --- /dev/null
 +++ b/web/src/lib/pushToTalk.test.ts
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,208 @@
 +// Tests for push-to-talk's settings and its socket to the speech server.
 +
 +import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1642,7 +1637,7 @@ index 0000000..a9314e8
 +});
 +
 +describe("the speech server's URLs", () => {
-+  it("asks for the chosen engine and language at Voxtral's 480 ms delay, with hints where they work", () => {
++  it("asks for the chosen engine and language at Voxtral's 480 ms delay, with the words to listen for", () => {
 +    const local = new URL(
 +      pushToTalkStreamUrl("wss://mac-mini.tail.ts.net:8443/", {
 +        ...DEFAULT_PUSH_TO_TALK_SETTINGS,
@@ -1653,8 +1648,7 @@ index 0000000..a9314e8
 +    expect(local.searchParams.get("engines")).toBe("local");
 +    expect(local.searchParams.get("delay")).toBe("480");
 +    expect(local.searchParams.get("language")).toBe("en");
-+    // Parakeet on the server can't take hints, so none are sent.
-+    expect(local.searchParams.getAll("hint")).toEqual([]);
++    expect(local.searchParams.getAll("hint")).toEqual(["Omnigent"]);
 +
 +    const cloud = new URL(
 +      pushToTalkStreamUrl("https://speech.example", {
@@ -1796,10 +1790,10 @@ index 0000000..a9314e8
 +});
 diff --git a/web/src/lib/pushToTalk.ts b/web/src/lib/pushToTalk.ts
 new file mode 100644
-index 0000000..c369012
+index 0000000..0c12cf5
 --- /dev/null
 +++ b/web/src/lib/pushToTalk.ts
-@@ -0,0 +1,557 @@
+@@ -0,0 +1,550 @@
 +// Push-to-talk dictation through this deployment's own speech server.
 +//
 +// The server (`push_to_talk_url` in the deployment's environment, advertised
@@ -1833,8 +1827,6 @@ index 0000000..c369012
 +  description: string;
 +  /** Whether a take costs money (the server relays it to a paid service). */
 +  billed: boolean;
-+  /** Whether the engine can use the words to listen for. */
-+  hints: boolean;
 +}
 +
 +export const PUSH_TO_TALK_ENGINES: readonly PushToTalkEngineInfo[] = [
@@ -1845,7 +1837,6 @@ index 0000000..c369012
 +    description:
 +      "Runs on the speech server's own machine, so it's free and stays private. Shows words while you're still saying them, then corrects them. Last words arrive about 0.3 s after you let go.",
 +    billed: false,
-+    hints: false,
 +  },
 +  {
 +    id: "cloud",
@@ -1854,7 +1845,6 @@ index 0000000..c369012
 +    description:
 +      "Mistral's Voxtral Realtime, on their servers. It listens for your words below. Last words arrive about 1.3 s after you let go.",
 +    billed: true,
-+    hints: true,
 +  },
 +  {
 +    id: "deepgram",
@@ -1863,7 +1853,6 @@ index 0000000..c369012
 +    description:
 +      "Shows words while you're still saying them, then corrects them. Last words arrive about 0.2 s after you let go.",
 +    billed: true,
-+    hints: true,
 +  },
 +];
 +
@@ -2025,9 +2014,7 @@ index 0000000..c369012
 +    delay: String(VOXTRAL_DELAY_MS),
 +    language: settings.language,
 +  });
-+  if (pushToTalkEngine(settings.engine).hints) {
-+    for (const hint of settings.hints.slice(0, 100)) query.append("hint", hint);
-+  }
++  for (const hint of settings.hints.slice(0, 100)) query.append("hint", hint);
 +  return `${base}/stream?${query}`;
 +}
 +
